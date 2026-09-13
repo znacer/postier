@@ -4,7 +4,7 @@ Portable, local-first Windows desktop prototype for searching Outlook archives a
 
 ## Current state
 
-Implemented: native Rust/egui UI on Linux and Windows, pure-Rust read-only PST extraction, bundled SQLite with FTS5/BM25, content-hash deduplication, standalone local search, bounded context preview, optional HTTPS-only private LLM calls with a masked API-key input, evidence display, and an isolated mail-source interface.
+Implemented: native Rust/Iced UI on Linux and Windows, pure-Rust read-only PST extraction, bundled SQLite with FTS5/BM25, content-hash deduplication, standalone local search, bounded context preview, optional HTTPS-only private LLM calls with a masked API-key input, evidence display, and an isolated mail-source interface.
 
 PST traversal uses Microsoft's cross-platform `outlook-pst` implementation and extracts folders, messages, subjects, senders, recipients, timestamps, and searchable bodies. This now works without Outlook on Linux and Windows. Corpus validation is still required before claiming production-grade compatibility; libpff remains a fallback if damaged or legacy archives expose gaps. VSS is not attempted on Linux and is not silently attempted on Windows: creating shadow copies commonly requires privileges unavailable to a portable non-admin app.
 
