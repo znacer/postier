@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use reqwest::blocking::Client;
+use rig::{completion::Prompt, prelude::*, providers::openai};
 use serde::{Deserialize, Serialize};
 
 use crate::model::SearchHit;
@@ -27,30 +27,6 @@ impl Default for LlmConfig {
             max_context_chars: default_context_chars(),
         }
     }
-}
-
-#[derive(Serialize)]
-struct Request<'a> {
-    model: &'a str,
-    stream: bool,
-    messages: Vec<Message<'a>>,
-}
-#[derive(Serialize)]
-struct Message<'a> {
-    role: &'a str,
-    content: &'a str,
-}
-#[derive(Deserialize)]
-struct Response {
-    choices: Vec<Choice>,
-}
-#[derive(Deserialize)]
-struct Choice {
-    message: Answer,
-}
-#[derive(Deserialize)]
-struct Answer {
-    content: String,
 }
 
 pub fn build_context(hits: &[SearchHit], max_chars: usize) -> String {
@@ -84,27 +60,25 @@ pub fn build_context(hits: &[SearchHit], max_chars: usize) -> String {
 pub fn ask(config: &LlmConfig, question: &str, context: &str) -> Result<String> {
     let url = validate_endpoint(&config.endpoint)?;
     let endpoint_for_log = endpoint_for_log(&url);
-    let client = Client::builder()
+    let base_url = openai_base_url(&url)?;
+    let http_client = reqwest::Client::builder()
         .https_only(url.scheme() == "https")
-        .build()?;
-    let request = Request {
-        model: &config.model,
-        stream: false,
-        messages: vec![
-            Message {
-                role: "system",
-                content: context,
-            },
-            Message {
-                role: "user",
-                content: question,
-            },
-        ],
-    };
-    let mut call = client.post(url).json(&request);
-    if !config.bearer_token.is_empty() {
-        call = call.bearer_auth(&config.bearer_token);
-    }
+        .build()
+        .context("build secure HTTP client")?;
+    let client = openai::Client::builder()
+        .api_key(config.bearer_token.clone())
+        .base_url(base_url.as_str())
+        .http_client(http_client)
+        .build()
+        .context("build Rig OpenAI-compatible client")?
+        .completions_api();
+    let agent = client
+        .agent(&config.model)
+        .preamble(
+            "Answer the user's question using only the supplied email evidence. Cite sources as [Email N]. If the evidence is insufficient, say so.",
+        )
+        .context(context)
+        .build();
     debug_log(format_args!(
         "LLM request: POST {endpoint_for_log}; model={:?}; auth={}; question_bytes={}; context_bytes={}",
         config.model,
@@ -117,65 +91,28 @@ pub fn ask(config: &LlmConfig, question: &str, context: &str) -> Result<String> 
         context.len()
     ));
 
-    let response = match call.send() {
-        Ok(response) => response,
-        Err(error) => {
-            debug_log(format_args!("LLM transport error: {error:#}"));
-            return Err(error).context("send request to LLM endpoint");
-        }
-    };
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("unknown")
-        .to_owned();
-    let allowed_methods = response
-        .headers()
-        .get(reqwest::header::ALLOW)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("not provided")
-        .to_owned();
-    let request_id = response
-        .headers()
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("not provided")
-        .to_owned();
-    let body = response.text().context("read LLM response body")?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("start Rig runtime")?;
+    runtime
+        .block_on(async { agent.prompt(question).await })
+        .map_err(|error| {
+            debug_log(format_args!("Rig agent error: {error:#}"));
+            anyhow::anyhow!(error).context(format!("Rig agent request to {endpoint_for_log}"))
+        })
+}
 
-    debug_log(format_args!(
-        "LLM response: status={status}; content-type={content_type:?}; allow={allowed_methods:?}; x-request-id={request_id:?}; body_bytes={}",
-        body.len()
-    ));
-
-    if !status.is_success() {
-        let body_preview = truncate_for_log(&body, 2_000);
-        debug_log(format_args!("LLM error body: {body_preview}"));
-        if status == reqwest::StatusCode::METHOD_NOT_ALLOWED {
-            bail!(
-                "LLM endpoint returned 405 Method Not Allowed for POST {endpoint_for_log}. Check that the URL is the chat-completions endpoint (often /v1/chat/completions). Server Allow header: {allowed_methods}. Response: {body_preview}"
-            );
-        }
-        bail!(
-            "LLM endpoint returned {status} for POST {endpoint_for_log}. Response: {body_preview}"
-        );
-    }
-
-    let response: Response = serde_json::from_str(&body).map_err(|error| {
-        debug_log(format_args!(
-            "LLM JSON decode error: {error}; body: {}",
-            truncate_for_log(&body, 2_000)
-        ));
-        error
-    })?;
-    response
-        .choices
-        .into_iter()
-        .next()
-        .map(|x| x.message.content)
-        .context("LLM returned no answer")
+fn openai_base_url(endpoint: &url::Url) -> Result<url::Url> {
+    let path = endpoint.path().trim_end_matches('/');
+    let base_path = path
+        .strip_suffix("/chat/completions")
+        .context("LLM endpoint must end with /chat/completions")?;
+    let mut base = endpoint.clone();
+    base.set_path(base_path);
+    base.set_query(None);
+    base.set_fragment(None);
+    Ok(base)
 }
 
 fn endpoint_for_log(url: &url::Url) -> String {
@@ -185,16 +122,6 @@ fn endpoint_for_log(url: &url::Url) -> String {
         .map(|port| format!(":{port}"))
         .unwrap_or_default();
     format!("{}://{host}{port}{}", url.scheme(), url.path())
-}
-
-fn truncate_for_log(value: &str, max_chars: usize) -> String {
-    let mut chars = value.chars();
-    let preview: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() {
-        format!("{preview}… [truncated]")
-    } else {
-        preview
-    }
 }
 
 fn debug_log(args: std::fmt::Arguments<'_>) {
@@ -218,7 +145,7 @@ fn validate_endpoint(endpoint: &str) -> Result<url::Url> {
 
 #[cfg(test)]
 mod tests {
-    use super::{endpoint_for_log, truncate_for_log, validate_endpoint};
+    use super::{endpoint_for_log, openai_base_url, validate_endpoint};
 
     #[test]
     fn permits_http_only_for_exact_ipv4_loopback() {
@@ -241,8 +168,15 @@ mod tests {
     }
 
     #[test]
-    fn truncates_debug_response_on_character_boundaries() {
-        assert_eq!(truncate_for_log("éclair", 2), "éc… [truncated]");
-        assert_eq!(truncate_for_log("ok", 2), "ok");
+    fn derives_rig_base_url_from_chat_completions_endpoint() {
+        let endpoint =
+            url::Url::parse("https://llm.example.test/openai/v1/chat/completions?secret=hidden")
+                .unwrap();
+        assert_eq!(
+            openai_base_url(&endpoint).unwrap().as_str(),
+            "https://llm.example.test/openai/v1"
+        );
+        let invalid = url::Url::parse("https://llm.example.test/v1/responses").unwrap();
+        assert!(openai_base_url(&invalid).is_err());
     }
 }

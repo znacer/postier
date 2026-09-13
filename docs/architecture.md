@@ -1,6 +1,8 @@
 # Architecture and release gates
 
-`MailSource -> normalized Email -> SQLite messages + FTS5 -> BM25 candidates -> bounded context -> private LLM`
+`MailSource -> normalized Email -> SQLite messages + FTS5 -> BM25 candidates -> bounded context -> Rig agent -> private LLM`
+
+Retrieval stays in the bundled SQLite index. For each question, the top local BM25 results are converted to bounded, numbered evidence documents and attached as static context to a short-lived Rig agent. Rig targets the configured OpenAI-compatible chat-completions endpoint; the application still validates HTTPS (with the existing exact `127.0.0.1` development exception) before constructing the agent.
 
 The `MailSource` boundary prevents parser-specific identifiers and lifetimes from entering storage, retrieval, or UI code. Index writes are transactional and `INSERT OR IGNORE` on a SHA-256 content hash makes repeated imports idempotent. Production incremental indexing should additionally persist the PST file identity, size, modification time, and stable node identifiers; a changed file must resume only where the chosen parser proves those identifiers stable.
 

@@ -4,7 +4,7 @@ Portable, local-first Windows desktop prototype for searching Outlook archives a
 
 ## Current state
 
-Implemented: native Rust/Iced UI on Linux and Windows, pure-Rust read-only PST extraction, bundled SQLite with FTS5/BM25, content-hash deduplication, standalone local search, bounded context preview, optional HTTPS-only private LLM calls with a masked API-key input, evidence display, and an isolated mail-source interface.
+Implemented: native Rust/Iced UI on Linux and Windows, pure-Rust read-only PST extraction, bundled SQLite with FTS5/BM25, content-hash deduplication, standalone local search, bounded context preview, a Rig RAG agent using an OpenAI-compatible private LLM endpoint, optional HTTPS-only private LLM calls with a masked API-key input, evidence display, and an isolated mail-source interface.
 
 PST traversal uses Microsoft's cross-platform `outlook-pst` implementation and extracts folders, messages, subjects, senders, recipients, timestamps, and searchable bodies. This now works without Outlook on Linux and Windows. Corpus validation is still required before claiming production-grade compatibility; libpff remains a fallback if damaged or legacy archives expose gaps. VSS is not attempted on Linux and is not silently attempted on Windows: creating shadow copies commonly requires privileges unavailable to a portable non-admin app.
 
@@ -18,7 +18,7 @@ cargo build --release
 cargo build --release --target x86_64-pc-windows-msvc
 ```
 
-When started with `cargo run`, debug builds print sanitized LLM request and response diagnostics to the terminal. They include the HTTP method, endpoint path, status, selected response headers, payload sizes, and a truncated error response, but never the bearer token, question, or email context.
+When started with `cargo run`, debug builds print sanitized Rig request diagnostics and errors to the terminal. They include the HTTP method, endpoint path, model, authentication presence, and payload sizes, but never the bearer token, question, or email context.
 
 The release profile enables LTO, stripping, size optimization, and abort-on-panic. SQLite is compiled into the executable and HTTP uses rustls, so no database or TLS runtime is installed. Cross-compilation still requires the Microsoft target/linker; the canonical release should be produced on a pinned Windows CI runner.
 
