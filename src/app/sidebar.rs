@@ -2,8 +2,59 @@ use iced::{
     Alignment, Element, Fill,
     widget::{checkbox, column, container, horizontal_rule, row, scrollable, text, text_input},
 };
+use std::collections::BTreeMap;
 
 use super::{Message, PstRagApp, SidebarSection, theme::*};
+use crate::model::IndexedFolder;
+
+#[derive(Default)]
+struct FolderTree<'a> {
+    folder: Option<&'a IndexedFolder>,
+    children: BTreeMap<&'a str, FolderTree<'a>>,
+}
+
+struct FolderTreeRow<'a> {
+    prefix: String,
+    name: &'a str,
+    folder: Option<&'a IndexedFolder>,
+}
+
+fn folder_tree_rows(folders: &[IndexedFolder]) -> Vec<FolderTreeRow<'_>> {
+    let mut root = FolderTree::default();
+    for folder in folders {
+        let mut node = &mut root;
+        let mut found_segment = false;
+        for segment in folder.path.split('/').filter(|segment| !segment.is_empty()) {
+            found_segment = true;
+            node = node.children.entry(segment).or_default();
+        }
+        if found_segment {
+            node.folder = Some(folder);
+        }
+    }
+
+    fn append_rows<'a>(
+        node: &FolderTree<'a>,
+        parent_prefix: &str,
+        rows: &mut Vec<FolderTreeRow<'a>>,
+    ) {
+        let child_count = node.children.len();
+        for (index, (&name, child)) in node.children.iter().enumerate() {
+            let is_last = index + 1 == child_count;
+            rows.push(FolderTreeRow {
+                prefix: format!("{parent_prefix}{}", if is_last { "|_ " } else { "|- " }),
+                name,
+                folder: child.folder,
+            });
+            let child_prefix = format!("{parent_prefix}{}", if is_last { "   " } else { "|  " });
+            append_rows(child, &child_prefix, rows);
+        }
+    }
+
+    let mut rows = Vec::new();
+    append_rows(&root, "", &mut rows);
+    rows
+}
 
 impl PstRagApp {
     pub(super) fn sidebar(&self) -> Element<'_, Message> {
@@ -79,22 +130,30 @@ impl PstRagApp {
                 ))
             ]
             .spacing(5);
-            for folder in &source.folders {
-                let source_key = source.key.clone();
-                let folder_path = folder.path.clone();
-                source_view = source_view.push(
-                    checkbox(
-                        format!("  {} ({})", folder.path, folder.message_count),
-                        source.enabled && folder.enabled,
-                    )
-                    .on_toggle(move |enabled| {
-                        Message::FolderEnabledChanged(
-                            source_key.clone(),
-                            folder_path.clone(),
-                            enabled,
+            for row in folder_tree_rows(&source.folders) {
+                if let Some(folder) = row.folder {
+                    let source_key = source.key.clone();
+                    let folder_path = folder.path.clone();
+                    source_view = source_view.push(
+                        checkbox(
+                            format!("{}{} ({})", row.prefix, row.name, folder.message_count),
+                            source.enabled && folder.enabled,
                         )
-                    }),
-                );
+                        .on_toggle(move |enabled| {
+                            Message::FolderEnabledChanged(
+                                source_key.clone(),
+                                folder_path.clone(),
+                                enabled,
+                            )
+                        }),
+                    );
+                } else {
+                    source_view = source_view.push(
+                        text(format!("{}{}", row.prefix, row.name))
+                            .size(12)
+                            .color(muted()),
+                    );
+                }
             }
             if self.pending_remove_source.as_deref() == Some(&source.key) {
                 source_view = source_view.push(
@@ -183,5 +242,46 @@ impl PstRagApp {
             .height(Fill)
             .style(sidebar_style)
             .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::folder_tree_rows;
+    use crate::model::IndexedFolder;
+
+    fn folder(path: &str) -> IndexedFolder {
+        IndexedFolder {
+            path: path.into(),
+            enabled: true,
+            message_count: 1,
+        }
+    }
+
+    #[test]
+    fn folder_paths_are_rendered_as_a_tree() {
+        let folders = [
+            folder("Mailbox/Projects/Alpha"),
+            folder("Mailbox/Inbox"),
+            folder("Archive"),
+        ];
+        let rows = folder_tree_rows(&folders);
+        let labels: Vec<_> = rows
+            .iter()
+            .map(|row| format!("{}{}", row.prefix, row.name))
+            .collect();
+
+        assert_eq!(
+            labels,
+            [
+                "├─ Archive",
+                "└─ Mailbox",
+                "   ├─ Inbox",
+                "   └─ Projects",
+                "      └─ Alpha",
+            ]
+        );
+        assert!(rows[1].folder.is_none());
+        assert_eq!(rows[2].folder.unwrap().path, "Mailbox/Inbox");
     }
 }
