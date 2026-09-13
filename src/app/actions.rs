@@ -1,8 +1,10 @@
 use std::{fs, sync::mpsc, thread};
 
+use anyhow::Context;
+
 use crate::{db::Index, llm, pst};
 
-use super::{ChatMessage, PstRagApp, WorkerResult};
+use super::{ChatMessage, IndexOutcome, PstRagApp, WorkerResult};
 
 impl PstRagApp {
     pub(super) fn choose_storage_dir(&mut self) {
@@ -19,6 +21,7 @@ impl PstRagApp {
             self.count = Index::open(&self.db_path)
                 .and_then(|d| d.count())
                 .unwrap_or(0);
+            self.refresh_sources();
             self.status = match fs::write(
                 &self.storage_location_path,
                 self.storage_dir.to_string_lossy().as_bytes(),
@@ -66,15 +69,50 @@ impl PstRagApp {
             return;
         };
         let db_path = self.db_path.clone();
+        let config = self.config.clone();
+        if config.use_remote_embeddings && config.embedding_model.trim().is_empty() {
+            self.status = "Enter an embedding model before enabling remote embeddings".into();
+            return;
+        }
         let (tx, rx) = mpsc::channel();
         self.worker = Some(rx);
         self.busy = true;
-        self.status = "Indexing locally…".into();
+        self.status = if config.use_remote_embeddings {
+            "Indexing BM25 locally and generating remote embeddings…".into()
+        } else {
+            "Indexing BM25 locally…".into()
+        };
         thread::spawn(move || {
             let result = (|| {
                 let emails = pst::import(&path)?;
                 let mut db = Index::open(&db_path)?;
-                db.index_batch(&emails)
+                let added = db.index_batch(&emails)?;
+                let mut embedded = 0;
+                if config.use_remote_embeddings {
+                    let model = config.embedding_model.trim();
+                    let documents = db.documents_missing_embeddings(model)?;
+                    for batch in documents.chunks(64) {
+                        let vectors = llm::embed(
+                            &config,
+                            batch.iter().map(|document| document.text.clone()).collect(),
+                        )?;
+                        if vectors.len() != batch.len() {
+                            anyhow::bail!(
+                                "embedding provider returned {} vectors for {} emails",
+                                vectors.len(),
+                                batch.len()
+                            );
+                        }
+                        let values: Vec<_> = batch
+                            .iter()
+                            .zip(vectors)
+                            .map(|(document, vector)| (document.id, vector))
+                            .collect();
+                        db.store_embeddings(model, &values)?;
+                        embedded += values.len();
+                    }
+                }
+                Ok(IndexOutcome { added, embedded })
             })()
             .map_err(|error: anyhow::Error| format!("{error:#}"));
             let _ = tx.send(WorkerResult::Indexed(result));
@@ -101,7 +139,21 @@ impl PstRagApp {
         thread::spawn(move || {
             let result = (|| {
                 let db = Index::open(&db_path)?;
-                let hits = db.search(&question, 10)?;
+                let hits =
+                    if config.use_remote_embeddings && !config.embedding_model.trim().is_empty() {
+                        let mut embeddings = llm::embed(&config, vec![question.clone()])?;
+                        let query_embedding = embeddings
+                            .pop()
+                            .context("embedding provider returned no query vector")?;
+                        db.search_hybrid(
+                            &question,
+                            &query_embedding,
+                            config.embedding_model.trim(),
+                            10,
+                        )?
+                    } else {
+                        db.search(&question, 10)?
+                    };
                 let context = llm::build_context(&hits, config.max_context_chars);
                 let answer = llm::ask(&config, &question, &context)?;
                 Ok((answer, hits, context))
@@ -145,6 +197,59 @@ impl PstRagApp {
         self.expanded_hit = None;
         self.question.clear();
         self.status = "New conversation — the local index is still available".into();
+    }
+
+    pub(super) fn refresh_sources(&mut self) {
+        self.sources = Index::open(&self.db_path)
+            .and_then(|db| db.sources())
+            .unwrap_or_default();
+    }
+
+    pub(super) fn set_source_enabled(&mut self, source: &str, enabled: bool) {
+        self.status = match Index::open(&self.db_path)
+            .and_then(|db| db.set_source_enabled(source, enabled))
+        {
+            Ok(()) => {
+                self.refresh_sources();
+                if enabled {
+                    "PST enabled for retrieval".into()
+                } else {
+                    "PST excluded from retrieval".into()
+                }
+            }
+            Err(error) => format!("Could not update PST selection: {error:#}"),
+        };
+    }
+
+    pub(super) fn set_folder_enabled(&mut self, source: &str, folder: &str, enabled: bool) {
+        self.status = match Index::open(&self.db_path)
+            .and_then(|db| db.set_folder_enabled(source, folder, enabled))
+        {
+            Ok(()) => {
+                self.refresh_sources();
+                if enabled {
+                    "Folder enabled for retrieval".into()
+                } else {
+                    "Folder excluded from retrieval".into()
+                }
+            }
+            Err(error) => format!("Could not update folder selection: {error:#}"),
+        };
+    }
+
+    pub(super) fn remove_pending_source(&mut self) {
+        let Some(source) = self.pending_remove_source.take() else {
+            return;
+        };
+        self.status = match Index::open(&self.db_path).and_then(|mut db| db.remove_source(&source))
+        {
+            Ok(removed) => {
+                self.count = self.count.saturating_sub(removed as u64);
+                self.refresh_sources();
+                format!("Removed {removed} indexed messages and their embeddings")
+            }
+            Err(error) => format!("Could not remove indexed PST: {error:#}"),
+        };
     }
 }
 

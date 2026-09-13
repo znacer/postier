@@ -3,7 +3,11 @@ mod chat;
 mod sidebar;
 mod theme;
 
-use crate::{db::Index, llm::LlmConfig, model::SearchHit};
+use crate::{
+    db::Index,
+    llm::LlmConfig,
+    model::{IndexedSource, SearchHit},
+};
 use actions::load_config;
 use iced::{
     Element, Fill, Subscription, Task,
@@ -13,9 +17,14 @@ use std::{fs, path::PathBuf, sync::mpsc::Receiver, time::Duration};
 use theme::{app_theme, page_style};
 
 enum WorkerResult {
-    Indexed(Result<usize, String>),
+    Indexed(Result<IndexOutcome, String>),
     Searched(Result<Vec<SearchHit>, String>),
     Answered(Result<(String, Vec<SearchHit>, String), String>),
+}
+
+struct IndexOutcome {
+    added: usize,
+    embedded: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -62,6 +71,8 @@ pub struct PstRagApp {
     expanded_hit: Option<usize>,
     status: String,
     count: u64,
+    sources: Vec<IndexedSource>,
+    pending_remove_source: Option<String>,
     busy: bool,
     config: LlmConfig,
     worker: Option<Receiver<WorkerResult>>,
@@ -79,6 +90,13 @@ enum Message {
     QuestionChanged(String),
     EndpointChanged(String),
     ModelChanged(String),
+    EmbeddingModelChanged(String),
+    RemoteEmbeddingsChanged(bool),
+    SourceEnabledChanged(String, bool),
+    FolderEnabledChanged(String, String, bool),
+    RemoveSourceRequested(String),
+    ConfirmRemoveSource,
+    CancelRemoveSource,
     TokenChanged(String),
     ToggleContext(usize, bool),
     ToggleSources,
@@ -109,7 +127,9 @@ impl PstRagApp {
             .unwrap_or_else(|| base.join("data"));
         let db_path = storage_dir.join("index.sqlite");
         let config = load_config(&storage_dir).unwrap_or_default();
-        let count = Index::open(&db_path).and_then(|db| db.count()).unwrap_or(0);
+        let (count, sources) = Index::open(&db_path)
+            .map(|db| (db.count().unwrap_or(0), db.sources().unwrap_or_default()))
+            .unwrap_or_default();
         Self {
             storage_location_path,
             storage_dir,
@@ -122,6 +142,8 @@ impl PstRagApp {
             expanded_hit: None,
             status: "Ready — all retrieval stays local".into(),
             count,
+            sources,
+            pending_remove_source: None,
             busy: false,
             config,
             worker: None,
@@ -140,6 +162,17 @@ impl PstRagApp {
             Message::QuestionChanged(value) => self.question = value,
             Message::EndpointChanged(value) => self.config.endpoint = value,
             Message::ModelChanged(value) => self.config.model = value,
+            Message::EmbeddingModelChanged(value) => self.config.embedding_model = value,
+            Message::RemoteEmbeddingsChanged(value) => self.config.use_remote_embeddings = value,
+            Message::SourceEnabledChanged(source, enabled) => {
+                self.set_source_enabled(&source, enabled)
+            }
+            Message::FolderEnabledChanged(source, folder, enabled) => {
+                self.set_folder_enabled(&source, &folder, enabled)
+            }
+            Message::RemoveSourceRequested(source) => self.pending_remove_source = Some(source),
+            Message::ConfirmRemoveSource => self.remove_pending_source(),
+            Message::CancelRemoveSource => self.pending_remove_source = None,
             Message::TokenChanged(value) => self.config.bearer_token = value,
             Message::ToggleContext(index, value) => {
                 if let Some(message) = self.messages.get_mut(index) {
@@ -175,11 +208,19 @@ impl PstRagApp {
         self.busy = false;
         self.worker = None;
         match result {
-            WorkerResult::Indexed(Ok(count)) => {
+            WorkerResult::Indexed(Ok(outcome)) => {
                 self.count = Index::open(&self.db_path)
                     .and_then(|db| db.count())
                     .unwrap_or(self.count);
-                self.status = format!("Indexed {count} new messages");
+                self.refresh_sources();
+                self.status = if outcome.embedded > 0 {
+                    format!(
+                        "Indexed {} new messages with BM25; stored {} remote embeddings",
+                        outcome.added, outcome.embedded
+                    )
+                } else {
+                    format!("Indexed {} new messages with local BM25", outcome.added)
+                };
             }
             WorkerResult::Indexed(Err(error)) => self.status = error,
             WorkerResult::Searched(Ok(hits)) => {

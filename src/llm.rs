@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use rig::{completion::Prompt, prelude::*, providers::openai};
+use rig::{completion::Prompt, embeddings::EmbeddingModel, prelude::*, providers::openai};
 use serde::{Deserialize, Serialize};
 
 use crate::model::SearchHit;
@@ -8,6 +8,10 @@ use crate::model::SearchHit;
 pub struct LlmConfig {
     pub endpoint: String,
     pub model: String,
+    #[serde(default)]
+    pub use_remote_embeddings: bool,
+    #[serde(default)]
+    pub embedding_model: String,
     #[serde(default)]
     pub bearer_token: String,
     #[serde(default = "default_context_chars")]
@@ -23,6 +27,8 @@ impl Default for LlmConfig {
         Self {
             endpoint: "https://llm.internal.example/v1/chat/completions".into(),
             model: "private-model".into(),
+            use_remote_embeddings: false,
+            embedding_model: String::new(),
             bearer_token: String::new(),
             max_context_chars: default_context_chars(),
         }
@@ -101,6 +107,42 @@ pub fn ask(config: &LlmConfig, question: &str, context: &str) -> Result<String> 
             debug_log(format_args!("Rig agent error: {error:#}"));
             anyhow::anyhow!(error).context(format!("Rig agent request to {endpoint_for_log}"))
         })
+}
+
+pub fn embed(config: &LlmConfig, texts: Vec<String>) -> Result<Vec<Vec<f64>>> {
+    if config.embedding_model.trim().is_empty() {
+        bail!("enter an embedding model before enabling remote embeddings");
+    }
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let url = validate_endpoint(&config.endpoint)?;
+    let base_url = openai_base_url(&url)?;
+    let http_client = reqwest::Client::builder()
+        .https_only(url.scheme() == "https")
+        .build()
+        .context("build secure HTTP client")?;
+    let client = openai::CompletionsClient::builder()
+        .api_key(config.bearer_token.clone())
+        .base_url(base_url.as_str())
+        .http_client(http_client)
+        .build()
+        .context("build Rig embedding client")?;
+    let model = client.embedding_model(config.embedding_model.trim());
+    debug_log(format_args!(
+        "Embedding request: POST {}/embeddings; model={:?}; documents={}",
+        base_url.as_str().trim_end_matches('/'),
+        config.embedding_model,
+        texts.len()
+    ));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("start Rig runtime")?;
+    runtime
+        .block_on(async { model.embed_texts(texts).await })
+        .map(|embeddings| embeddings.into_iter().map(|item| item.vec).collect())
+        .map_err(|error| anyhow::anyhow!(error).context("remote embedding request failed"))
 }
 
 fn openai_base_url(endpoint: &url::Url) -> Result<url::Url> {

@@ -1,8 +1,12 @@
 # Architecture and release gates
 
-`MailSource -> normalized Email -> SQLite messages + FTS5 -> BM25 candidates -> bounded context -> Rig agent -> private LLM`
+`MailSource -> normalized Email -> SQLite messages + FTS5 (always) -> optional remote embeddings -> BM25 or hybrid candidates -> bounded context -> Rig agent -> private LLM`
 
-Retrieval stays in the bundled SQLite index. For each question, the top local BM25 results are converted to bounded, numbered evidence documents and attached as static context to a short-lived Rig agent. Rig targets the configured OpenAI-compatible chat-completions endpoint; the application still validates HTTPS (with the existing exact `127.0.0.1` development exception) before constructing the agent.
+BM25 retrieval stays in the bundled SQLite index and is always available. When the user enables remote embedding indexing, bounded email documents are sent in batches to the configured OpenAI-compatible embeddings endpoint and vectors are stored separately by message and model. Questions then use reciprocal-rank fusion over BM25 and cosine-similarity results; disabling the switch uses BM25 alone. The explicitly local “Search only” action never generates a remote query embedding.
+
+Indexed sources are tracked by their archive path. Archive and folder enablement are non-destructive query filters applied consistently to FTS and vector candidates. Removing a source deletes only its indexed messages; SQLite cascades the deletion to their vectors and the FTS delete trigger removes their terms. The source PST remains read-only and untouched.
+
+For each question, the selected results are converted to bounded, numbered evidence documents and attached as static context to a short-lived Rig agent. Rig targets the configured OpenAI-compatible chat-completions endpoint; the application still validates HTTPS (with the existing exact `127.0.0.1` development exception) before constructing either model client.
 
 The `MailSource` boundary prevents parser-specific identifiers and lifetimes from entering storage, retrieval, or UI code. Index writes are transactional and `INSERT OR IGNORE` on a SHA-256 content hash makes repeated imports idempotent. Production incremental indexing should additionally persist the PST file identity, size, modification time, and stable node identifiers; a changed file must resume only where the chosen parser proves those identifiers stable.
 

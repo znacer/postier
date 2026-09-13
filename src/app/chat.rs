@@ -197,6 +197,10 @@ impl PstRagApp {
         } else {
             &hit.subject
         };
+        let source_name = std::path::Path::new(&hit.source_key)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&hit.source_key);
         let mut contents = column![
             row![
                 text(format!("{:02}", index + 1)).size(13),
@@ -225,8 +229,8 @@ impl PstRagApp {
             contents = contents
                 .push(
                     text(format!(
-                        "Folder: {}  •  BM25: {:.3}  •  Local ID: {}",
-                        hit.folder, hit.score, hit.id
+                        "PST: {}  •  Folder: {}  •  Retrieval score: {:.3}  •  Local ID: {}",
+                        source_name, hit.folder, hit.score, hit.id
                     ))
                     .size(11),
                 )
