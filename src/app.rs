@@ -27,6 +27,25 @@ struct IndexOutcome {
     embedded: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum SidebarSection {
+    Archive,
+    Storage,
+    IndexedSources,
+    AiModels,
+}
+
+impl SidebarSection {
+    fn index(self) -> usize {
+        match self {
+            Self::Archive => 0,
+            Self::Storage => 1,
+            Self::IndexedSources => 2,
+            Self::AiModels => 3,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ChatRole {
     User,
@@ -73,6 +92,7 @@ pub struct PstRagApp {
     count: u64,
     sources: Vec<IndexedSource>,
     pending_remove_source: Option<String>,
+    collapsed_sections: [bool; 4],
     busy: bool,
     config: LlmConfig,
     worker: Option<Receiver<WorkerResult>>,
@@ -97,6 +117,7 @@ enum Message {
     RemoveSourceRequested(String),
     ConfirmRemoveSource,
     CancelRemoveSource,
+    ToggleSidebarSection(SidebarSection),
     TokenChanged(String),
     ToggleContext(usize, bool),
     ToggleSources,
@@ -144,6 +165,7 @@ impl PstRagApp {
             count,
             sources,
             pending_remove_source: None,
+            collapsed_sections: [false; 4],
             busy: false,
             config,
             worker: None,
@@ -173,6 +195,10 @@ impl PstRagApp {
             Message::RemoveSourceRequested(source) => self.pending_remove_source = Some(source),
             Message::ConfirmRemoveSource => self.remove_pending_source(),
             Message::CancelRemoveSource => self.pending_remove_source = None,
+            Message::ToggleSidebarSection(section) => {
+                let index = section.index();
+                self.collapsed_sections[index] = !self.collapsed_sections[index];
+            }
             Message::TokenChanged(value) => self.config.bearer_token = value,
             Message::ToggleContext(index, value) => {
                 if let Some(message) = self.messages.get_mut(index) {

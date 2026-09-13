@@ -3,7 +3,7 @@ use iced::{
     widget::{checkbox, column, container, horizontal_rule, row, scrollable, text, text_input},
 };
 
-use super::{Message, PstRagApp, theme::*};
+use super::{Message, PstRagApp, SidebarSection, theme::*};
 
 impl PstRagApp {
     pub(super) fn sidebar(&self) -> Element<'_, Message> {
@@ -160,25 +160,28 @@ impl PstRagApp {
         .spacing(11)
         .align_y(Alignment::Center);
 
-        container(scrollable(
-            column![
-                brand,
-                horizontal_rule(1),
-                section_label("ARCHIVE"),
-                archive,
-                section_label("STORAGE"),
-                storage_card,
-                section_label("INDEXED PST FILES"),
+        let mut contents = column![brand, horizontal_rule(1)].spacing(12).padding(18);
+        for (section, label, body) in [
+            (SidebarSection::Archive, "ARCHIVE", archive),
+            (
+                SidebarSection::IndexedSources,
+                "INDEXED PST FILES",
                 source_manager,
-                section_label("AI MODELS"),
-                llm
-            ]
-            .spacing(12)
-            .padding(18),
-        ))
-        .width(310)
-        .height(Fill)
-        .style(sidebar_style)
-        .into()
+            ),
+            (SidebarSection::AiModels, "AI MODELS", llm),
+            (SidebarSection::Storage, "STORAGE", storage_card),
+        ] {
+            let collapsed = self.collapsed_sections[section.index()];
+            contents = contents.push(collapsible_section_label(label, collapsed, section));
+            if !collapsed {
+                contents = contents.push(body);
+            }
+        }
+
+        container(scrollable(contents))
+            .width(310)
+            .height(Fill)
+            .style(sidebar_style)
+            .into()
     }
 }

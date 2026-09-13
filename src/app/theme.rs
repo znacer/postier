@@ -105,8 +105,22 @@ pub(super) fn prompt_button<'a>(
     .on_press(Message::UsePrompt(prompt))
 }
 
-pub(super) fn section_label(label: &str) -> Element<'_, Message> {
-    text(label).size(10).color(muted()).into()
+pub(super) fn collapsible_section_label(
+    label: &str,
+    collapsed: bool,
+    section: super::SidebarSection,
+) -> Element<'_, Message> {
+    button(row![
+        text(label).size(10).color(muted()).width(Fill),
+        text(if collapsed { "+" } else { "-" })
+            .size(11)
+            .color(muted())
+    ])
+    .width(Fill)
+    .padding([4, 2])
+    .style(button::text)
+    .on_press(Message::ToggleSidebarSection(section))
+    .into()
 }
 pub(super) fn card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(content)
