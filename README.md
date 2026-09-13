@@ -18,9 +18,11 @@ cargo build --release
 cargo build --release --target x86_64-pc-windows-msvc
 ```
 
+When started with `cargo run`, debug builds print sanitized LLM request and response diagnostics to the terminal. They include the HTTP method, endpoint path, status, selected response headers, payload sizes, and a truncated error response, but never the bearer token, question, or email context.
+
 The release profile enables LTO, stripping, size optimization, and abort-on-panic. SQLite is compiled into the executable and HTTP uses rustls, so no database or TLS runtime is installed. Cross-compilation still requires the Microsoft target/linker; the canonical release should be produced on a pinned Windows CI runner.
 
-Runtime data is created in `data/` beside the executable. Do not place bearer tokens in source control; a Windows Credential Manager-backed settings implementation is required before production rollout.
+Runtime data defaults to `data/` beside the executable. The storage directory can be changed in the UI and the selection is remembered in `storage-directory.txt`; the selected directory contains both `index.sqlite` and `credentials.json`. The credentials file is restricted to the current user on Unix, but remains a local plaintext secret, so select a private directory and never place it in source control. A platform credential-vault implementation is still recommended for production rollout.
 
 ## Fixture example
 
