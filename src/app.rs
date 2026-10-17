@@ -9,8 +9,8 @@ use crate::{
     db::Index,
     llm::LlmConfig,
     model::{
-        EmailRecord, IndexedSource, LabelDefinition, LabelFilter, LabelerBackend, MailScope,
-        MailSort, SearchHit,
+        AssignedLabel, EmailRecord, IndexedSource, LabelDefinition, LabelFilter, LabelerBackend,
+        MailScope, MailSort, SearchHit,
     },
 };
 use actions::load_config;
@@ -18,8 +18,27 @@ use iced::{
     Element, Fill, Subscription, Task,
     widget::{container, row},
 };
-use std::{collections::HashSet, fs, path::PathBuf, sync::mpsc::Receiver, time::Duration};
+use std::{
+    collections::HashSet,
+    fs,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::Receiver,
+    },
+    time::Duration,
+};
 use theme::{app_theme, page_style};
+
+enum WorkerEvent {
+    Progress(String),
+    EmailLabeled {
+        message_id: i64,
+        labels: Vec<AssignedLabel>,
+    },
+    Finished(WorkerResult),
+}
 
 enum WorkerResult {
     Indexed(Result<IndexOutcome, String>),
@@ -38,6 +57,7 @@ struct LabelOutcome {
     messages_processed: usize,
     labels_assigned: usize,
     source_name: String,
+    cancelled: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -120,11 +140,13 @@ pub struct PstRagApp {
     unlabeled_count: u64,
     new_label_name: String,
     new_label_description: String,
+    sidebar_open: bool,
     chat_open: bool,
     chat_width: f32,
     busy: bool,
     config: LlmConfig,
-    worker: Option<Receiver<WorkerResult>>,
+    worker: Option<Receiver<WorkerEvent>>,
+    cancel_flag: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,16 +199,18 @@ enum Message {
     LayaGgufPathChanged(String),
     ChooseLayaGguf,
     DownloadLayaGguf,
+    ToggleSidebar,
     ToggleChatPane,
     ChatWidthChanged(f32),
     AskAboutEmail(i64),
     MarkdownLinkClicked(String),
+    CancelWorker,
     Tick,
 }
 
 pub fn run() -> iced::Result {
     iced::application(
-        "PSTbeetle \u{2014} Mail Explorer & Local RAG",
+        "PSTbeetle - Mail Explorer and Local RAG",
         PstRagApp::update,
         PstRagApp::view,
     )
@@ -223,7 +247,7 @@ impl PstRagApp {
             hits: vec![],
             show_sources: false,
             expanded_hit: None,
-            status: "Ready \u{2014} Thunderbird mail explorer + Laya / LLM Judge labeling".into(),
+            status: "Ready - Thunderbird mail explorer with Laya and LLM Judge labeling".into(),
             count,
             sources,
             pending_remove_source: None,
@@ -240,11 +264,13 @@ impl PstRagApp {
             unlabeled_count: 0,
             new_label_name: String::new(),
             new_label_description: String::new(),
+            sidebar_open: true,
             chat_open: true,
             chat_width: 410.0,
             busy: false,
             config,
             worker: None,
+            cancel_flag: None,
         };
         app.refresh_explorer();
         app
@@ -351,11 +377,18 @@ impl PstRagApp {
             Message::LayaGgufPathChanged(path) => self.config.laya_gguf_path = path,
             Message::ChooseLayaGguf => self.choose_laya_gguf(),
             Message::DownloadLayaGguf => self.download_laya_gguf(),
+            Message::ToggleSidebar => self.sidebar_open = !self.sidebar_open,
             Message::ToggleChatPane => self.chat_open = !self.chat_open,
             Message::ChatWidthChanged(width) => self.chat_width = width.clamp(310.0, 760.0),
             Message::AskAboutEmail(message_id) => self.ask_about_email(message_id),
             Message::MarkdownLinkClicked(url) => {
                 self.status = format!("Link: {url}");
+            }
+            Message::CancelWorker => {
+                if let Some(flag) = &self.cancel_flag {
+                    flag.store(true, Ordering::Relaxed);
+                }
+                self.status = "Cancelling background task...".into();
             }
             Message::Tick => self.poll_worker(),
         }
@@ -364,22 +397,71 @@ impl PstRagApp {
 
     fn subscription(&self) -> Subscription<Message> {
         if self.busy {
-            iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+            iced::time::every(Duration::from_millis(30)).map(|_| Message::Tick)
         } else {
             Subscription::none()
         }
     }
 
     fn poll_worker(&mut self) {
-        let Some(result) = self
-            .worker
-            .as_ref()
-            .and_then(|receiver| receiver.try_recv().ok())
-        else {
-            return;
-        };
-        self.busy = false;
-        self.worker = None;
+        let mut events = Vec::new();
+        let mut disconnected = false;
+        if let Some(receiver) = &self.worker {
+            loop {
+                match receiver.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        for event in events {
+            match event {
+                WorkerEvent::Progress(status) => {
+                    self.status = status;
+                }
+                WorkerEvent::EmailLabeled { message_id, labels } => {
+                    if let Some(email) = self
+                        .explorer_messages
+                        .iter_mut()
+                        .find(|m| m.id == message_id)
+                    {
+                        let mut merged: Vec<AssignedLabel> = email
+                            .labels
+                            .iter()
+                            .filter(|l| l.source == "manual")
+                            .cloned()
+                            .collect();
+                        for assigned in labels {
+                            if !merged.iter().any(|l| l.label == assigned.label) {
+                                merged.push(assigned);
+                            }
+                        }
+                        email.labels = merged;
+                    }
+                }
+                WorkerEvent::Finished(result) => {
+                    self.busy = false;
+                    self.worker = None;
+                    self.cancel_flag = None;
+                    self.handle_worker_result(result);
+                    return;
+                }
+            }
+        }
+
+        if disconnected {
+            self.busy = false;
+            self.worker = None;
+            self.cancel_flag = None;
+        }
+    }
+
+    fn handle_worker_result(&mut self, result: WorkerResult) {
         match result {
             WorkerResult::Indexed(Ok(outcome)) => {
                 self.count = Index::open(&self.db_path)
@@ -389,7 +471,7 @@ impl PstRagApp {
                 self.refresh_explorer();
                 self.status = if outcome.embedded > 0 {
                     format!(
-                        "Indexed {} new messages with BM25; stored {} remote embeddings",
+                        "Indexed {} new messages with BM25 and stored {} remote embeddings",
                         outcome.added, outcome.embedded
                     )
                 } else {
@@ -410,14 +492,13 @@ impl PstRagApp {
                     ),
                     String::new(),
                 ));
-                self.status = format!(
-                    "Found {count} local results \u{2014} nothing was sent over the network"
-                );
+                self.status =
+                    format!("Found {count} local results - nothing was sent over the network");
             }
             WorkerResult::Searched(Err(error)) => {
                 self.chat_open = true;
                 self.messages.push(ChatMessage::assistant(
-                    format!("I couldn't complete that local search: {error}"),
+                    format!("I could not complete that local search: {error}"),
                     String::new(),
                 ));
                 self.status = error;
@@ -433,15 +514,21 @@ impl PstRagApp {
             WorkerResult::Answered(Err(error)) => {
                 self.chat_open = true;
                 self.messages.push(ChatMessage::assistant(
-                    format!("I couldn't answer that question: {error}"),
+                    format!("I could not answer that question: {error}"),
                     String::new(),
                 ));
                 self.status = error;
             }
             WorkerResult::Labeled(Ok(outcome)) => {
                 self.refresh_explorer();
+                let prefix = if outcome.cancelled {
+                    "Stopped labeling after"
+                } else {
+                    "Labeled"
+                };
                 self.status = format!(
-                    "Labeled {} email{} ({} label{} assigned via {})",
+                    "{} {} email{} ({} label{} assigned via {})",
+                    prefix,
                     outcome.messages_processed,
                     if outcome.messages_processed == 1 {
                         ""
@@ -458,6 +545,7 @@ impl PstRagApp {
                 );
             }
             WorkerResult::Labeled(Err(error)) => {
+                self.refresh_explorer();
                 self.status = format!("Labeling failed: {error}");
             }
             WorkerResult::LayaDownloaded(Ok(path)) => {

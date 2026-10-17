@@ -125,7 +125,7 @@ pub(super) fn prompt_button<'a>(
 ) -> iced::widget::Button<'a, Message> {
     button(row![
         text(label).size(12).width(Fill),
-        text("->").size(12).color(accent_text())
+        text("Use").size(11).color(accent_text())
     ])
     .width(Fill)
     .padding([8, 12])
@@ -140,8 +140,8 @@ pub(super) fn collapsible_section_label(
 ) -> Element<'_, Message> {
     button(row![
         text(label).size(10).color(muted()).width(Fill),
-        text(if collapsed { "+" } else { "-" })
-            .size(11)
+        text(if collapsed { "Show" } else { "Hide" })
+            .size(10)
             .color(muted())
     ])
     .width(Fill)
@@ -166,7 +166,7 @@ pub(super) fn label_badge<'a>(
 ) -> Element<'a, Message> {
     let base = parse_hex_color(hex_color);
     let label_text = match detail {
-        Some(extra) => format!("{name} \u{00b7} {extra}"),
+        Some(extra) => format!("{name} ({extra})"),
         None => name.to_owned(),
     };
     container(text(label_text).size(10).color(bright_text()))

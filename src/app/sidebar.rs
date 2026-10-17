@@ -17,7 +17,7 @@ struct FolderTree<'a> {
 }
 
 struct FolderTreeRow<'a> {
-    prefix: String,
+    depth: usize,
     name: &'a str,
     path: String,
     folder_paths: Vec<String>,
@@ -46,14 +46,12 @@ fn folder_tree_rows<'a>(
 
     fn append_rows<'a>(
         node: &FolderTree<'a>,
-        parent_prefix: &str,
+        depth: usize,
         parent_path: &str,
         collapsed_paths: &HashSet<String>,
         rows: &mut Vec<FolderTreeRow<'a>>,
     ) {
-        let child_count = node.children.len();
-        for (index, (&name, child)) in node.children.iter().enumerate() {
-            let is_last = index + 1 == child_count;
+        for (&name, child) in &node.children {
             let path = if parent_path.is_empty() {
                 name.to_owned()
             } else {
@@ -63,7 +61,7 @@ fn folder_tree_rows<'a>(
             collect_folders(child, &mut descendant_folders);
             let collapsed = collapsed_paths.contains(&path);
             rows.push(FolderTreeRow {
-                prefix: format!("{parent_prefix}{}", if is_last { "|_ " } else { "|- " }),
+                depth,
                 name,
                 path: path.clone(),
                 folder_paths: descendant_folders
@@ -79,9 +77,7 @@ fn folder_tree_rows<'a>(
                 collapsed,
             });
             if !collapsed {
-                let child_prefix =
-                    format!("{parent_prefix}{}", if is_last { "   " } else { "|  " });
-                append_rows(child, &child_prefix, &path, collapsed_paths, rows);
+                append_rows(child, depth + 1, &path, collapsed_paths, rows);
             }
         }
     }
@@ -96,12 +92,38 @@ fn folder_tree_rows<'a>(
     }
 
     let mut rows = Vec::new();
-    append_rows(&root, "", "", collapsed_paths, &mut rows);
+    append_rows(&root, 0, "", collapsed_paths, &mut rows);
     rows
 }
 
 impl PstRagApp {
     pub(super) fn sidebar(&self) -> Element<'_, Message> {
+        if !self.sidebar_open {
+            let expand_rail = button(
+                column![
+                    text("Open").size(10).color(accent_text()),
+                    Space::new(0, 8),
+                    text("M").size(10).color(muted()),
+                    text("A").size(10).color(muted()),
+                    text("I").size(10).color(muted()),
+                    text("L").size(10).color(muted()),
+                ]
+                .spacing(2)
+                .align_x(Alignment::Center),
+            )
+            .width(Fill)
+            .height(Fill)
+            .padding([16, 4])
+            .style(button::text)
+            .on_press(Message::ToggleSidebar);
+
+            return container(expand_rail)
+                .width(36)
+                .height(Fill)
+                .style(sidebar_style)
+                .into();
+        }
+
         let name = self
             .archive
             .as_ref()
@@ -117,10 +139,7 @@ impl PstRagApp {
             "Choose directory",
             (!self.busy).then_some(Message::ChooseStorage),
         );
-        let save = small_button(
-            "Save AI settings",
-            (!self.busy).then_some(Message::SaveCredentials),
-        );
+        let save = small_button("Save AI settings", Some(Message::SaveCredentials));
 
         let all_selected = self.mail_scope == MailScope::AllMessages;
         let all_mail_btn = button(
@@ -198,6 +217,7 @@ impl PstRagApp {
                     if sk == &source.key && fp == &row_path
                 );
 
+                let indent_px = ((tree_row.depth + 1).min(6) as u16) * 12;
                 let check = checkbox("", source.enabled && tree_row.enabled)
                     .size(13)
                     .on_toggle(move |enabled| {
@@ -225,34 +245,25 @@ impl PstRagApp {
                 if tree_row.has_children {
                     let source_key = source.key.clone();
                     let folder_path = tree_row.path;
+                    let toggle_label = if tree_row.collapsed { "Show" } else { "Hide" };
                     source_view = source_view.push(
                         row![
-                            button(
-                                text(format!(
-                                    "{}{}",
-                                    tree_row.prefix,
-                                    if tree_row.collapsed { "[+]" } else { "[-]" }
-                                ))
-                                .size(11)
-                            )
-                            .padding(0)
-                            .style(button::text)
-                            .on_press(Message::ToggleFolderTreeNode(source_key, folder_path)),
+                            Space::new(indent_px, 0),
                             check,
-                            folder_btn
+                            folder_btn,
+                            button(text(toggle_label).size(10).color(muted()))
+                                .padding([2, 4])
+                                .style(button::text)
+                                .on_press(Message::ToggleFolderTreeNode(source_key, folder_path)),
                         ]
-                        .spacing(3)
+                        .spacing(4)
                         .align_y(Alignment::Center),
                     );
                 } else {
                     source_view = source_view.push(
-                        row![
-                            text(format!("{}   ", tree_row.prefix)).size(11),
-                            check,
-                            folder_btn
-                        ]
-                        .spacing(3)
-                        .align_y(Alignment::Center),
+                        row![Space::new(indent_px, 0), check, folder_btn]
+                            .spacing(4)
+                            .align_y(Alignment::Center),
                     );
                 }
             }
@@ -311,7 +322,7 @@ impl PstRagApp {
                         button::text
                     })
                     .on_press(Message::SelectLabelFilter(LabelFilter::Labeled(label_name))),
-                    small_button("×", Some(Message::RemoveLabelDefinition(label_del))),
+                    small_button("Delete", Some(Message::RemoveLabelDefinition(label_del))),
                 ]
                 .spacing(4)
                 .align_y(Alignment::Center),
@@ -321,7 +332,7 @@ impl PstRagApp {
         let can_add_label = !self.new_label_name.trim().is_empty();
         labels_col = labels_col
             .push(horizontal_rule(1))
-            .push(text("Add / update label").size(11).color(muted()))
+            .push(text("Add or update label").size(11).color(muted()))
             .push(
                 text_input("Label name (e.g. Billing)", &self.new_label_name)
                     .on_input(Message::NewLabelNameChanged)
@@ -330,7 +341,7 @@ impl PstRagApp {
             )
             .push(
                 text_input(
-                    "Criteria description for Laya / LLM Judge",
+                    "Criteria description for Laya or LLM Judge",
                     &self.new_label_description,
                 )
                 .on_input(Message::NewLabelDescriptionChanged)
@@ -338,7 +349,7 @@ impl PstRagApp {
                 .padding(6),
             )
             .push(small_button(
-                "+ Save Label",
+                "Save Label",
                 can_add_label.then_some(Message::SaveLabelDefinition),
             ));
         let labels_card = card(labels_col);
@@ -361,7 +372,7 @@ impl PstRagApp {
                 .padding(6),
                 row![
                     small_button(
-                        "Choose GGUF…",
+                        "Choose GGUF...",
                         (!self.busy).then_some(Message::ChooseLayaGguf)
                     ),
                     small_button(
@@ -380,7 +391,7 @@ impl PstRagApp {
         let llm = card(
             column![
                 text("Endpoint").size(11),
-                text_input("https://…", &self.config.endpoint)
+                text_input("https://...", &self.config.endpoint)
                     .on_input(Message::EndpointChanged)
                     .size(11)
                     .padding(6),
@@ -439,6 +450,8 @@ impl PstRagApp {
                 text("Thunderbird Mail Explorer").size(10).color(muted())
             ]
             .spacing(1)
+            .width(Fill),
+            small_button("Hide", Some(Message::ToggleSidebar)),
         ]
         .spacing(10)
         .align_y(Alignment::Center);
@@ -447,12 +460,12 @@ impl PstRagApp {
         for (section, label, body) in [
             (
                 SidebarSection::Mailboxes,
-                "MAILBOXES & FOLDERS",
+                "MAILBOXES AND FOLDERS",
                 mailboxes_card,
             ),
             (SidebarSection::Labels, "MAIL LABELS", labels_card),
             (SidebarSection::LayaModel, "LAYA DECISION MODEL", laya_card),
-            (SidebarSection::AiModels, "LLM JUDGE & RAG", llm),
+            (SidebarSection::AiModels, "LLM JUDGE AND RAG", llm),
             (SidebarSection::Storage, "STORAGE", storage_card),
         ] {
             let collapsed = self.collapsed_sections[section.index()];
@@ -492,19 +505,16 @@ mod tests {
             folder("Archive"),
         ];
         let rows = folder_tree_rows(&folders, &HashSet::new());
-        let labels: Vec<_> = rows
-            .iter()
-            .map(|row| format!("{}{}", row.prefix, row.name))
-            .collect();
+        let labels: Vec<_> = rows.iter().map(|row| (row.depth, row.name)).collect();
 
         assert_eq!(
             labels,
             [
-                "|- Archive",
-                "|_ Mailbox",
-                "   |- Inbox",
-                "   |_ Projects",
-                "      |_ Alpha",
+                (0, "Archive"),
+                (0, "Mailbox"),
+                (1, "Inbox"),
+                (1, "Projects"),
+                (2, "Alpha"),
             ]
         );
         assert_eq!(rows[1].folder_paths.len(), 2);

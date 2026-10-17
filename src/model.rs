@@ -134,7 +134,7 @@ impl EmailRecord {
             out.push(if ch == '\n' || ch == '\r' { ' ' } else { ch });
         }
         if trimmed.chars().count() > max_chars {
-            out.push('…');
+            out.push_str("...");
         }
         out
     }
@@ -182,7 +182,7 @@ impl SearchHit {
             out.push(ch);
         }
         if self.body.chars().count() > max_chars {
-            out.push('…');
+            out.push_str("...");
         }
         out
     }

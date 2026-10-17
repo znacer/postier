@@ -141,8 +141,8 @@ pub(super) fn render_markdown<'a>(content: &'a str, is_user: bool) -> Element<'a
                 for item in items {
                     let indent_px = (item.indent.min(6) as u16) * 14;
                     let bullet_label = match item.task_checked {
-                        Some(true) => "\u{2611}".to_owned(),
-                        Some(false) => "\u{2610}".to_owned(),
+                        Some(true) => "Done:".to_owned(),
+                        Some(false) => "Todo:".to_owned(),
                         None => item.marker,
                     };
                     let bullet_color = match item.task_checked {
@@ -579,14 +579,9 @@ fn parse_list_line(line: &str) -> Option<MdListItem> {
     for prefix in ["- ", "* ", "+ "] {
         if let Some(rest) = trimmed.strip_prefix(prefix) {
             let (task_checked, item_text) = parse_task_prefix(rest.trim_start());
-            let marker = if indent % 2 == 0 {
-                "\u{2022}".to_owned()
-            } else {
-                "\u{25e6}".to_owned()
-            };
             return Some(MdListItem {
                 indent,
-                marker,
+                marker: "-".to_owned(),
                 task_checked,
                 text: item_text.to_owned(),
             });

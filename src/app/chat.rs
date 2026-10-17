@@ -14,7 +14,7 @@ impl PstRagApp {
         if !self.chat_open {
             let expand_rail = button(
                 column![
-                    text("\u{25c0}").size(12).color(accent_text()),
+                    text("Open").size(10).color(accent_text()),
                     Space::new(0, 8),
                     text("C").size(10).color(muted()),
                     text("H").size(10).color(muted()),
@@ -31,7 +31,7 @@ impl PstRagApp {
             .on_press(Message::ToggleChatPane);
 
             return container(expand_rail)
-                .width(32)
+                .width(36)
                 .height(Fill)
                 .style(chat_pane_style)
                 .into();
@@ -41,26 +41,26 @@ impl PstRagApp {
             row![
                 column![
                     text("Archive Chat").size(17).color(bright_text()),
-                    text("Grounded RAG assistant \u{00b7} Markdown enabled")
+                    text("Grounded RAG assistant - Markdown enabled")
                         .size(11)
                         .color(muted())
                 ]
                 .spacing(2)
                 .width(Fill),
                 small_button(
-                    "\u{25c0} Extend",
+                    "Wider",
                     (self.chat_width < 740.0).then_some(Message::ChatWidthChanged(
                         (self.chat_width + 80.0).min(760.0)
                     ))
                 ),
                 small_button(
-                    "Shrink \u{25b6}",
+                    "Narrower",
                     (self.chat_width > 330.0).then_some(Message::ChatWidthChanged(
                         (self.chat_width - 80.0).max(310.0)
                     ))
                 ),
-                small_button("New", (!self.busy).then_some(Message::NewChat)),
-                small_button("Collapse \u{25b8}", Some(Message::ToggleChatPane)),
+                small_button("New", Some(Message::NewChat)),
+                small_button("Hide", Some(Message::ToggleChatPane)),
             ]
             .spacing(5)
             .align_y(Alignment::Center),
@@ -114,7 +114,7 @@ impl PstRagApp {
         conversation = self.sources_view(conversation);
 
         let enabled = !self.busy && self.count > 0 && !self.question.trim().is_empty();
-        let mut question_input = text_input("Ask your archive\u{2026}", &self.question)
+        let mut question_input = text_input("Ask your archive...", &self.question)
             .on_input(Message::QuestionChanged)
             .padding(10)
             .size(13);
@@ -124,9 +124,9 @@ impl PstRagApp {
         let helper = if self.count == 0 {
             "Index an archive to start chatting"
         } else if self.busy {
-            "Working with your local archive\u{2026}"
+            "Working with your local archive..."
         } else {
-            "Enter to send \u{00b7} Search only stays local"
+            "Enter to send - Search only stays local"
         };
         let composer = container(
             column![
@@ -168,9 +168,9 @@ impl PstRagApp {
             return conversation;
         }
         let label = if self.show_sources {
-            "Hide evidence  \u{25b4}"
+            "Hide evidence"
         } else {
-            "Show evidence  \u{25be}"
+            "Show evidence"
         };
         conversation = conversation.push(Space::new(0, 4)).push(
             button(
@@ -271,7 +271,7 @@ impl PstRagApp {
                 column![
                     text(subject).size(13).color(bright_text()),
                     text(format!(
-                        "{}  \u{2022}  {}",
+                        "{} - {}",
                         hit.sender,
                         hit.sent_at.as_deref().unwrap_or("Unknown date")
                     ))
@@ -289,7 +289,7 @@ impl PstRagApp {
                 if self.expanded_hit == Some(index) {
                     "Hide details"
                 } else {
-                    "Metadata & full excerpt"
+                    "Metadata and full excerpt"
                 },
                 Some(Message::ToggleHit(index))
             )
@@ -299,7 +299,7 @@ impl PstRagApp {
             contents = contents
                 .push(
                     text(format!(
-                        "PST: {}  \u{2022}  Folder: {}  \u{2022}  Score: {:.3}  \u{2022}  ID: {}",
+                        "PST: {} - Folder: {} - Score: {:.3} - ID: {}",
                         source_name, hit.folder, hit.score, hit.id
                     ))
                     .size(10)

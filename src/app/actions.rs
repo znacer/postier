@@ -1,7 +1,11 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::mpsc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
 };
 
@@ -15,7 +19,7 @@ use crate::{
     pst,
 };
 
-use super::{ChatMessage, IndexOutcome, LabelOutcome, PstRagApp, WorkerResult};
+use super::{ChatMessage, IndexOutcome, LabelOutcome, PstRagApp, WorkerEvent, WorkerResult};
 
 const CUSTOM_LABEL_PALETTE: &[&str] = &[
     "#0f766e", "#2563eb", "#7c3aed", "#d97706", "#be123c", "#4f46e5", "#15803d",
@@ -55,9 +59,6 @@ impl PstRagApp {
     }
 
     pub(super) fn save_credentials(&mut self) {
-        if self.busy {
-            return;
-        }
         self.status = match save_config(&self.storage_dir, &self.config) {
             Ok(()) => format!("Settings saved in {}", self.storage_dir.display()),
             Err(error) => format!("Could not save settings: {error:#}"),
@@ -103,16 +104,14 @@ impl PstRagApp {
         };
         let (tx, rx) = mpsc::channel();
         self.worker = Some(rx);
+        self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
         self.busy = true;
-        self.status = format!(
-            "Downloading ggml-org/Laya-GGUF to {}\u{2026}",
-            target.display()
-        );
+        self.status = format!("Downloading ggml-org/Laya-GGUF to {}...", target.display());
         thread::spawn(move || {
             let result = laya::download_laya_gguf(&target)
                 .map(|_| target)
                 .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(WorkerResult::LayaDownloaded(result));
+            let _ = tx.send(WorkerEvent::Finished(WorkerResult::LayaDownloaded(result)));
         });
     }
 
@@ -146,23 +145,36 @@ impl PstRagApp {
             return;
         }
         let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
         self.worker = Some(rx);
+        self.cancel_flag = Some(cancel.clone());
         self.busy = true;
         self.status = if config.use_remote_embeddings {
-            "Indexing BM25 locally and generating remote embeddings\u{2026}".into()
+            "Importing archive and indexing BM25 locally...".into()
         } else {
-            "Indexing BM25 locally\u{2026}".into()
+            "Indexing BM25 locally...".into()
         };
         thread::spawn(move || {
             let result = (|| {
                 let emails = pst::import(&path)?;
+                let _ = tx.send(WorkerEvent::Progress(format!(
+                    "Parsed {} emails, writing to local SQLite index...",
+                    emails.len()
+                )));
                 let mut db = Index::open(&db_path)?;
                 let added = db.index_batch(&emails)?;
                 let mut embedded = 0;
-                if config.use_remote_embeddings {
+                if config.use_remote_embeddings && !cancel.load(Ordering::Relaxed) {
                     let model = config.embedding_model.trim();
                     let documents = db.documents_missing_embeddings(model)?;
+                    let total_docs = documents.len();
                     for batch in documents.chunks(64) {
+                        if cancel.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let _ = tx.send(WorkerEvent::Progress(format!(
+                            "Generating remote embeddings ({embedded}/{total_docs})..."
+                        )));
                         let vectors = llm::embed(
                             &config,
                             batch.iter().map(|document| document.text.clone()).collect(),
@@ -186,7 +198,7 @@ impl PstRagApp {
                 Ok(IndexOutcome { added, embedded })
             })()
             .map_err(|error: anyhow::Error| format!("{error:#}"));
-            let _ = tx.send(WorkerResult::Indexed(result));
+            let _ = tx.send(WorkerEvent::Finished(WorkerResult::Indexed(result)));
         });
     }
 
@@ -206,13 +218,17 @@ impl PstRagApp {
         let config = self.config.clone();
         let (tx, rx) = mpsc::channel();
         self.worker = Some(rx);
+        self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
         self.busy = true;
-        self.status = "Searching locally\u{2026}".into();
+        self.status = "Searching local index...".into();
         thread::spawn(move || {
             let result = (|| {
                 let db = Index::open(&db_path)?;
                 let hits =
                     if config.use_remote_embeddings && !config.embedding_model.trim().is_empty() {
+                        let _ = tx.send(WorkerEvent::Progress(
+                            "Embedding query and running hybrid search...".into(),
+                        ));
                         let mut embeddings = llm::embed(&config, vec![question.clone()])?;
                         let query_embedding = embeddings
                             .pop()
@@ -226,12 +242,16 @@ impl PstRagApp {
                     } else {
                         db.search(&question, 10)?
                     };
+                let _ = tx.send(WorkerEvent::Progress(format!(
+                    "Found {} relevant emails, waiting for LLM answer...",
+                    hits.len()
+                )));
                 let context = llm::build_context(&hits, config.max_context_chars);
                 let answer = llm::ask(&config, &question, &context)?;
                 Ok((answer, hits, context))
             })()
             .map_err(|error: anyhow::Error| format!("{error:#}"));
-            let _ = tx.send(WorkerResult::Answered(result));
+            let _ = tx.send(WorkerEvent::Finished(WorkerResult::Answered(result)));
         });
     }
 
@@ -262,26 +282,24 @@ impl PstRagApp {
         let db_path = self.db_path.clone();
         let (tx, rx) = mpsc::channel();
         self.worker = Some(rx);
+        self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
         self.busy = true;
-        self.status = "Searching locally \u{2014} no network request\u{2026}".into();
+        self.status = "Searching locally - no network request...".into();
         thread::spawn(move || {
             let result = Index::open(&db_path)
                 .and_then(|db| db.search(&query, 50))
                 .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(WorkerResult::Searched(result));
+            let _ = tx.send(WorkerEvent::Finished(WorkerResult::Searched(result)));
         });
     }
 
     pub(super) fn new_chat(&mut self) {
-        if self.busy {
-            return;
-        }
         self.messages.clear();
         self.hits.clear();
         self.show_sources = false;
         self.expanded_hit = None;
         self.question.clear();
-        self.status = "New conversation \u{2014} the local index is still available".into();
+        self.status = "New conversation - the local index is still available".into();
     }
 
     pub(super) fn refresh_sources(&mut self) {
@@ -479,14 +497,16 @@ impl PstRagApp {
         let db_path = self.db_path.clone();
         let config = self.config.clone();
         let laya_path = self.active_laya_gguf_path();
-        let count = emails.len();
+        let total = emails.len();
         let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
         self.worker = Some(rx);
+        self.cancel_flag = Some(cancel.clone());
         self.busy = true;
         self.status = format!(
-            "Labeling {} email{} with {}\u{2026}",
-            count,
-            if count == 1 { "" } else { "s" },
+            "Labeling {} email{} with {}...",
+            total,
+            if total == 1 { "" } else { "s" },
             backend.display_name()
         );
         thread::spawn(move || {
@@ -497,13 +517,29 @@ impl PstRagApp {
                     anyhow::bail!("no label definitions configured");
                 }
                 let mut total_assigned = 0usize;
+                let mut processed = 0usize;
                 let source_name = match backend {
                     LabelerBackend::Laya => {
                         let model = LayaModel::load_or_embedded(laya_path.as_deref())?;
-                        for email in &emails {
+                        for (idx, email) in emails.iter().enumerate() {
+                            if cancel.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            if total > 1 {
+                                let _ = tx.send(WorkerEvent::Progress(format!(
+                                    "Labeling email {} of {} with Laya...",
+                                    idx + 1,
+                                    total
+                                )));
+                            }
                             let assigned = model.label_email(email, &definitions)?;
                             total_assigned += assigned.len();
                             db.set_message_labels(email.id, &assigned)?;
+                            let _ = tx.send(WorkerEvent::EmailLabeled {
+                                message_id: email.id,
+                                labels: assigned,
+                            });
+                            processed += 1;
                         }
                         if model.is_embedded {
                             "laya-packaged".to_string()
@@ -512,22 +548,36 @@ impl PstRagApp {
                         }
                     }
                     LabelerBackend::LlmJudge => {
-                        for email in &emails {
+                        for (idx, email) in emails.iter().enumerate() {
+                            if cancel.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            let _ = tx.send(WorkerEvent::Progress(format!(
+                                "Labeling email {} of {} with LLM Judge...",
+                                idx + 1,
+                                total
+                            )));
                             let assigned = llm::judge_labels(&config, email, &definitions)?;
                             total_assigned += assigned.len();
                             db.set_message_labels(email.id, &assigned)?;
+                            let _ = tx.send(WorkerEvent::EmailLabeled {
+                                message_id: email.id,
+                                labels: assigned,
+                            });
+                            processed += 1;
                         }
                         "llm-judge".to_string()
                     }
                 };
                 Ok(LabelOutcome {
-                    messages_processed: emails.len(),
+                    messages_processed: processed,
                     labels_assigned: total_assigned,
                     source_name,
+                    cancelled: cancel.load(Ordering::Relaxed),
                 })
             })()
             .map_err(|error: anyhow::Error| format!("{error:#}"));
-            let _ = tx.send(WorkerResult::Labeled(result));
+            let _ = tx.send(WorkerEvent::Finished(WorkerResult::Labeled(result)));
         });
     }
 
@@ -634,6 +684,7 @@ impl PstRagApp {
         {
             Ok(()) => {
                 self.refresh_sources();
+                self.refresh_explorer();
                 if enabled {
                     "PST enabled for retrieval".into()
                 } else {
@@ -650,6 +701,7 @@ impl PstRagApp {
         {
             Ok(()) => {
                 self.refresh_sources();
+                self.refresh_explorer();
                 if enabled {
                     "Folder tree enabled for retrieval".into()
                 } else {

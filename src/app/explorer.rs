@@ -13,11 +13,17 @@ use super::{Message, PstRagApp, theme::*};
 impl PstRagApp {
     pub(super) fn explorer(&self) -> Element<'_, Message> {
         let toolbar = self.explorer_toolbar();
+        let cancel_btn: Element<'_, Message> = if self.busy {
+            small_button("Stop Task", Some(Message::CancelWorker)).into()
+        } else {
+            Space::new(0, 0).into()
+        };
         let status_bar = container(
             row![
                 text(&self.status).size(11).color(muted()).width(Fill),
+                cancel_btn,
                 text(format!(
-                    "Showing {} of {} indexed  \u{00b7}  {} selected  \u{00b7}  Labeler: {}",
+                    "Showing {} of {} indexed, {} selected, Labeler: {}",
                     self.explorer_messages.len(),
                     self.count,
                     self.checked_message_ids.len(),
@@ -61,7 +67,7 @@ impl PstRagApp {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or(source_key);
-                format!("{archive} \u{203a} {folder_prefix}")
+                format!("{archive} / {folder_prefix}")
             }
         };
 
@@ -70,7 +76,7 @@ impl PstRagApp {
             LabelFilter::Labeled(label) => row![
                 label_badge(label, self.label_color(label), None),
                 small_button(
-                    "\u{00d7} All labels",
+                    "All labels",
                     Some(Message::SelectLabelFilter(LabelFilter::Any))
                 )
             ]
@@ -80,7 +86,7 @@ impl PstRagApp {
             LabelFilter::Unlabeled => row![
                 label_badge("Unlabeled", "#7F8C8D", None),
                 small_button(
-                    "\u{00d7} All labels",
+                    "All labels",
                     Some(Message::SelectLabelFilter(LabelFilter::Any))
                 )
             ]
@@ -90,13 +96,13 @@ impl PstRagApp {
         };
 
         let filter_input = text_input(
-            "Quick filter (subject, sender, body)\u{2026}",
+            "Quick filter (subject, sender, body)...",
             &self.filter_query,
         )
         .on_input(Message::ExplorerFilterChanged)
         .padding([6, 10])
         .size(12)
-        .width(220);
+        .width(240);
 
         let clear_filter: Element<'_, Message> = if self.filter_query.is_empty() {
             Space::new(0, 0).into()
@@ -130,56 +136,72 @@ impl PstRagApp {
             )
         } else {
             (
-                "Label Mail".to_owned(),
+                "Label Focused Mail".to_owned(),
                 (!self.busy && self.selected_email().is_some())
                     .then_some(Message::LabelFocusedEmail),
             )
         };
         let can_label_view = !self.busy && !self.explorer_messages.is_empty();
 
-        let chat_toggle_label = if self.chat_open {
-            "Hide Chat \u{25b8}"
+        let sidebar_toggle_btn: Element<'_, Message> = if !self.sidebar_open {
+            small_button("Show Sidebar", Some(Message::ToggleSidebar)).into()
         } else {
-            "\u{25c0} Open Chat"
+            Space::new(0, 0).into()
         };
 
-        container(
-            row![
-                column![
-                    text(scope_title).size(15).color(bright_text()),
-                    text(format!(
-                        "{} in view \u{00b7} {} checked",
-                        self.explorer_messages.len(),
-                        checked_count
-                    ))
-                    .size(10)
-                    .color(muted())
-                ]
-                .spacing(1),
-                label_filter_badge,
-                Space::new(Fill, 0),
-                filter_input,
-                clear_filter,
-                row![laya_btn, llm_btn].spacing(3),
-                enabled_button(label_action_title, label_action_msg),
-                enabled_button(
-                    "Label View",
-                    can_label_view.then_some(Message::LabelVisibleMessages)
-                ),
-                primary_button(chat_toggle_label, Some(Message::ToggleChatPane)),
+        let chat_toggle_label = if self.chat_open {
+            "Hide Chat"
+        } else {
+            "Open Chat"
+        };
+
+        let top_row = row![
+            sidebar_toggle_btn,
+            column![
+                text(scope_title).size(15).color(bright_text()),
+                text(format!(
+                    "{} in view, {} checked",
+                    self.explorer_messages.len(),
+                    checked_count
+                ))
+                .size(10)
+                .color(muted())
             ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        )
-        .padding([8, 12])
-        .width(Fill)
-        .style(toolbar_style)
-        .into()
+            .spacing(1),
+            label_filter_badge,
+            Space::new(Fill, 0),
+            filter_input,
+            clear_filter,
+            primary_button(chat_toggle_label, Some(Message::ToggleChatPane)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+
+        let bottom_row = row![
+            text("Decision engine:").size(11).color(muted()),
+            row![laya_btn, llm_btn].spacing(4),
+            Space::new(8, 0),
+            enabled_button(label_action_title, label_action_msg),
+            enabled_button(
+                "Label View",
+                can_label_view.then_some(Message::LabelVisibleMessages)
+            ),
+            small_button("Select Unlabeled", Some(Message::SelectUnlabeledVisible)),
+            Space::new(Fill, 0),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+
+        container(column![top_row, bottom_row].spacing(6))
+            .padding([8, 12])
+            .width(Fill)
+            .style(toolbar_style)
+            .into()
     }
 
     fn selection_action_bar(&self) -> Element<'_, Message> {
         let count = self.checked_message_ids.len();
-        let mut manual_chips = row![text("Batch toggle label:").size(10).color(muted())]
+        let mut manual_chips = row![text("Batch label:").size(10).color(muted())]
             .spacing(5)
             .align_y(Alignment::Center);
 
@@ -194,9 +216,9 @@ impl PstRagApp {
                     .iter()
                     .any(|m| self.checked_message_ids.contains(&m.id));
             let chip_label = if all_have_label {
-                format!("\u{2713} {}", def.name)
+                format!("Remove {}", def.name)
             } else {
-                format!("+ {}", def.name)
+                format!("Add {}", def.name)
             };
             let label_name = def.name.clone();
             manual_chips = manual_chips.push(
@@ -230,7 +252,6 @@ impl PstRagApp {
                 Space::new(8, 0),
                 manual_chips,
                 Space::new(Fill, 0),
-                small_button("Select Unlabeled", Some(Message::SelectUnlabeledVisible)),
                 small_button("Clear Selection", Some(Message::ClearCheckedEmails)),
             ]
             .spacing(8)
@@ -244,17 +265,17 @@ impl PstRagApp {
 
     fn message_table(&self) -> Element<'_, Message> {
         let sort_date_label = match self.mail_sort {
-            MailSort::DateDesc => "DATE \u{25bc}",
-            MailSort::DateAsc => "DATE \u{25b2}",
+            MailSort::DateDesc => "DATE (Newest)",
+            MailSort::DateAsc => "DATE (Oldest)",
             _ => "DATE",
         };
         let sort_subj_label = if self.mail_sort == MailSort::SubjectAsc {
-            "SUBJECT \u{25b2}"
+            "SUBJECT (A-Z)"
         } else {
             "SUBJECT"
         };
         let sort_from_label = if self.mail_sort == MailSort::SenderAsc {
-            "CORRESPONDENT \u{25b2}"
+            "CORRESPONDENT (A-Z)"
         } else {
             "CORRESPONDENT"
         };
@@ -358,7 +379,7 @@ impl PstRagApp {
 
         let mut label_row = row![].spacing(4).align_y(Alignment::Center);
         if email.labels.is_empty() {
-            label_row = label_row.push(text("\u{2014}").size(10).color(muted()));
+            label_row = label_row.push(text("None").size(10).color(muted()));
         } else {
             for assigned in email.labels.iter().take(2) {
                 let color = self.label_color(&assigned.label);
@@ -367,7 +388,7 @@ impl PstRagApp {
             }
         }
 
-        let range_btn: Element<'a, Message> = button(text("\u{2195}").size(10).color(muted()))
+        let range_btn: Element<'a, Message> = button(text("Range").size(9).color(muted()))
             .padding([2, 5])
             .style(button::text)
             .on_press(Message::SelectRangeTo(email_id))
@@ -479,9 +500,9 @@ impl PstRagApp {
         for (def, _) in &self.labels_with_counts {
             let active = email.labels.iter().any(|l| l.label == def.name);
             let btn_label = if active {
-                format!("\u{2713} {}", def.name)
+                format!("Remove {}", def.name)
             } else {
-                format!("+ {}", def.name)
+                format!("Add {}", def.name)
             };
             let msg_id = email.id;
             let label_name = def.name.clone();
@@ -512,7 +533,7 @@ impl PstRagApp {
                     ),
                     small_button(
                         "Ask Chat about this mail",
-                        (!self.busy).then_some(Message::AskAboutEmail(email.id))
+                        Some(Message::AskAboutEmail(email.id))
                     ),
                 ]
                 .spacing(6)
@@ -527,7 +548,7 @@ impl PstRagApp {
                         .color(muted()),
                     Space::new(Fill, 0),
                     text(format!(
-                        "{}  \u{00b7}  {} / {}",
+                        "{} - {} / {}",
                         email.sent_at.as_deref().unwrap_or("Unknown date"),
                         source_name,
                         email.folder
@@ -588,7 +609,7 @@ fn truncate_str(value: &str, max_chars: usize) -> String {
         out.push(if ch == '\n' || ch == '\r' { ' ' } else { ch });
     }
     if value.chars().count() > max_chars {
-        out.push('\u{2026}');
+        out.push_str("...");
     }
     out
 }

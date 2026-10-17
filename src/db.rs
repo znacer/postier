@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params, types::Value};
 use sha2::{Digest, Sha256};
 
 use crate::model::{
@@ -39,6 +39,8 @@ impl Index {
                content_hash TEXT NOT NULL UNIQUE
              );
              CREATE INDEX IF NOT EXISTS messages_source ON messages(source_key);
+             CREATE INDEX IF NOT EXISTS messages_source_folder ON messages(source_key, folder);
+             CREATE INDEX IF NOT EXISTS messages_sent_at ON messages(sent_at DESC, id DESC);
              CREATE TABLE IF NOT EXISTS indexed_sources (
                source_key TEXT PRIMARY KEY,
                display_name TEXT NOT NULL,
@@ -84,10 +86,18 @@ impl Index {
              CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
                INSERT INTO messages_fts(messages_fts,rowid,subject,sender,recipients,body,attachment_names)
                VALUES('delete',old.id,old.subject,old.sender,old.recipients,old.body,old.attachment_names);
-             END;
-             INSERT OR IGNORE INTO indexed_sources(source_key, display_name, enabled)
-               SELECT DISTINCT source_key, source_key, 1 FROM messages;",
+             END;",
         )?;
+
+        let source_count: u64 =
+            conn.query_row("SELECT count(*) FROM indexed_sources", [], |r| r.get(0))?;
+        if source_count == 0 {
+            conn.execute(
+                "INSERT OR IGNORE INTO indexed_sources(source_key, display_name, enabled)
+                 SELECT DISTINCT source_key, source_key, 1 FROM messages",
+                [],
+            )?;
+        }
 
         let label_count: u64 =
             conn.query_row("SELECT count(*) FROM label_definitions", [], |r| r.get(0))?;
@@ -178,24 +188,7 @@ impl Index {
                     m.subject, m.sender, m.recipients, m.sent_at, m.body, m.attachment_names
              FROM messages m WHERE m.id = ?1",
         )?;
-        let record = stmt
-            .query_row([id], |r| {
-                Ok(EmailRecord {
-                    id: r.get(0)?,
-                    source_key: r.get(1)?,
-                    message_id: r.get(2)?,
-                    conversation_id: r.get(3)?,
-                    folder: r.get(4)?,
-                    subject: r.get(5)?,
-                    sender: r.get(6)?,
-                    recipients: r.get(7)?,
-                    sent_at: r.get(8)?,
-                    body: r.get(9)?,
-                    attachment_names: r.get(10)?,
-                    labels: Vec::new(),
-                })
-            })
-            .optional()?;
+        let record = stmt.query_row([id], map_email_record).optional()?;
         let Some(mut record) = record else {
             return Ok(None);
         };
@@ -229,9 +222,11 @@ impl Index {
             MailSort::SenderAsc => "lower(m.sender) ASC, m.id DESC",
         };
 
-        let mut records = Vec::new();
+        let mut sql = String::new();
+        let mut bind_values: Vec<Value> = Vec::new();
+
         if fts_query.is_empty() {
-            let sql = format!(
+            sql.push_str(
                 "SELECT m.id, m.source_key, m.message_id, m.conversation_id, m.folder,
                         m.subject, m.sender, m.recipients, m.sent_at, m.body, m.attachment_names
                  FROM messages m
@@ -240,58 +235,106 @@ impl Index {
                    AND NOT EXISTS (
                      SELECT 1 FROM source_folder_settings sf
                      WHERE sf.source_key = m.source_key AND sf.folder = m.folder AND sf.enabled = 0
-                   )
-                 ORDER BY {order_clause}"
+                   )",
             );
-            let mut stmt = self.conn.prepare(&sql)?;
-            let rows = stmt.query_map([], map_email_record)?;
-            for row in rows {
-                let record = row?;
-                if matches_scope(&record, scope) {
-                    records.push(record);
-                }
-            }
         } else {
-            let sql = format!(
+            sql.push_str(
                 "SELECT m.id, m.source_key, m.message_id, m.conversation_id, m.folder,
                         m.subject, m.sender, m.recipients, m.sent_at, m.body, m.attachment_names
                  FROM messages_fts f
                  JOIN messages m ON m.id = f.rowid
                  JOIN indexed_sources s ON s.source_key = m.source_key
-                 WHERE messages_fts MATCH ?1
+                 WHERE messages_fts MATCH ?
                    AND s.enabled = 1
                    AND NOT EXISTS (
                      SELECT 1 FROM source_folder_settings sf
                      WHERE sf.source_key = m.source_key AND sf.folder = m.folder AND sf.enabled = 0
-                   )
-                 ORDER BY bm25(messages_fts, 8.0, 3.0, 2.0, 1.0, 1.0), {order_clause}"
+                   )",
             );
-            let mut stmt = self.conn.prepare(&sql)?;
-            let rows = stmt.query_map([&fts_query], map_email_record)?;
-            for row in rows {
-                let record = row?;
-                if matches_scope(&record, scope) {
-                    records.push(record);
-                }
+            bind_values.push(Value::Text(fts_query.clone()));
+        }
+
+        match scope {
+            MailScope::AllMessages => {}
+            MailScope::Source(source_key) => {
+                sql.push_str(" AND m.source_key = ?");
+                bind_values.push(Value::Text(source_key.clone()));
+            }
+            MailScope::Folder {
+                source_key,
+                folder_prefix,
+            } => {
+                sql.push_str(
+                    " AND m.source_key = ? AND (m.folder = ? OR (m.folder > ? AND m.folder < ?))",
+                );
+                let slash_lower = format!("{folder_prefix}/");
+                let slash_upper = format!("{folder_prefix}0");
+                bind_values.push(Value::Text(source_key.clone()));
+                bind_values.push(Value::Text(folder_prefix.clone()));
+                bind_values.push(Value::Text(slash_lower));
+                bind_values.push(Value::Text(slash_upper));
             }
         }
 
-        if matches!(label_filter, LabelFilter::Any) {
-            records.truncate(limit);
-        }
-        let mut labels_by_msg = self.all_message_labels()?;
-        records.retain_mut(|record| {
-            record.labels = labels_by_msg.remove(&record.id).unwrap_or_default();
-            match label_filter {
-                LabelFilter::Any => true,
-                LabelFilter::Labeled(target) => {
-                    record.labels.iter().any(|item| &item.label == target)
-                }
-                LabelFilter::Unlabeled => record.labels.is_empty(),
+        match label_filter {
+            LabelFilter::Any => {}
+            LabelFilter::Labeled(target) => {
+                sql.push_str(
+                    " AND EXISTS (
+                        SELECT 1 FROM message_labels ml
+                        WHERE ml.message_id = m.id AND ml.label = ?
+                      )",
+                );
+                bind_values.push(Value::Text(target.clone()));
             }
-        });
-        records.truncate(limit);
+            LabelFilter::Unlabeled => {
+                sql.push_str(
+                    " AND NOT EXISTS (
+                        SELECT 1 FROM message_labels ml
+                        WHERE ml.message_id = m.id
+                      )",
+                );
+            }
+        }
+
+        if fts_query.is_empty() {
+            sql.push_str(&format!(" ORDER BY {order_clause} LIMIT ?"));
+        } else {
+            sql.push_str(&format!(
+                " ORDER BY bm25(messages_fts, 8.0, 3.0, 2.0, 1.0, 1.0), {order_clause} LIMIT ?"
+            ));
+        }
+        bind_values.push(Value::Integer(limit as i64));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(bind_values), map_email_record)?;
+        let mut records: Vec<EmailRecord> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+
+        self.attach_labels(&mut records)?;
         Ok(records)
+    }
+
+    fn attach_labels(&self, records: &mut [EmailRecord]) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let mut label_stmt = self.conn.prepare(
+            "SELECT label, confidence, source
+             FROM message_labels
+             WHERE message_id = ?1
+             ORDER BY coalesce(confidence, 1.0) DESC, label ASC",
+        )?;
+        for record in records {
+            let rows = label_stmt.query_map([record.id], |row| {
+                Ok(AssignedLabel {
+                    label: row.get(0)?,
+                    confidence: row.get(1)?,
+                    source: row.get(2)?,
+                })
+            })?;
+            record.labels = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        }
+        Ok(())
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
@@ -402,30 +445,6 @@ impl Index {
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
-    }
-
-    fn all_message_labels(&self) -> Result<HashMap<i64, Vec<AssignedLabel>>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT message_id, label, confidence, source
-             FROM message_labels
-             ORDER BY message_id, coalesce(confidence, 1.0) DESC, label ASC",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                AssignedLabel {
-                    label: row.get(1)?,
-                    confidence: row.get(2)?,
-                    source: row.get(3)?,
-                },
-            ))
-        })?;
-        let mut map: HashMap<i64, Vec<AssignedLabel>> = HashMap::new();
-        for row in rows {
-            let (msg_id, label) = row?;
-            map.entry(msg_id).or_default().push(label);
-        }
-        Ok(map)
     }
 
     pub fn set_message_labels(&mut self, message_id: i64, labels: &[AssignedLabel]) -> Result<()> {
@@ -722,24 +741,6 @@ fn map_email_record(r: &rusqlite::Row<'_>) -> rusqlite::Result<EmailRecord> {
         attachment_names: r.get(10)?,
         labels: Vec::new(),
     })
-}
-
-fn matches_scope(record: &EmailRecord, scope: &MailScope) -> bool {
-    match scope {
-        MailScope::AllMessages => true,
-        MailScope::Source(source_key) => &record.source_key == source_key,
-        MailScope::Folder {
-            source_key,
-            folder_prefix,
-        } => {
-            &record.source_key == source_key
-                && (record.folder == *folder_prefix
-                    || record
-                        .folder
-                        .strip_prefix(folder_prefix)
-                        .is_some_and(|rest| rest.starts_with('/')))
-        }
-    }
 }
 
 fn build_fts_query(query: &str) -> String {
