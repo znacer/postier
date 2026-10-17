@@ -19,7 +19,9 @@ use crate::{
     pst,
 };
 
-use super::{ChatMessage, IndexOutcome, LabelOutcome, PstRagApp, WorkerEvent, WorkerResult};
+use super::{
+    ChatMessage, ChatRole, IndexOutcome, LabelOutcome, PstRagApp, WorkerEvent, WorkerResult,
+};
 
 const CUSTOM_LABEL_PALETTE: &[&str] = &[
     "#0f766e", "#2563eb", "#7c3aed", "#d97706", "#be123c", "#4f46e5", "#15803d",
@@ -212,6 +214,41 @@ impl PstRagApp {
         }
         let question = self.question.trim().to_owned();
         self.chat_open = true;
+        let mut completed_pairs = Vec::new();
+        let mut idx = 0;
+        while idx + 1 < self.messages.len() {
+            let first = &self.messages[idx];
+            let second = &self.messages[idx + 1];
+            if matches!(first.role, ChatRole::User)
+                && matches!(second.role, ChatRole::Assistant)
+                && !second.context_preview.is_empty()
+            {
+                completed_pairs.push((first.content.clone(), second.content.clone()));
+                idx += 2;
+            } else {
+                idx += 1;
+            }
+        }
+        let history: Vec<llm::ChatTurn> = completed_pairs
+            .into_iter()
+            .rev()
+            .take(3)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .flat_map(|(user_msg, assistant_msg)| {
+                [
+                    llm::ChatTurn {
+                        role: "user".into(),
+                        content: user_msg,
+                    },
+                    llm::ChatTurn {
+                        role: "assistant".into(),
+                        content: assistant_msg,
+                    },
+                ]
+            })
+            .collect();
         self.messages.push(ChatMessage::user(question.clone()));
         self.question.clear();
         let db_path = self.db_path.clone();
@@ -224,30 +261,32 @@ impl PstRagApp {
         thread::spawn(move || {
             let result = (|| {
                 let db = Index::open(&db_path)?;
-                let hits =
+                let search_query = llm::contextualize_search_query(&question, &history);
+                let mut hits =
                     if config.use_remote_embeddings && !config.embedding_model.trim().is_empty() {
                         let _ = tx.send(WorkerEvent::Progress(
                             "Embedding query and running hybrid search...".into(),
                         ));
-                        let mut embeddings = llm::embed(&config, vec![question.clone()])?;
+                        let mut embeddings = llm::embed(&config, vec![search_query.clone()])?;
                         let query_embedding = embeddings
                             .pop()
                             .context("embedding provider returned no query vector")?;
                         db.search_hybrid(
-                            &question,
+                            &search_query,
                             &query_embedding,
                             config.embedding_model.trim(),
-                            10,
+                            8,
                         )?
                     } else {
-                        db.search(&question, 10)?
+                        db.search(&search_query, 8)?
                     };
+                db.expand_threads(&mut hits, 12)?;
                 let _ = tx.send(WorkerEvent::Progress(format!(
                     "Found {} relevant emails, waiting for LLM answer...",
                     hits.len()
                 )));
                 let context = llm::build_context(&hits, config.max_context_chars);
-                let answer = llm::ask(&config, &question, &context)?;
+                let answer = llm::ask_with_history(&config, &question, &context, &history)?;
                 Ok((answer, hits, context))
             })()
             .map_err(|error: anyhow::Error| format!("{error:#}"));

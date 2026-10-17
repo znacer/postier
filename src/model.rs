@@ -140,6 +140,7 @@ impl EmailRecord {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct SearchHit {
     pub id: i64,
@@ -150,6 +151,10 @@ pub struct SearchHit {
     pub sent_at: Option<String>,
     pub folder: String,
     pub body: String,
+    pub attachment_names: String,
+    pub conversation_id: String,
+    pub message_id: String,
+    pub labels: Vec<AssignedLabel>,
     pub score: f64,
 }
 
@@ -176,6 +181,13 @@ pub struct EmbeddingDocument {
 }
 
 impl SearchHit {
+    pub fn archive_name(&self) -> &str {
+        std::path::Path::new(&self.source_key)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&self.source_key)
+    }
+
     pub fn excerpt(&self, max_chars: usize) -> String {
         let mut out = String::new();
         for ch in self.body.chars().take(max_chars) {

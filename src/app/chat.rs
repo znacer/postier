@@ -296,15 +296,41 @@ impl PstRagApp {
         ]
         .spacing(6);
         if self.expanded_hit == Some(index) {
+            let mut meta_text = format!(
+                "PST: {} - Folder: {} - Score: {:.3} - ID: {}",
+                source_name, hit.folder, hit.score, hit.id
+            );
+            if !hit.conversation_id.trim().is_empty() {
+                meta_text.push_str(&format!(" - Thread: {}", hit.conversation_id.trim()));
+            }
+            contents = contents.push(text(meta_text).size(10).color(muted()));
+            if !hit.attachment_names.trim().is_empty() {
+                contents = contents.push(
+                    text(format!("Attachments: {}", hit.attachment_names.trim()))
+                        .size(10)
+                        .color(accent_text()),
+                );
+            }
+            if !hit.labels.is_empty() {
+                let label_str = hit
+                    .labels
+                    .iter()
+                    .map(|l| {
+                        if let Some(conf) = l.confidence {
+                            format!("{} ({:.0}%)", l.label, conf * 100.0)
+                        } else {
+                            l.label.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                contents = contents.push(
+                    text(format!("Labels: {}", label_str))
+                        .size(10)
+                        .color(accent_text()),
+                );
+            }
             contents = contents
-                .push(
-                    text(format!(
-                        "PST: {} - Folder: {} - Score: {:.3} - ID: {}",
-                        source_name, hit.folder, hit.score, hit.id
-                    ))
-                    .size(10)
-                    .color(muted()),
-                )
                 .push(horizontal_rule(1))
                 .push(text(hit.excerpt(900)).size(11));
         }

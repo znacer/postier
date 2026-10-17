@@ -6,7 +6,15 @@ BM25 retrieval stays in the bundled SQLite index and is always available. When t
 
 Indexed sources are tracked by their archive path. Archive and folder enablement are non-destructive query filters applied consistently to FTS and vector candidates. Removing a source deletes only its indexed messages; SQLite cascades the deletion to their vectors and the FTS delete trigger removes their terms. The source PST remains read-only and untouched.
 
-For each question, the selected results are converted to bounded, numbered evidence documents and attached as static context to a short-lived Rig agent. Rig targets the configured OpenAI-compatible chat-completions endpoint; the application still validates HTTPS (with the existing exact `127.0.0.1` development exception) before constructing either model client.
+For each question, the selected results are converted to rich, bounded, numbered evidence documents and attached as static context to a Rig agent. Context engineering ensures:
+- **Fair budget allocation**: Dynamic per-document budgeting distributes the character limit across all retrieved hits, preventing a single long email from starving other relevant evidence.
+- **Email cleaning**: Strips legal boilerplate disclaimers, condenses deep nested quote chains (`> > >`), and collapses whitespace bloat to maximize evidence density.
+- **Rich metadata injection**: Evidence cards and prompt context include attachment names, conversation thread identifiers, Laya/LLM Judge labels with confidence scores, source PST archives, and message IDs.
+- **Thread continuity expansion**: Retrieves surrounding thread companion messages for high-confidence conversation threads so the agent observes both questions and answers.
+- **Multi-turn conversational memory & query contextualization**: Preserves recent dialogue turns and contextualizes anaphoric follow-up questions before retrieval.
+- **Structured agent preamble**: Instructs the agent on temporal reasoning (chronological progression and superseded decisions), explicit `[Email N]` bracketed citations, metadata awareness, and strict grounding limits.
+
+Rig targets the configured OpenAI-compatible chat-completions endpoint; the application still validates HTTPS (with the existing exact `127.0.0.1` development exception) before constructing either model client.
 
 The `MailSource` boundary prevents parser-specific identifiers and lifetimes from entering storage, retrieval, or UI code. Index writes are transactional and `INSERT OR IGNORE` on a SHA-256 content hash makes repeated imports idempotent. Production incremental indexing should additionally persist the PST file identity, size, modification time, and stable node identifiers; a changed file must resume only where the chosen parser proves those identifiers stable.
 

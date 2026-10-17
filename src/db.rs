@@ -337,13 +337,14 @@ impl Index {
         Ok(())
     }
 
-    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
+    fn search_fts_raw(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
         let fts_query = build_fts_query(query);
         if fts_query.is_empty() {
             return Ok(Vec::new());
         }
         let mut stmt = self.conn.prepare(
             "SELECT m.id,m.source_key,m.subject,m.sender,m.recipients,m.sent_at,m.folder,m.body,
+                    m.attachment_names,m.conversation_id,m.message_id,
                     bm25(messages_fts,8.0,3.0,2.0,1.0,1.0) AS rank
              FROM messages_fts f JOIN messages m ON m.id=f.rowid
              JOIN indexed_sources s ON s.source_key=m.source_key
@@ -355,6 +356,7 @@ impl Index {
              ORDER BY rank LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![fts_query, limit as i64], |r| {
+            let raw_rank: f64 = r.get(11)?;
             Ok(SearchHit {
                 id: r.get(0)?,
                 source_key: r.get(1)?,
@@ -364,10 +366,20 @@ impl Index {
                 sent_at: r.get(5)?,
                 folder: r.get(6)?,
                 body: r.get(7)?,
-                score: r.get(8)?,
+                attachment_names: r.get(8)?,
+                conversation_id: r.get(9)?,
+                message_id: r.get(10)?,
+                labels: Vec::new(),
+                score: -raw_rank,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
+        let mut hits = self.search_fts_raw(query, limit)?;
+        self.attach_search_hit_labels(&mut hits)?;
+        Ok(hits)
     }
 
     pub fn label_definitions_with_counts(&self) -> Result<Vec<(LabelDefinition, u64)>> {
@@ -445,6 +457,110 @@ impl Index {
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn attach_search_hit_labels(&self, hits: &mut [SearchHit]) -> Result<()> {
+        if hits.is_empty() {
+            return Ok(());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT label, confidence, source
+             FROM message_labels
+             WHERE message_id = ?1
+             ORDER BY coalesce(confidence, 1.0) DESC, label ASC",
+        )?;
+        for hit in hits {
+            let rows = stmt.query_map([hit.id], |row| {
+                Ok(AssignedLabel {
+                    label: row.get(0)?,
+                    confidence: row.get(1)?,
+                    source: row.get(2)?,
+                })
+            })?;
+            hit.labels = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        }
+        Ok(())
+    }
+
+    pub fn expand_threads(&self, hits: &mut Vec<SearchHit>, max_total: usize) -> Result<()> {
+        if hits.is_empty() || hits.len() >= max_total {
+            return Ok(());
+        }
+        let existing_ids: std::collections::HashSet<i64> = hits.iter().map(|h| h.id).collect();
+        let mut thread_conv_ids: Vec<(String, f64)> = Vec::new();
+        for hit in hits.iter() {
+            let conv = hit.conversation_id.trim();
+            if !conv.is_empty() && !thread_conv_ids.iter().any(|(c, _)| c == conv) {
+                thread_conv_ids.push((conv.to_string(), hit.score));
+            }
+        }
+        if thread_conv_ids.is_empty() {
+            return Ok(());
+        }
+
+        let remaining_slots = max_total - hits.len();
+        let per_thread_cap = if thread_conv_ids.len() <= 1 {
+            remaining_slots
+        } else {
+            remaining_slots.div_ceil(thread_conv_ids.len()).max(2)
+        };
+
+        let mut stmt = self.conn.prepare(
+            "SELECT m.id, m.source_key, m.subject, m.sender, m.recipients, m.sent_at, m.folder, m.body,
+                    m.attachment_names, m.conversation_id, m.message_id
+             FROM messages m
+             JOIN indexed_sources s ON s.source_key=m.source_key
+             WHERE m.conversation_id = ?1 AND s.enabled=1
+               AND NOT EXISTS (
+                 SELECT 1 FROM source_folder_settings sf
+                 WHERE sf.source_key=m.source_key AND sf.folder=m.folder AND sf.enabled=0
+               )
+             ORDER BY coalesce(m.sent_at, '') ASC, m.id ASC
+             LIMIT 10",
+        )?;
+
+        let mut companions = Vec::new();
+        for (conv_id, parent_score) in thread_conv_ids {
+            let rows = stmt.query_map(params![conv_id], |r| {
+                Ok(SearchHit {
+                    id: r.get(0)?,
+                    source_key: r.get(1)?,
+                    subject: r.get(2)?,
+                    sender: r.get(3)?,
+                    recipients: r.get(4)?,
+                    sent_at: r.get(5)?,
+                    folder: r.get(6)?,
+                    body: r.get(7)?,
+                    attachment_names: r.get(8)?,
+                    conversation_id: r.get(9)?,
+                    message_id: r.get(10)?,
+                    labels: Vec::new(),
+                    score: parent_score * 0.9,
+                })
+            })?;
+            let mut added_for_thread = 0usize;
+            for row in rows {
+                let hit = row?;
+                if !existing_ids.contains(&hit.id)
+                    && !companions.iter().any(|c: &SearchHit| c.id == hit.id)
+                {
+                    companions.push(hit);
+                    added_for_thread += 1;
+                    if hits.len() + companions.len() >= max_total
+                        || added_for_thread >= per_thread_cap
+                    {
+                        break;
+                    }
+                }
+            }
+            if hits.len() + companions.len() >= max_total {
+                break;
+            }
+        }
+
+        self.attach_search_hit_labels(&mut companions)?;
+        hits.extend(companions);
+        Ok(())
     }
 
     pub fn set_message_labels(&mut self, message_id: i64, labels: &[AssignedLabel]) -> Result<()> {
@@ -578,14 +694,15 @@ impl Index {
         model: &str,
         limit: usize,
     ) -> Result<Vec<SearchHit>> {
-        let bm25 = self.search(query, 50)?;
+        let bm25 = self.search_fts_raw(query, 50)?;
         let mut combined: HashMap<i64, (SearchHit, f64)> = HashMap::new();
         for (rank, hit) in bm25.into_iter().enumerate() {
             combined.insert(hit.id, (hit, reciprocal_rank(rank)));
         }
 
         let mut stmt = self.conn.prepare(
-            "SELECT m.id,m.source_key,m.subject,m.sender,m.recipients,m.sent_at,m.folder,m.body,e.vector
+            "SELECT m.id,m.source_key,m.subject,m.sender,m.recipients,m.sent_at,m.folder,m.body,
+                    m.attachment_names,m.conversation_id,m.message_id,e.vector
              FROM message_embeddings e JOIN messages m ON m.id=e.message_id
              JOIN indexed_sources s ON s.source_key=m.source_key
              WHERE e.model=?1 AND e.dimensions=?2 AND s.enabled=1
@@ -595,7 +712,7 @@ impl Index {
                )",
         )?;
         let rows = stmt.query_map(params![model, query_embedding.len() as i64], |row| {
-            let encoded: Vec<u8> = row.get(8)?;
+            let encoded: Vec<u8> = row.get(11)?;
             Ok((
                 SearchHit {
                     id: row.get(0)?,
@@ -606,6 +723,10 @@ impl Index {
                     sent_at: row.get(5)?,
                     folder: row.get(6)?,
                     body: row.get(7)?,
+                    attachment_names: row.get(8)?,
+                    conversation_id: row.get(9)?,
+                    message_id: row.get(10)?,
+                    labels: Vec::new(),
                     score: 0.0,
                 },
                 encoded,
@@ -634,6 +755,7 @@ impl Index {
             .collect();
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         hits.truncate(limit);
+        self.attach_search_hit_labels(&mut hits)?;
         Ok(hits)
     }
 
@@ -1000,6 +1122,69 @@ mod tests {
             batch_records
                 .iter()
                 .all(|m| m.labels.iter().any(|l| l.label == "FYI"))
+        );
+    }
+
+    #[test]
+    fn search_populates_rich_metadata_labels_and_expands_threads() {
+        let mut db = Index::open(Path::new(":memory:")).unwrap();
+        db.index_batch(&[
+            Email {
+                source_key: "/archives/team.pst".into(),
+                folder: "Mailbox/Inbox".into(),
+                subject: "Server Migration".into(),
+                sender: "lead@example.test".into(),
+                recipients: "devs@example.test".into(),
+                sent_at: Some("2026-04-01T09:00:00Z".into()),
+                body: "We are migrating the database server tonight.".into(),
+                attachment_names: "migration_guide.pdf".into(),
+                conversation_id: "thread-migration-42".into(),
+                message_id: "msg-001@example.test".into(),
+            },
+            Email {
+                source_key: "/archives/team.pst".into(),
+                folder: "Mailbox/Inbox".into(),
+                subject: "Re: Server Migration".into(),
+                sender: "ops@example.test".into(),
+                recipients: "lead@example.test".into(),
+                sent_at: Some("2026-04-01T10:00:00Z".into()),
+                body: "Backup completed successfully. Ready to proceed.".into(),
+                attachment_names: "backup_checksums.txt".into(),
+                conversation_id: "thread-migration-42".into(),
+                message_id: "msg-002@example.test".into(),
+            },
+        ])
+        .unwrap();
+
+        let records = db.search("migrating", 10).unwrap();
+        assert_eq!(records.len(), 1);
+        let id1 = records[0].id;
+        db.set_message_labels(
+            id1,
+            &[AssignedLabel {
+                label: "Urgent".into(),
+                confidence: Some(0.99),
+                source: "laya".into(),
+            }],
+        )
+        .unwrap();
+
+        let mut hits = db.search("migrating", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].score > 0.0);
+        assert_eq!(hits[0].attachment_names, "migration_guide.pdf");
+        assert_eq!(hits[0].conversation_id, "thread-migration-42");
+        assert_eq!(hits[0].message_id, "msg-001@example.test");
+        assert_eq!(hits[0].labels.len(), 1);
+        assert_eq!(hits[0].labels[0].label, "Urgent");
+
+        db.expand_threads(&mut hits, 10).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert!(hits[1].score > 0.0 && hits[1].score < hits[0].score);
+        assert!(hits.iter().any(|h| h.sender == "ops@example.test"));
+        assert!(
+            hits.iter()
+                .any(|h| h.attachment_names == "backup_checksums.txt")
         );
     }
 }
