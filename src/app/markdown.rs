@@ -248,11 +248,7 @@ fn render_inline_text<'a>(
                 let is_italic = italic || force_italic;
                 span(content)
                     .size(font_size)
-                    .color(if is_bold {
-                        bright_text()
-                    } else {
-                        default_color
-                    })
+                    .color(default_color)
                     .font(styled_font(is_bold, is_italic))
                     .strikethrough(strike)
             }
@@ -650,15 +646,15 @@ pub fn parse_inline(input: &str) -> Vec<MdSpan> {
         if rest.starts_with('\\') && rest.len() >= 2 {
             let mut chars = rest.chars();
             let _ = chars.next();
-            if let Some(escaped) = chars.next() {
-                if matches!(
+            if let Some(escaped) = chars.next()
+                && matches!(
                     escaped,
                     '\\' | '`' | '*' | '_' | '~' | '[' | ']' | '(' | ')' | '#' | '+' | '-' | '!'
-                ) {
-                    plain.push(escaped);
-                    idx += 1 + escaped.len_utf8();
-                    continue;
-                }
+                )
+            {
+                plain.push(escaped);
+                idx += 1 + escaped.len_utf8();
+                continue;
             }
         }
 
@@ -694,8 +690,7 @@ pub fn parse_inline(input: &str) -> Vec<MdSpan> {
         }
 
         // Bold + Italic: ***text*** or ___text___
-        if let Some((delim, inner, consumed)) = match_delimited(rest, &["***", "___"]) {
-            let _ = delim;
+        if let Some((_delim, inner, consumed)) = match_delimited(rest, &["***", "___"]) {
             flush_plain(&mut plain, &mut spans);
             spans.push(MdSpan::Styled {
                 text: inner.to_owned(),

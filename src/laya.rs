@@ -22,6 +22,13 @@ const GGML_TYPE_F16: u32 = 1;
 const GGML_TYPE_Q8_0: u32 = 8;
 const GGML_TYPE_BF16: u32 = 30;
 
+type CachedLayaModel = (PathBuf, Arc<LayaModel>);
+type GgufParsed = (
+    HashMap<String, GgufValue>,
+    HashMap<String, TensorInfo>,
+    usize,
+);
+
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuestionType {
@@ -406,7 +413,7 @@ pub struct LayaModel {
     cls_out_bias: f32,
 }
 
-static MODEL_CACHE: OnceLock<Mutex<Option<(PathBuf, Arc<LayaModel>)>>> = OnceLock::new();
+static MODEL_CACHE: OnceLock<Mutex<Option<CachedLayaModel>>> = OnceLock::new();
 static EMBEDDED_MODEL: OnceLock<Arc<LayaModel>> = OnceLock::new();
 
 impl LayaModel {
@@ -491,6 +498,9 @@ impl LayaModel {
             .get("modern-bert.attention.head_count")
             .and_then(GgufValue::as_u32)
             .context("missing modern-bert.attention.head_count")? as usize;
+        if n_head == 0 || n_embd == 0 || !n_embd.is_multiple_of(n_head) {
+            bail!("invalid embedding/head dimensions: n_embd={n_embd}, n_head={n_head}");
+        }
         let ff_lengths = meta
             .get("modern-bert.feed_forward_length")
             .and_then(GgufValue::as_u32_vec)
@@ -545,6 +555,13 @@ impl LayaModel {
         let tok_norm = load_vec("token_embd_norm.weight")?;
         let output_norm = load_vec("output_norm.weight")?;
         let type_embd = load_vec("token_types.weight")?;
+        if type_embd.len() < 3 * n_embd {
+            bail!(
+                "token_types.weight length {} is smaller than {}",
+                type_embd.len(),
+                3 * n_embd
+            );
+        }
 
         let mut encoder_layers = Vec::with_capacity(n_layer_enc);
         for il in 0..n_layer_enc {
@@ -912,15 +929,6 @@ impl LayaModel {
                 );
             }
 
-            multihead_attention(
-                &qkv,
-                seq_len,
-                d,
-                self.n_head,
-                head_dim,
-                max_dist,
-                &mut attn_out,
-            );
             multihead_attention(
                 &qkv,
                 seq_len,
@@ -1326,13 +1334,7 @@ fn split_gpt2_words(text: &str) -> Vec<&str> {
     out
 }
 
-fn parse_gguf(
-    bytes: &[u8],
-) -> Result<(
-    HashMap<String, GgufValue>,
-    HashMap<String, TensorInfo>,
-    usize,
-)> {
+fn parse_gguf(bytes: &[u8]) -> Result<GgufParsed> {
     if bytes.len() < 24 || &bytes[0..4] != GGUF_MAGIC {
         bail!("invalid GGUF file header");
     }
@@ -1650,11 +1652,11 @@ fn build_packaged_laya_gguf() -> Vec<u8> {
         for &w in words {
             for variant in [
                 w.to_owned(),
-                format!("Ġ{w}"),
+                format!("\u{0120}{w}"),
                 capitalize(w),
-                format!("Ġ{}", capitalize(w)),
+                format!("\u{0120}{}", capitalize(w)),
                 w.to_ascii_uppercase(),
-                format!("Ġ{}", w.to_ascii_uppercase()),
+                format!("\u{0120}{}", w.to_ascii_uppercase()),
             ] {
                 if !vocab.contains(&variant) {
                     vocab.push(variant);
@@ -1675,8 +1677,6 @@ fn build_packaged_laya_gguf() -> Vec<u8> {
         if id == 4 {
             row[16] = 10.0;
         } else if let Some(ch) = token_channel[id] {
-            row[17] = 10.0;
-
             row[17] = 10.0;
             row[8 + ch] = 10.0;
         }

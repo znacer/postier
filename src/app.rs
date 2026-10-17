@@ -164,7 +164,7 @@ enum Message {
     ExplorerFilterChanged(String),
     SetMailSort(MailSort),
     SetLabelerBackend(LabelerBackend),
-    LabelSelectedMessage,
+    LabelFocusedEmail,
     LabelSelectedWith(LabelerBackend),
     LabelCheckedWith(LabelerBackend),
     LabelVisibleMessages,
@@ -326,7 +326,7 @@ impl PstRagApp {
                 self.config.labeler_backend = backend;
                 self.status = format!("Active mail labeler switched to {}", backend.display_name());
             }
-            Message::LabelSelectedMessage => {
+            Message::LabelFocusedEmail => {
                 self.label_selected_message(self.config.labeler_backend);
             }
             Message::LabelSelectedWith(backend) => {

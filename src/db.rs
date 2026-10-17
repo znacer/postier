@@ -276,6 +276,9 @@ impl Index {
             }
         }
 
+        if matches!(label_filter, LabelFilter::Any) {
+            records.truncate(limit);
+        }
         let mut labels_by_msg = self.all_message_labels()?;
         records.retain_mut(|record| {
             record.labels = labels_by_msg.remove(&record.id).unwrap_or_default();
@@ -660,6 +663,7 @@ impl Index {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn set_folder_enabled(&self, source_key: &str, folder: &str, enabled: bool) -> Result<()> {
         self.conn.execute(
             "INSERT INTO source_folder_settings(source_key, folder, enabled)

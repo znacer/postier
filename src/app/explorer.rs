@@ -132,7 +132,7 @@ impl PstRagApp {
             (
                 "Label Mail".to_owned(),
                 (!self.busy && self.selected_email().is_some())
-                    .then_some(Message::LabelSelectedMessage),
+                    .then_some(Message::LabelFocusedEmail),
             )
         };
         let can_label_view = !self.busy && !self.explorer_messages.is_empty();
