@@ -1,6 +1,7 @@
 mod actions;
 mod chat;
 mod explorer;
+mod markdown;
 mod sidebar;
 mod theme;
 
@@ -179,6 +180,7 @@ enum Message {
     ToggleChatPane,
     ChatWidthChanged(f32),
     AskAboutEmail(i64),
+    MarkdownLinkClicked(String),
     Tick,
 }
 
@@ -352,6 +354,9 @@ impl PstRagApp {
             Message::ToggleChatPane => self.chat_open = !self.chat_open,
             Message::ChatWidthChanged(width) => self.chat_width = width.clamp(310.0, 760.0),
             Message::AskAboutEmail(message_id) => self.ask_about_email(message_id),
+            Message::MarkdownLinkClicked(url) => {
+                self.status = format!("Link: {url}");
+            }
             Message::Tick => self.poll_worker(),
         }
         Task::none()

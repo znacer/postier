@@ -7,14 +7,14 @@ use iced::{
     },
 };
 
-use super::{ChatMessage, ChatRole, Message, PstRagApp, theme::*};
+use super::{ChatMessage, ChatRole, Message, PstRagApp, markdown::render_markdown, theme::*};
 
 impl PstRagApp {
     pub(super) fn chat_pane(&self) -> Element<'_, Message> {
         if !self.chat_open {
             let expand_rail = button(
                 column![
-                    text("◀").size(12).color(accent_text()),
+                    text("\u{25c0}").size(12).color(accent_text()),
                     Space::new(0, 8),
                     text("C").size(10).color(muted()),
                     text("H").size(10).color(muted()),
@@ -41,24 +41,26 @@ impl PstRagApp {
             row![
                 column![
                     text("Archive Chat").size(17).color(bright_text()),
-                    text("Grounded RAG assistant").size(11).color(muted())
+                    text("Grounded RAG assistant \u{00b7} Markdown enabled")
+                        .size(11)
+                        .color(muted())
                 ]
                 .spacing(2)
                 .width(Fill),
                 small_button(
-                    "◀ Extend",
+                    "\u{25c0} Extend",
                     (self.chat_width < 740.0).then_some(Message::ChatWidthChanged(
                         (self.chat_width + 80.0).min(760.0)
                     ))
                 ),
                 small_button(
-                    "Shrink ▶",
+                    "Shrink \u{25b6}",
                     (self.chat_width > 330.0).then_some(Message::ChatWidthChanged(
                         (self.chat_width - 80.0).max(310.0)
                     ))
                 ),
                 small_button("New", (!self.busy).then_some(Message::NewChat)),
-                small_button("Collapse ▸", Some(Message::ToggleChatPane)),
+                small_button("Collapse \u{25b8}", Some(Message::ToggleChatPane)),
             ]
             .spacing(5)
             .align_y(Alignment::Center),
@@ -112,7 +114,7 @@ impl PstRagApp {
         conversation = self.sources_view(conversation);
 
         let enabled = !self.busy && self.count > 0 && !self.question.trim().is_empty();
-        let mut question_input = text_input("Ask your archive…", &self.question)
+        let mut question_input = text_input("Ask your archive\u{2026}", &self.question)
             .on_input(Message::QuestionChanged)
             .padding(10)
             .size(13);
@@ -122,9 +124,9 @@ impl PstRagApp {
         let helper = if self.count == 0 {
             "Index an archive to start chatting"
         } else if self.busy {
-            "Working with your local archive…"
+            "Working with your local archive\u{2026}"
         } else {
-            "Enter to send · Search only stays local"
+            "Enter to send \u{00b7} Search only stays local"
         };
         let composer = container(
             column![
@@ -166,9 +168,9 @@ impl PstRagApp {
             return conversation;
         }
         let label = if self.show_sources {
-            "Hide evidence  ▴"
+            "Hide evidence  \u{25b4}"
         } else {
-            "Show evidence  ▾"
+            "Show evidence  \u{25be}"
         };
         conversation = conversation.push(Space::new(0, 4)).push(
             button(
@@ -212,9 +214,9 @@ impl PstRagApp {
             text(if is_user { "YOU" } else { "DUNGBEETLE" })
                 .size(9)
                 .color(if is_user { on_primary() } else { accent_text() }),
-            text(&message.content).size(13).line_height(1.4)
+            render_markdown(&message.content, is_user)
         ]
-        .spacing(5);
+        .spacing(6);
         if !message.context_preview.is_empty() {
             contents = contents.push(horizontal_rule(1)).push(
                 checkbox("Show context sent to LLM", message.show_context)
@@ -223,7 +225,12 @@ impl PstRagApp {
                     .on_toggle(move |value| Message::ToggleContext(index, value)),
             );
             if message.show_context {
-                contents = contents.push(text(&message.context_preview).size(10));
+                contents = contents.push(
+                    container(text(&message.context_preview).size(10).color(muted()))
+                        .width(Fill)
+                        .padding([6, 8])
+                        .style(code_block_style),
+                );
             }
         }
         let bubble = container(contents)
@@ -264,7 +271,7 @@ impl PstRagApp {
                 column![
                     text(subject).size(13).color(bright_text()),
                     text(format!(
-                        "{}  •  {}",
+                        "{}  \u{2022}  {}",
                         hit.sender,
                         hit.sent_at.as_deref().unwrap_or("Unknown date")
                     ))
@@ -292,7 +299,7 @@ impl PstRagApp {
             contents = contents
                 .push(
                     text(format!(
-                        "PST: {}  •  Folder: {}  •  Score: {:.3}  •  ID: {}",
+                        "PST: {}  \u{2022}  Folder: {}  \u{2022}  Score: {:.3}  \u{2022}  ID: {}",
                         source_name, hit.folder, hit.score, hit.id
                     ))
                     .size(10)

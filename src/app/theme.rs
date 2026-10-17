@@ -289,6 +289,36 @@ pub(super) fn reader_header_style(_: &Theme) -> container::Style {
 pub(super) fn reader_body_style(_: &Theme) -> container::Style {
     panel(surface(), outline(), 8.0)
 }
+pub(super) fn code_block_style(_: &Theme) -> container::Style {
+    panel(
+        Color {
+            r: 0.04,
+            g: 0.05,
+            b: 0.07,
+            a: 0.98,
+        },
+        outline(),
+        6.0,
+    )
+}
+pub(super) fn blockquote_style(_: &Theme) -> container::Style {
+    panel(
+        Color {
+            r: 0.07,
+            g: 0.09,
+            b: 0.13,
+            a: 0.92,
+        },
+        shade(accent_text(), 0.55),
+        6.0,
+    )
+}
+pub(super) fn md_table_header_style(_: &Theme) -> container::Style {
+    panel(surface_elevated(), outline(), 0.0)
+}
+pub(super) fn md_table_row_style(_: &Theme) -> container::Style {
+    panel(surface(), outline(), 0.0)
+}
 fn card_style(_: &Theme) -> container::Style {
     panel(surface(), outline(), 10.0)
 }
