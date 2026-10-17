@@ -2,7 +2,7 @@ use crate::model::SearchHit;
 use iced::{
     Alignment, Element, Fill,
     widget::{
-        Space, button, checkbox, column, container, horizontal_rule, row, scrollable, text,
+        Space, button, checkbox, column, container, horizontal_rule, row, scrollable, slider, text,
         text_input,
     },
 };
@@ -10,28 +10,71 @@ use iced::{
 use super::{ChatMessage, ChatRole, Message, PstRagApp, theme::*};
 
 impl PstRagApp {
-    pub(super) fn content(&self) -> Element<'_, Message> {
-        let header = row![
-            column![
-                text("Chat with your archive").size(27),
-                text("Answers grounded in your indexed email.")
-                    .size(13)
+    pub(super) fn chat_pane(&self) -> Element<'_, Message> {
+        if !self.chat_open {
+            let expand_rail = button(
+                column![
+                    text("◀").size(12).color(accent_text()),
+                    Space::new(0, 8),
+                    text("C").size(10).color(muted()),
+                    text("H").size(10).color(muted()),
+                    text("A").size(10).color(muted()),
+                    text("T").size(10).color(muted()),
+                ]
+                .spacing(2)
+                .align_x(Alignment::Center),
+            )
+            .width(Fill)
+            .height(Fill)
+            .padding([16, 4])
+            .style(button::text)
+            .on_press(Message::ToggleChatPane);
+
+            return container(expand_rail)
+                .width(32)
+                .height(Fill)
+                .style(chat_pane_style)
+                .into();
+        }
+
+        let header = column![
+            row![
+                column![
+                    text("Archive Chat").size(17).color(bright_text()),
+                    text("Grounded RAG assistant").size(11).color(muted())
+                ]
+                .spacing(2)
+                .width(Fill),
+                small_button(
+                    "◀ Extend",
+                    (self.chat_width < 740.0).then_some(Message::ChatWidthChanged(
+                        (self.chat_width + 80.0).min(760.0)
+                    ))
+                ),
+                small_button(
+                    "Shrink ▶",
+                    (self.chat_width > 330.0).then_some(Message::ChatWidthChanged(
+                        (self.chat_width - 80.0).max(310.0)
+                    ))
+                ),
+                small_button("New", (!self.busy).then_some(Message::NewChat)),
+                small_button("Collapse ▸", Some(Message::ToggleChatPane)),
+            ]
+            .spacing(5)
+            .align_y(Alignment::Center),
+            row![
+                text("Pane width").size(10).color(muted()),
+                slider(310.0..=760.0, self.chat_width, Message::ChatWidthChanged).height(14),
+                text(format!("{:.0}px", self.chat_width))
+                    .size(10)
                     .color(muted())
             ]
-            .spacing(4)
-            .width(Fill),
-            enabled_button("New chat", (!self.busy).then_some(Message::NewChat))
+            .spacing(8)
+            .align_y(Alignment::Center)
         ]
-        .align_y(Alignment::Center);
-        let status = container(
-            row![text(&self.status).size(11).color(muted())]
-                .spacing(7)
-                .align_y(Alignment::Center),
-        )
-        .padding([6, 10])
-        .style(status_style);
+        .spacing(6);
 
-        let mut conversation = column![].spacing(14).width(Fill);
+        let mut conversation = column![].spacing(12).width(Fill);
         if self.messages.is_empty() {
             let prompts = column![
                 prompt_button(
@@ -47,13 +90,21 @@ impl PstRagApp {
                     "Which recent messages need a follow-up?"
                 )
             ]
-            .spacing(8)
-            .width(420);
-            conversation = conversation.push(container(column![
-                text("What would you like to find?").size(22),
-                text("Ask about decisions, people, dates, or projects. Only selected evidence is sent to your configured LLM.").size(13).color(muted()).width(480),
-                prompts
-            ].spacing(12).align_x(Alignment::Center)).padding([54, 10]).center_x(Fill));
+            .spacing(6)
+            .width(Fill);
+            conversation = conversation.push(
+                container(
+                    column![
+                        text("Ask your archive").size(16).color(bright_text()),
+                        text("Ask about decisions, people, dates, or projects. Only selected evidence is sent to your configured LLM.")
+                            .size(11)
+                            .color(muted()),
+                        prompts
+                    ]
+                    .spacing(10),
+                )
+                .padding([20, 6]),
+            );
         }
         for (index, message) in self.messages.iter().enumerate() {
             conversation = conversation.push(self.message_view(index, message));
@@ -61,9 +112,10 @@ impl PstRagApp {
         conversation = self.sources_view(conversation);
 
         let enabled = !self.busy && self.count > 0 && !self.question.trim().is_empty();
-        let mut question_input = text_input("Message your archive…", &self.question)
+        let mut question_input = text_input("Ask your archive…", &self.question)
             .on_input(Message::QuestionChanged)
-            .padding(12);
+            .padding(10)
+            .size(13);
         if enabled {
             question_input = question_input.on_submit(Message::Ask);
         }
@@ -72,7 +124,7 @@ impl PstRagApp {
         } else if self.busy {
             "Working with your local archive…"
         } else {
-            "Enter to send  ·  Search only never contacts the LLM"
+            "Enter to send · Search only stays local"
         };
         let composer = container(
             column![
@@ -82,26 +134,27 @@ impl PstRagApp {
                     enabled_button("Search only", enabled.then_some(Message::SearchLocally)),
                     primary_button("Send", enabled.then_some(Message::Ask))
                 ]
-                .spacing(8)
+                .spacing(6)
                 .align_y(Alignment::Center)
             ]
-            .spacing(9),
+            .spacing(8),
         )
-        .padding(12)
+        .padding(10)
         .style(composer_style);
 
         container(
             column![
                 header,
-                status,
-                scrollable(container(conversation).padding([8, 4])).height(Fill),
+                horizontal_rule(1),
+                scrollable(container(conversation).padding([6, 2])).height(Fill),
                 composer
             ]
-            .spacing(14)
-            .padding([24, 28]),
+            .spacing(10)
+            .padding(14),
         )
-        .width(Fill)
+        .width(self.chat_width)
         .height(Fill)
+        .style(chat_pane_style)
         .into()
     }
 
@@ -120,18 +173,18 @@ impl PstRagApp {
         conversation = conversation.push(Space::new(0, 4)).push(
             button(
                 row![
-                    text("EVIDENCE").size(11).color(primary()),
+                    text("EVIDENCE").size(10).color(accent_text()),
                     container(text(self.hits.len()).size(10))
-                        .padding([2, 7])
+                        .padding([2, 6])
                         .style(badge_style),
                     Space::new(Fill, 0),
-                    text(label).size(11).color(muted())
+                    text(label).size(10).color(muted())
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
             )
             .width(Fill)
-            .padding([10, 12])
+            .padding([8, 10])
             .style(button::secondary)
             .on_press(Message::ToggleSources),
         );
@@ -145,11 +198,11 @@ impl PstRagApp {
 
     fn message_view<'a>(&'a self, index: usize, message: &'a ChatMessage) -> Element<'a, Message> {
         let is_user = matches!(message.role, ChatRole::User);
-        let avatar = container(text(if is_user { "Y" } else { "D" }).size(11))
-            .width(30)
-            .height(30)
-            .center_x(30)
-            .center_y(30)
+        let avatar = container(text(if is_user { "Y" } else { "D" }).size(10))
+            .width(26)
+            .height(26)
+            .center_x(26)
+            .center_y(26)
             .style(if is_user {
                 user_avatar_style
             } else {
@@ -157,35 +210,37 @@ impl PstRagApp {
             });
         let mut contents = column![
             text(if is_user { "YOU" } else { "DUNGBEETLE" })
-                .size(10)
-                .color(if is_user { on_primary() } else { primary() }),
-            text(&message.content).size(14).line_height(1.45)
+                .size(9)
+                .color(if is_user { on_primary() } else { accent_text() }),
+            text(&message.content).size(13).line_height(1.4)
         ]
-        .spacing(7);
+        .spacing(5);
         if !message.context_preview.is_empty() {
             contents = contents.push(horizontal_rule(1)).push(
-                checkbox("Show context sent to the LLM", message.show_context)
+                checkbox("Show context sent to LLM", message.show_context)
+                    .size(12)
+                    .text_size(11)
                     .on_toggle(move |value| Message::ToggleContext(index, value)),
             );
             if message.show_context {
-                contents = contents.push(text(&message.context_preview).size(11));
+                contents = contents.push(text(&message.context_preview).size(10));
             }
         }
         let bubble = container(contents)
-            .max_width(680)
-            .padding([13, 16])
+            .width(Fill)
+            .padding([10, 12])
             .style(if is_user {
                 user_bubble_style
             } else {
                 assistant_bubble_style
             });
         match message.role {
-            ChatRole::User => row![Space::new(Fill, 0), bubble, avatar]
-                .spacing(10)
+            ChatRole::User => row![bubble, avatar]
+                .spacing(8)
                 .align_y(Alignment::End)
                 .into(),
-            ChatRole::Assistant => row![avatar, bubble, Space::new(Fill, 0)]
-                .spacing(10)
+            ChatRole::Assistant => row![avatar, bubble]
+                .spacing(8)
                 .align_y(Alignment::Start)
                 .into(),
         }
@@ -203,43 +258,52 @@ impl PstRagApp {
             .unwrap_or(&hit.source_key);
         let mut contents = column![
             row![
-                text(format!("{:02}", index + 1)).size(13),
+                text(format!("{:02}", index + 1))
+                    .size(11)
+                    .color(accent_text()),
                 column![
-                    text(subject).size(15),
+                    text(subject).size(13).color(bright_text()),
                     text(format!(
                         "{}  •  {}",
                         hit.sender,
                         hit.sent_at.as_deref().unwrap_or("Unknown date")
                     ))
-                    .size(11)
+                    .size(10)
+                    .color(muted())
                 ]
-                .spacing(3)
+                .spacing(2)
+                .width(Fill),
+                small_button("Open Mail", Some(Message::SelectEmail(hit.id))),
             ]
-            .spacing(10),
-            text(hit.excerpt(420)).size(13),
-            button(if self.expanded_hit == Some(index) {
-                "Hide details"
-            } else {
-                "View full excerpt and metadata"
-            })
-            .on_press(Message::ToggleHit(index))
+            .spacing(8)
+            .align_y(Alignment::Center),
+            text(hit.excerpt(240)).size(11),
+            small_button(
+                if self.expanded_hit == Some(index) {
+                    "Hide details"
+                } else {
+                    "Metadata & full excerpt"
+                },
+                Some(Message::ToggleHit(index))
+            )
         ]
-        .spacing(8);
+        .spacing(6);
         if self.expanded_hit == Some(index) {
             contents = contents
                 .push(
                     text(format!(
-                        "PST: {}  •  Folder: {}  •  Retrieval score: {:.3}  •  Local ID: {}",
+                        "PST: {}  •  Folder: {}  •  Score: {:.3}  •  ID: {}",
                         source_name, hit.folder, hit.score, hit.id
                     ))
-                    .size(11),
+                    .size(10)
+                    .color(muted()),
                 )
                 .push(horizontal_rule(1))
-                .push(text(hit.excerpt(1200)).size(12));
+                .push(text(hit.excerpt(900)).size(11));
         }
         container(contents)
             .width(Fill)
-            .padding(14)
+            .padding(10)
             .style(source_style)
             .into()
     }

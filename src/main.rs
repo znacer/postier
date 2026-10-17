@@ -2,6 +2,7 @@
 
 mod app;
 mod db;
+mod laya;
 mod llm;
 mod model;
 mod pst;

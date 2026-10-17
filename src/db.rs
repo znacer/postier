@@ -1,10 +1,13 @@
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 
-use crate::model::{Email, EmbeddingDocument, IndexedFolder, IndexedSource, SearchHit};
+use crate::model::{
+    AssignedLabel, Email, EmailRecord, EmbeddingDocument, IndexedFolder, IndexedSource,
+    LabelDefinition, LabelFilter, MailScope, MailSort, SearchHit, default_label_definitions,
+};
 
 pub struct Index {
     conn: Connection,
@@ -56,6 +59,19 @@ impl Index {
              );
              CREATE INDEX IF NOT EXISTS message_embeddings_model
                ON message_embeddings(model);
+             CREATE TABLE IF NOT EXISTS label_definitions (
+               name TEXT PRIMARY KEY,
+               description TEXT NOT NULL DEFAULT '',
+               color TEXT NOT NULL DEFAULT '#166EA6'
+             );
+             CREATE TABLE IF NOT EXISTS message_labels (
+               message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+               label TEXT NOT NULL,
+               confidence REAL,
+               source TEXT NOT NULL DEFAULT 'manual',
+               PRIMARY KEY(message_id, label)
+             );
+             CREATE INDEX IF NOT EXISTS message_labels_label ON message_labels(label);
              CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
                subject, sender, recipients, body, attachment_names,
                content='messages', content_rowid='id',
@@ -70,8 +86,20 @@ impl Index {
                VALUES('delete',old.id,old.subject,old.sender,old.recipients,old.body,old.attachment_names);
              END;
              INSERT OR IGNORE INTO indexed_sources(source_key, display_name, enabled)
-               SELECT DISTINCT source_key, source_key, 1 FROM messages;"
+               SELECT DISTINCT source_key, source_key, 1 FROM messages;",
         )?;
+
+        let label_count: u64 =
+            conn.query_row("SELECT count(*) FROM label_definitions", [], |r| r.get(0))?;
+        if label_count == 0 {
+            for def in default_label_definitions() {
+                conn.execute(
+                    "INSERT OR IGNORE INTO label_definitions(name, description, color) VALUES(?1, ?2, ?3)",
+                    params![def.name, def.description, def.color],
+                )?;
+            }
+        }
+
         Ok(Self { conn })
     }
 
@@ -92,7 +120,7 @@ impl Index {
             let mut stmt = tx.prepare(
                 "INSERT OR IGNORE INTO messages
                  (source_key,message_id,conversation_id,folder,subject,sender,recipients,sent_at,body,attachment_names,content_hash)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?)"
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             )?;
             for email in emails {
                 let display_name = Path::new(&email.source_key)
@@ -144,13 +172,127 @@ impl Index {
         Ok(added)
     }
 
+    pub fn get_message(&self, id: i64) -> Result<Option<EmailRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT m.id, m.source_key, m.message_id, m.conversation_id, m.folder,
+                    m.subject, m.sender, m.recipients, m.sent_at, m.body, m.attachment_names
+             FROM messages m WHERE m.id = ?1",
+        )?;
+        let record = stmt
+            .query_row([id], |r| {
+                Ok(EmailRecord {
+                    id: r.get(0)?,
+                    source_key: r.get(1)?,
+                    message_id: r.get(2)?,
+                    conversation_id: r.get(3)?,
+                    folder: r.get(4)?,
+                    subject: r.get(5)?,
+                    sender: r.get(6)?,
+                    recipients: r.get(7)?,
+                    sent_at: r.get(8)?,
+                    body: r.get(9)?,
+                    attachment_names: r.get(10)?,
+                    labels: Vec::new(),
+                })
+            })
+            .optional()?;
+        let Some(mut record) = record else {
+            return Ok(None);
+        };
+        record.labels = self.get_message_labels(record.id)?;
+        Ok(Some(record))
+    }
+
+    pub fn get_messages_by_ids(&self, ids: &[i64]) -> Result<Vec<EmailRecord>> {
+        let mut out = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if let Some(record) = self.get_message(id)? {
+                out.push(record);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn list_messages(
+        &self,
+        scope: &MailScope,
+        label_filter: &LabelFilter,
+        query: &str,
+        sort: MailSort,
+        limit: usize,
+    ) -> Result<Vec<EmailRecord>> {
+        let fts_query = build_fts_query(query);
+        let order_clause = match sort {
+            MailSort::DateDesc => "coalesce(m.sent_at, '') DESC, m.id DESC",
+            MailSort::DateAsc => "coalesce(m.sent_at, '') ASC, m.id ASC",
+            MailSort::SubjectAsc => "lower(m.subject) ASC, m.id DESC",
+            MailSort::SenderAsc => "lower(m.sender) ASC, m.id DESC",
+        };
+
+        let mut records = Vec::new();
+        if fts_query.is_empty() {
+            let sql = format!(
+                "SELECT m.id, m.source_key, m.message_id, m.conversation_id, m.folder,
+                        m.subject, m.sender, m.recipients, m.sent_at, m.body, m.attachment_names
+                 FROM messages m
+                 JOIN indexed_sources s ON s.source_key = m.source_key
+                 WHERE s.enabled = 1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM source_folder_settings sf
+                     WHERE sf.source_key = m.source_key AND sf.folder = m.folder AND sf.enabled = 0
+                   )
+                 ORDER BY {order_clause}"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map([], map_email_record)?;
+            for row in rows {
+                let record = row?;
+                if matches_scope(&record, scope) {
+                    records.push(record);
+                }
+            }
+        } else {
+            let sql = format!(
+                "SELECT m.id, m.source_key, m.message_id, m.conversation_id, m.folder,
+                        m.subject, m.sender, m.recipients, m.sent_at, m.body, m.attachment_names
+                 FROM messages_fts f
+                 JOIN messages m ON m.id = f.rowid
+                 JOIN indexed_sources s ON s.source_key = m.source_key
+                 WHERE messages_fts MATCH ?1
+                   AND s.enabled = 1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM source_folder_settings sf
+                     WHERE sf.source_key = m.source_key AND sf.folder = m.folder AND sf.enabled = 0
+                   )
+                 ORDER BY bm25(messages_fts, 8.0, 3.0, 2.0, 1.0, 1.0), {order_clause}"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map([&fts_query], map_email_record)?;
+            for row in rows {
+                let record = row?;
+                if matches_scope(&record, scope) {
+                    records.push(record);
+                }
+            }
+        }
+
+        let mut labels_by_msg = self.all_message_labels()?;
+        records.retain_mut(|record| {
+            record.labels = labels_by_msg.remove(&record.id).unwrap_or_default();
+            match label_filter {
+                LabelFilter::Any => true,
+                LabelFilter::Labeled(target) => {
+                    record.labels.iter().any(|item| &item.label == target)
+                }
+                LabelFilter::Unlabeled => record.labels.is_empty(),
+            }
+        });
+        records.truncate(limit);
+        Ok(records)
+    }
+
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
-        let fts_query = query
-            .split_whitespace()
-            .filter(|s| !s.is_empty())
-            .map(|s| format!("\"{}\"", s.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(" OR ");
+        let fts_query = build_fts_query(query);
         if fts_query.is_empty() {
             return Ok(Vec::new());
         }
@@ -180,6 +322,184 @@ impl Index {
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn label_definitions_with_counts(&self) -> Result<Vec<(LabelDefinition, u64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT d.name, d.description, d.color, count(ml.message_id)
+             FROM label_definitions d
+             LEFT JOIN message_labels ml ON ml.label = d.name
+             GROUP BY d.name, d.description, d.color
+             ORDER BY d.name",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                LabelDefinition {
+                    name: row.get(0)?,
+                    description: row.get(1)?,
+                    color: row.get(2)?,
+                },
+                row.get(3)?,
+            ))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn label_definitions(&self) -> Result<Vec<LabelDefinition>> {
+        Ok(self
+            .label_definitions_with_counts()?
+            .into_iter()
+            .map(|(def, _)| def)
+            .collect())
+    }
+
+    pub fn unlabeled_count(&self) -> Result<u64> {
+        Ok(self.conn.query_row(
+            "SELECT count(*) FROM messages m
+             WHERE NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id)",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn upsert_label_definition(&self, def: &LabelDefinition) -> Result<()> {
+        let name = def.name.trim();
+        if name.is_empty() {
+            anyhow::bail!("label name cannot be empty");
+        }
+        self.conn.execute(
+            "INSERT INTO label_definitions(name, description, color)
+             VALUES(?1, ?2, ?3)
+             ON CONFLICT(name) DO UPDATE SET description=excluded.description, color=excluded.color",
+            params![name, def.description.trim(), def.color.trim()],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_label_definition(&mut self, name: &str) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM message_labels WHERE label = ?1", [name])?;
+        tx.execute("DELETE FROM label_definitions WHERE name = ?1", [name])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_message_labels(&self, message_id: i64) -> Result<Vec<AssignedLabel>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT label, confidence, source
+             FROM message_labels
+             WHERE message_id = ?1
+             ORDER BY coalesce(confidence, 1.0) DESC, label ASC",
+        )?;
+        let rows = stmt.query_map([message_id], |row| {
+            Ok(AssignedLabel {
+                label: row.get(0)?,
+                confidence: row.get(1)?,
+                source: row.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn all_message_labels(&self) -> Result<HashMap<i64, Vec<AssignedLabel>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT message_id, label, confidence, source
+             FROM message_labels
+             ORDER BY message_id, coalesce(confidence, 1.0) DESC, label ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                AssignedLabel {
+                    label: row.get(1)?,
+                    confidence: row.get(2)?,
+                    source: row.get(3)?,
+                },
+            ))
+        })?;
+        let mut map: HashMap<i64, Vec<AssignedLabel>> = HashMap::new();
+        for row in rows {
+            let (msg_id, label) = row?;
+            map.entry(msg_id).or_default().push(label);
+        }
+        Ok(map)
+    }
+
+    pub fn set_message_labels(&mut self, message_id: i64, labels: &[AssignedLabel]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM message_labels WHERE message_id = ?1 AND source != 'manual'",
+            [message_id],
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO message_labels(message_id, label, confidence, source)
+                 VALUES(?1, ?2, ?3, ?4)",
+            )?;
+            for item in labels {
+                stmt.execute(params![
+                    message_id,
+                    item.label,
+                    item.confidence,
+                    item.source
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn toggle_manual_label(&self, message_id: i64, label: &str) -> Result<bool> {
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM message_labels WHERE message_id = ?1 AND label = ?2",
+                params![message_id, label],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if exists {
+            self.conn.execute(
+                "DELETE FROM message_labels WHERE message_id = ?1 AND label = ?2",
+                params![message_id, label],
+            )?;
+            Ok(false)
+        } else {
+            self.conn.execute(
+                "INSERT INTO message_labels(message_id, label, confidence, source)
+                 VALUES(?1, ?2, NULL, 'manual')",
+                params![message_id, label],
+            )?;
+            Ok(true)
+        }
+    }
+
+    pub fn set_manual_label_for_messages(
+        &mut self,
+        message_ids: &[i64],
+        label: &str,
+        assign: bool,
+    ) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        let mut affected = 0usize;
+        if assign {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO message_labels(message_id, label, confidence, source)
+                 VALUES(?1, ?2, NULL, 'manual')",
+            )?;
+            for &id in message_ids {
+                affected += stmt.execute(params![id, label])?;
+            }
+        } else {
+            let mut stmt =
+                tx.prepare("DELETE FROM message_labels WHERE message_id = ?1 AND label = ?2")?;
+            for &id in message_ids {
+                affected += stmt.execute(params![id, label])?;
+            }
+        }
+        tx.commit()?;
+        Ok(affected)
     }
 
     pub fn documents_missing_embeddings(&self, model: &str) -> Result<Vec<EmbeddingDocument>> {
@@ -236,8 +556,6 @@ impl Index {
         model: &str,
         limit: usize,
     ) -> Result<Vec<SearchHit>> {
-        use std::collections::HashMap;
-
         let bm25 = self.search(query, 50)?;
         let mut combined: HashMap<i64, (SearchHit, f64)> = HashMap::new();
         for (rank, hit) in bm25.into_iter().enumerate() {
@@ -383,6 +701,50 @@ impl Index {
         tx.commit()?;
         Ok(removed)
     }
+}
+
+fn map_email_record(r: &rusqlite::Row<'_>) -> rusqlite::Result<EmailRecord> {
+    Ok(EmailRecord {
+        id: r.get(0)?,
+        source_key: r.get(1)?,
+        message_id: r.get(2)?,
+        conversation_id: r.get(3)?,
+        folder: r.get(4)?,
+        subject: r.get(5)?,
+        sender: r.get(6)?,
+        recipients: r.get(7)?,
+        sent_at: r.get(8)?,
+        body: r.get(9)?,
+        attachment_names: r.get(10)?,
+        labels: Vec::new(),
+    })
+}
+
+fn matches_scope(record: &EmailRecord, scope: &MailScope) -> bool {
+    match scope {
+        MailScope::AllMessages => true,
+        MailScope::Source(source_key) => &record.source_key == source_key,
+        MailScope::Folder {
+            source_key,
+            folder_prefix,
+        } => {
+            &record.source_key == source_key
+                && (record.folder == *folder_prefix
+                    || record
+                        .folder
+                        .strip_prefix(folder_prefix)
+                        .is_some_and(|rest| rest.starts_with('/')))
+        }
+    }
+}
+
+fn build_fts_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("\"{}\"", s.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" OR ")
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {
@@ -544,5 +906,95 @@ mod tests {
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].name, "second.pst");
         assert_eq!(db.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn manages_labels_and_filters_explorer_messages() {
+        let mut db = Index::open(Path::new(":memory:")).unwrap();
+        db.index_batch(&[
+            Email {
+                source_key: "/archives/main.pst".into(),
+                folder: "Mailbox/Inbox".into(),
+                subject: "Approve Q3 budget".into(),
+                sender: "cfo@example.test".into(),
+                sent_at: Some("2026-03-01T10:00:00Z".into()),
+                body: "Please approve the budget today.".into(),
+                ..Default::default()
+            },
+            Email {
+                source_key: "/archives/main.pst".into(),
+                folder: "Mailbox/Archive".into(),
+                subject: "Weekly digest".into(),
+                sender: "news@example.test".into(),
+                sent_at: Some("2026-03-02T10:00:00Z".into()),
+                body: "General company updates.".into(),
+                ..Default::default()
+            },
+        ])
+        .unwrap();
+
+        let all = db
+            .list_messages(
+                &MailScope::AllMessages,
+                &LabelFilter::Any,
+                "",
+                MailSort::DateDesc,
+                100,
+            )
+            .unwrap();
+        assert_eq!(all.len(), 2);
+        let budget_id = all
+            .iter()
+            .find(|m| m.subject.contains("Approve"))
+            .unwrap()
+            .id;
+
+        db.set_message_labels(
+            budget_id,
+            &[AssignedLabel {
+                label: "Action Required".into(),
+                confidence: Some(0.93),
+                source: "laya".into(),
+            }],
+        )
+        .unwrap();
+
+        let action_only = db
+            .list_messages(
+                &MailScope::AllMessages,
+                &LabelFilter::Labeled("Action Required".into()),
+                "",
+                MailSort::DateDesc,
+                100,
+            )
+            .unwrap();
+        assert_eq!(action_only.len(), 1);
+        assert_eq!(action_only[0].id, budget_id);
+
+        let unlabeled = db
+            .list_messages(
+                &MailScope::AllMessages,
+                &LabelFilter::Unlabeled,
+                "",
+                MailSort::DateDesc,
+                100,
+            )
+            .unwrap();
+        assert_eq!(unlabeled.len(), 1);
+        assert_eq!(unlabeled[0].subject, "Weekly digest");
+
+        let selected_ids: Vec<i64> = all.iter().map(|m| m.id).collect();
+        assert_eq!(
+            db.set_manual_label_for_messages(&selected_ids, "FYI", true)
+                .unwrap(),
+            2
+        );
+        let batch_records = db.get_messages_by_ids(&selected_ids).unwrap();
+        assert_eq!(batch_records.len(), 2);
+        assert!(
+            batch_records
+                .iter()
+                .all(|m| m.labels.iter().any(|l| l.label == "FYI"))
+        );
     }
 }

@@ -1,13 +1,14 @@
 use iced::{
     Alignment, Element, Fill,
     widget::{
-        button, checkbox, column, container, horizontal_rule, row, scrollable, text, text_input,
+        Space, button, checkbox, column, container, horizontal_rule, row, scrollable, text,
+        text_input,
     },
 };
 use std::collections::{BTreeMap, HashSet};
 
 use super::{Message, PstRagApp, SidebarSection, theme::*};
-use crate::model::IndexedFolder;
+use crate::model::{IndexedFolder, LabelFilter, MailScope};
 
 #[derive(Default)]
 struct FolderTree<'a> {
@@ -107,115 +108,151 @@ impl PstRagApp {
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .unwrap_or("No archive selected");
-        let choose = enabled_button("Choose PST", (!self.busy).then_some(Message::ChooseArchive));
-        let index = enabled_button(
+        let choose = small_button("Choose PST", (!self.busy).then_some(Message::ChooseArchive));
+        let index = small_button(
             "Index now",
             (!self.busy && self.archive.is_some()).then_some(Message::Index),
         );
-        let storage = enabled_button(
+        let storage = small_button(
             "Choose directory",
             (!self.busy).then_some(Message::ChooseStorage),
         );
-        let save = enabled_button(
+        let save = small_button(
             "Save AI settings",
             (!self.busy).then_some(Message::SaveCredentials),
         );
 
-        let archive = card(
-            column![
-                row![
-                    text(self.count).size(30).color(primary()),
-                    column![
-                        text("MESSAGES").size(10).color(muted()),
-                        text("indexed locally").size(12).color(muted())
-                    ]
-                    .spacing(1)
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center),
-                horizontal_rule(1),
-                text(name).size(15),
-                text(
-                    self.archive
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default()
-                )
-                .size(11),
-                row![choose, index].spacing(8)
+        let all_selected = self.mail_scope == MailScope::AllMessages;
+        let all_mail_btn = button(
+            row![
+                text("All Messages").size(12).width(Fill),
+                text(self.count).size(11).color(accent_text())
             ]
-            .spacing(8),
-        );
+            .align_y(Alignment::Center),
+        )
+        .width(Fill)
+        .padding([6, 10])
+        .style(if all_selected {
+            button::primary
+        } else {
+            button::secondary
+        })
+        .on_press(Message::SelectMailScope(MailScope::AllMessages));
 
-        let storage_card = card(
-            column![
-                text(self.storage_dir.display().to_string()).size(11),
-                text("Contains BM25, optional vectors, and AI credentials").size(11),
-                storage
-            ]
-            .spacing(8),
-        );
+        let mut mailbox_col = column![
+            all_mail_btn,
+            horizontal_rule(1),
+            text(format!("Import: {name}")).size(11).color(muted()),
+            row![choose, index].spacing(6),
+            horizontal_rule(1),
+        ]
+        .spacing(7);
 
-        let mut indexed_sources = column![].spacing(10);
         if self.sources.is_empty() {
-            indexed_sources = indexed_sources.push(text("No PST files indexed yet").size(11));
+            mailbox_col =
+                mailbox_col.push(text("No PST files indexed yet").size(11).color(muted()));
         }
         for source in &self.sources {
             let source_key = source.key.clone();
+            let source_key_select = source.key.clone();
+            let is_source_selected =
+                matches!(&self.mail_scope, MailScope::Source(k) if k == &source.key);
             let mut source_view = column![
-                checkbox(
-                    format!("{} ({} messages)", source.name, source.message_count),
-                    source.enabled
-                )
-                .on_toggle(move |enabled| Message::SourceEnabledChanged(
-                    source_key.clone(),
-                    enabled
-                ))
+                row![
+                    checkbox("", source.enabled)
+                        .size(14)
+                        .on_toggle(move |enabled| {
+                            Message::SourceEnabledChanged(source_key.clone(), enabled)
+                        }),
+                    button(text(format!("{} ({})", source.name, source.message_count)).size(12))
+                        .padding([3, 6])
+                        .width(Fill)
+                        .style(if is_source_selected {
+                            button::primary
+                        } else {
+                            button::text
+                        })
+                        .on_press(Message::SelectMailScope(MailScope::Source(
+                            source_key_select
+                        ))),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
             ]
-            .spacing(5);
+            .spacing(3);
+
             let collapsed_paths: HashSet<_> = self
                 .collapsed_source_folders
                 .iter()
-                .filter(|(source_key, _)| source_key == &source.key)
+                .filter(|(sk, _)| sk == &source.key)
                 .map(|(_, path)| path.clone())
                 .collect();
             for tree_row in folder_tree_rows(&source.folders, &collapsed_paths) {
                 let source_key = source.key.clone();
+                let source_key_folder = source.key.clone();
                 let folder_paths = tree_row.folder_paths;
-                let selection = checkbox(
-                    format!("{} ({})", tree_row.name, tree_row.message_count),
-                    source.enabled && tree_row.enabled,
+                let row_path = tree_row.path.clone();
+                let is_folder_selected = matches!(
+                    &self.mail_scope,
+                    MailScope::Folder { source_key: sk, folder_prefix: fp }
+                    if sk == &source.key && fp == &row_path
+                );
+
+                let check = checkbox("", source.enabled && tree_row.enabled)
+                    .size(13)
+                    .on_toggle(move |enabled| {
+                        Message::FolderTreeEnabledChanged(
+                            source_key.clone(),
+                            folder_paths.clone(),
+                            enabled,
+                        )
+                    });
+                let folder_btn = button(
+                    text(format!("{} ({})", tree_row.name, tree_row.message_count)).size(11),
                 )
-                .on_toggle(move |enabled| {
-                    Message::FolderTreeEnabledChanged(
-                        source_key.clone(),
-                        folder_paths.clone(),
-                        enabled,
-                    )
-                });
+                .padding([2, 5])
+                .width(Fill)
+                .style(if is_folder_selected {
+                    button::primary
+                } else {
+                    button::text
+                })
+                .on_press(Message::SelectMailScope(MailScope::Folder {
+                    source_key: source_key_folder,
+                    folder_prefix: row_path,
+                }));
+
                 if tree_row.has_children {
                     let source_key = source.key.clone();
                     let folder_path = tree_row.path;
                     source_view = source_view.push(
                         row![
-                            button(text(format!(
-                                "{}{}",
-                                tree_row.prefix,
-                                if tree_row.collapsed { "[+]" } else { "[-]" }
-                            )))
+                            button(
+                                text(format!(
+                                    "{}{}",
+                                    tree_row.prefix,
+                                    if tree_row.collapsed { "[+]" } else { "[-]" }
+                                ))
+                                .size(11)
+                            )
                             .padding(0)
                             .style(button::text)
                             .on_press(Message::ToggleFolderTreeNode(source_key, folder_path)),
-                            selection
+                            check,
+                            folder_btn
                         ]
-                        .spacing(4)
+                        .spacing(3)
                         .align_y(Alignment::Center),
                     );
                 } else {
                     source_view = source_view.push(
-                        row![text(format!("{}   ", tree_row.prefix)).size(12), selection]
-                            .spacing(4)
-                            .align_y(Alignment::Center),
+                        row![
+                            text(format!("{}   ", tree_row.prefix)).size(11),
+                            check,
+                            folder_btn
+                        ]
+                        .spacing(3)
+                        .align_y(Alignment::Center),
                     );
                 }
             }
@@ -224,74 +261,198 @@ impl PstRagApp {
                     column![
                         text("Remove this PST's messages and embeddings?").size(10),
                         row![
-                            enabled_button("Cancel", Some(Message::CancelRemoveSource)),
-                            enabled_button("Remove", Some(Message::ConfirmRemoveSource))
+                            small_button("Cancel", Some(Message::CancelRemoveSource)),
+                            small_button("Remove", Some(Message::ConfirmRemoveSource))
                         ]
                         .spacing(6)
                     ]
-                    .spacing(5),
+                    .spacing(4),
                 );
             } else {
-                source_view = source_view.push(enabled_button(
+                source_view = source_view.push(small_button(
                     "Remove index",
                     (!self.busy).then_some(Message::RemoveSourceRequested(source.key.clone())),
                 ));
             }
-            indexed_sources = indexed_sources.push(container(source_view).padding([6, 0]));
+            mailbox_col = mailbox_col.push(container(source_view).padding([4, 0]));
         }
-        let source_manager = card(indexed_sources);
+        let mailboxes_card = card(mailbox_col);
+
+        let mut labels_col = column![
+            row![
+                small_button("All", Some(Message::SelectLabelFilter(LabelFilter::Any))),
+                small_button(
+                    format!("Unlabeled ({})", self.unlabeled_count),
+                    Some(Message::SelectLabelFilter(LabelFilter::Unlabeled))
+                ),
+            ]
+            .spacing(6)
+        ]
+        .spacing(6);
+
+        for (def, count) in &self.labels_with_counts {
+            let label_name = def.name.clone();
+            let label_del = def.name.clone();
+            let is_active = matches!(&self.label_filter, LabelFilter::Labeled(l) if l == &def.name);
+            labels_col = labels_col.push(
+                row![
+                    button(
+                        row![
+                            label_badge(&def.name, &def.color, Some(count.to_string())),
+                            Space::new(Fill, 0),
+                        ]
+                        .align_y(Alignment::Center),
+                    )
+                    .width(Fill)
+                    .padding([3, 6])
+                    .style(if is_active {
+                        button::primary
+                    } else {
+                        button::text
+                    })
+                    .on_press(Message::SelectLabelFilter(LabelFilter::Labeled(label_name))),
+                    small_button("×", Some(Message::RemoveLabelDefinition(label_del))),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center),
+            );
+        }
+
+        let can_add_label = !self.new_label_name.trim().is_empty();
+        labels_col = labels_col
+            .push(horizontal_rule(1))
+            .push(text("Add / update label").size(11).color(muted()))
+            .push(
+                text_input("Label name (e.g. Billing)", &self.new_label_name)
+                    .on_input(Message::NewLabelNameChanged)
+                    .size(11)
+                    .padding(6),
+            )
+            .push(
+                text_input(
+                    "Criteria description for Laya / LLM Judge",
+                    &self.new_label_description,
+                )
+                .on_input(Message::NewLabelDescriptionChanged)
+                .size(11)
+                .padding(6),
+            )
+            .push(small_button(
+                "+ Save Label",
+                can_add_label.then_some(Message::SaveLabelDefinition),
+            ));
+        let labels_card = card(labels_col);
+
+        let external_gguf = self.active_laya_gguf_path();
+        let laya_status = match &external_gguf {
+            Some(path) => format!("External GGUF ready: {}", path.display()),
+            None => "Active: Built-in packaged Laya-GGUF decision model".to_owned(),
+        };
+        let laya_card = card(
+            column![
+                text("ggml-org/Laya-GGUF").size(12).color(bright_text()),
+                text(laya_status).size(10).color(muted()),
+                text_input(
+                    "Optional path to Laya-Q8_0.gguf",
+                    &self.config.laya_gguf_path
+                )
+                .on_input(Message::LayaGgufPathChanged)
+                .size(11)
+                .padding(6),
+                row![
+                    small_button(
+                        "Choose GGUF…",
+                        (!self.busy).then_some(Message::ChooseLayaGguf)
+                    ),
+                    small_button(
+                        "Download Q8_0",
+                        (!self.busy).then_some(Message::DownloadLayaGguf)
+                    ),
+                ]
+                .spacing(6),
+                text("Packaged Laya-GGUF runs in-process offline. Downloading Laya-Q8_0.gguf switches to the full 421M checkpoint.")
+                    .size(10)
+                    .color(muted()),
+            ]
+            .spacing(6),
+        );
 
         let llm = card(
             column![
-                text("Endpoint").size(12),
-                text_input("https://…", &self.config.endpoint).on_input(Message::EndpointChanged),
-                text("Model").size(12),
-                text_input("Model name", &self.config.model).on_input(Message::ModelChanged),
-                text("API key").size(12),
+                text("Endpoint").size(11),
+                text_input("https://…", &self.config.endpoint)
+                    .on_input(Message::EndpointChanged)
+                    .size(11)
+                    .padding(6),
+                text("Model").size(11),
+                text_input("Model name", &self.config.model)
+                    .on_input(Message::ModelChanged)
+                    .size(11)
+                    .padding(6),
+                text("API key").size(11),
                 text_input("Optional bearer token", &self.config.bearer_token)
                     .secure(true)
-                    .on_input(Message::TokenChanged),
+                    .on_input(Message::TokenChanged)
+                    .size(11)
+                    .padding(6),
                 horizontal_rule(1),
                 checkbox(
-                    "Add remote embeddings during indexing",
+                    "Remote embeddings on index",
                     self.config.use_remote_embeddings
                 )
+                .size(13)
+                .text_size(11)
                 .on_toggle(Message::RemoteEmbeddingsChanged),
-                text("Embedding model").size(12),
+                text("Embedding model").size(11),
                 text_input("Embedding model name", &self.config.embedding_model)
-                    .on_input(Message::EmbeddingModelChanged),
-                text("BM25 is always indexed locally. Remote mode sends email text to the configured embeddings endpoint.").size(10),
-                text("HTTPS required except for 127.0.0.1").size(10),
+                    .on_input(Message::EmbeddingModelChanged)
+                    .size(11)
+                    .padding(6),
+                text("HTTPS required except for 127.0.0.1")
+                    .size(10)
+                    .color(muted()),
                 save
             ]
-            .spacing(7),
+            .spacing(6),
+        );
+
+        let storage_card = card(
+            column![
+                text(self.storage_dir.display().to_string()).size(10),
+                text("Contains SQLite index, labels, models, and credentials")
+                    .size(10)
+                    .color(muted()),
+                storage
+            ]
+            .spacing(6),
         );
 
         let brand = row![
-            container(text("P").size(17).color(background()))
-                .width(38)
-                .height(38)
-                .center_x(38)
-                .center_y(38)
+            container(text("P").size(16).color(on_primary()))
+                .width(34)
+                .height(34)
+                .center_x(34)
+                .center_y(34)
                 .style(accent_tile_style),
             column![
-                text("PSTbeetle").size(14),
-                text("Private archive search").size(11).color(muted())
+                text("PSTbeetle").size(14).color(bright_text()),
+                text("Thunderbird Mail Explorer").size(10).color(muted())
             ]
-            .spacing(2)
+            .spacing(1)
         ]
-        .spacing(11)
+        .spacing(10)
         .align_y(Alignment::Center);
 
-        let mut contents = column![brand, horizontal_rule(1)].spacing(12).padding(18);
+        let mut contents = column![brand, horizontal_rule(1)].spacing(10).padding(14);
         for (section, label, body) in [
-            (SidebarSection::Archive, "ARCHIVE", archive),
             (
-                SidebarSection::IndexedSources,
-                "INDEXED PST FILES",
-                source_manager,
+                SidebarSection::Mailboxes,
+                "MAILBOXES & FOLDERS",
+                mailboxes_card,
             ),
-            (SidebarSection::AiModels, "AI MODELS", llm),
+            (SidebarSection::Labels, "MAIL LABELS", labels_card),
+            (SidebarSection::LayaModel, "LAYA DECISION MODEL", laya_card),
+            (SidebarSection::AiModels, "LLM JUDGE & RAG", llm),
             (SidebarSection::Storage, "STORAGE", storage_card),
         ] {
             let collapsed = self.collapsed_sections[section.index()];
@@ -302,7 +463,7 @@ impl PstRagApp {
         }
 
         container(scrollable(contents))
-            .width(310)
+            .width(285)
             .height(Fill)
             .style(sidebar_style)
             .into()

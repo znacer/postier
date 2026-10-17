@@ -1,12 +1,20 @@
-# PST RAG
+# PST Mail Explorer & RAG
 
-Portable, local-first Windows desktop prototype for searching Outlook archives and sending only selected evidence to an OpenAI-compatible private LLM endpoint.
+Portable, local-first desktop mail explorer (Thunderbird-style 3-pane layout) for browsing Outlook PST archives, labeling emails with **Laya-GGUF** or an **LLM Judge**, and querying a collapsible/extendable RAG Chat pane backed by an OpenAI-compatible private LLM endpoint.
 
 ## Current state
 
-Implemented: native Rust/Iced UI on Linux and Windows, pure-Rust read-only PST extraction, multi-PST index management with reversible archive/folder retrieval filters and per-PST deletion, bundled SQLite with FTS5/BM25, content-hash deduplication, optional remote email embeddings with hybrid retrieval, standalone local search, bounded context preview, a Rig RAG agent using an OpenAI-compatible private LLM endpoint, optional HTTPS-only private LLM calls with a masked API-key input, evidence display, and an isolated mail-source interface.
-
-PST traversal uses Microsoft's cross-platform `outlook-pst` implementation and extracts folders, messages, subjects, senders, recipients, timestamps, and searchable bodies. This now works without Outlook on Linux and Windows. Corpus validation is still required before claiming production-grade compatibility; libpff remains a fallback if damaged or legacy archives expose gaps. VSS is not attempted on Linux and is not silently attempted on Windows: creating shadow copies commonly requires privileges unavailable to a portable non-admin app.
+Implemented:
+- **Thunderbird-style Mail Explorer UI** (native Rust/Iced on Linux and Windows):
+  - **Left Folder & Label Tree**: Browse all messages, individual PST archives, folder hierarchies, or filter by assigned labels / unlabeled emails. Folder and archive checkboxes remain independent so you can browse any folder while controlling which archives/folders participate in RAG retrieval.
+  - **Center Message Table & Reading Pane**: Quick-filter bar (FTS5/BM25), sortable columns (`Subject`, `Correspondents`, `Folder`, `Labels`, `Date`), and a lower reading pane displaying full headers, attachments, label badges with confidence scores, manual label toggle chips, and one-click `Label (Laya)`, `Label (LLM Judge)`, and `Ask in Chat` actions.
+  - **Right Collapsible & Extendable Chat Pane**: Collapse into a `32px` vertical rail (`◀`/`▶`) or expand and resize width (`310px` to `760px`) via `◀ Extend`, `Shrink ▶`, or the width slider. Evidence cards include an `Open Mail` button to jump directly to the cited email in the explorer.
+- **Email Labeling (`Laya-GGUF` or `LLM as a Judge`)**:
+  - **Laya Decision Model (`ggml-org/Laya-GGUF`)**: In-process pure-Rust GGUF v3 reader and ModernBERT + Laya Decision Head inference engine (`F32`, `F16`, `BF16`, `Q8_0` tensors, BPE tokenizer from `tokenizer.ggml.*` metadata, `[CLS] choice question: ... [SEP] [MASK] opt ... [SEP] state [SEP]` prompt formatting, and temperature scaling). Ships with a packaged in-process GGUF decision model that works offline out of the box, and can load or download full `Laya-bf16.gguf` / `Laya-Q8_0.gguf` weights from [`ggml-org/Laya-GGUF`](https://huggingface.co/ggml-org/Laya-GGUF).
+  - **LLM as a Judge**: Structured JSON classification against user-defined label definitions (`name`, `description`/criteria, `color`) using the configured OpenAI-compatible endpoint.
+  - Label a single email (`Label Mail`) or batch-label the current filtered explorer view (`Label View`).
+- **PST & Search Infrastructure**:
+  - Pure-Rust read-only PST extraction (`outlook-pst`), multi-PST index management, bundled SQLite with FTS5/BM25, content-hash deduplication, optional remote email embeddings with hybrid retrieval, and an isolated mail-source interface.
 
 For safe end-to-end development, the file picker accepts JSONL fixtures with one `Email` object per line. This is not a deployment feature.
 
@@ -22,9 +30,7 @@ When started with `cargo run`, debug builds print sanitized Rig request diagnost
 
 The release profile enables LTO, stripping, size optimization, and abort-on-panic. SQLite is compiled into the executable and HTTP uses rustls, so no database or TLS runtime is installed. Cross-compilation still requires the Microsoft target/linker; the canonical release should be produced on a pinned Windows CI runner.
 
-Runtime data defaults to `data/` beside the executable. The storage directory can be changed in the UI and the selection is remembered in `storage-directory.txt`; the selected directory contains both `index.sqlite` and `credentials.json`. The credentials file is restricted to the current user on Unix, but remains a local plaintext secret, so select a private directory and never place it in source control. A platform credential-vault implementation is still recommended for production rollout.
-
-Each indexed PST appears in the sidebar. Its top-level checkbox includes or excludes the whole archive from subsequent retrieval, and its folder checkboxes narrow retrieval without deleting data or requiring reindexing. “Remove index” asks for confirmation and then deletes that PST's indexed messages and associated embeddings; it never modifies the original PST file.
+Runtime data defaults to `data/` beside the executable. The storage directory can be changed in the UI and the selection is remembered in `storage-directory.txt`; the selected directory contains `index.sqlite`, `credentials.json`, and any downloaded `Laya-Q8_0.gguf` weights.
 
 ## Fixture example
 
@@ -34,9 +40,8 @@ Each indexed PST appears in the sidebar. Its top-level checkbox includes or excl
 
 ## Security boundary
 
-- BM25 retrieval, ranking, and indexing remain local. Remote embedding indexing is opt-in and sends bounded email text to the configured OpenAI-compatible `/embeddings` endpoint.
+- BM25 retrieval, ranking, indexing, and Laya-GGUF decision labeling remain local. Remote embedding indexing and LLM-as-a-Judge labeling are opt-in and send bounded email text to the configured OpenAI-compatible endpoint.
 - The application requires HTTPS except for an endpoint whose host is exactly `127.0.0.1`; local loopback LLMs may use HTTP.
-- In BM25-only mode, only the visible, character-bounded context plus the current question is sent. In remote-embedding mode, bounded email text is sent during indexing and the question is sent once for hybrid retrieval.
-- There is no telemetry, updater, public service, vector database, or local model.
+- In BM25-only mode, only the visible, character-bounded context plus the current question is sent.
 
 See `docs/architecture.md` for the hardening and parser-validation gates.
