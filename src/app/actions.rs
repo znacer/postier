@@ -221,19 +221,19 @@ impl PstRagApp {
         };
     }
 
-    pub(super) fn set_folder_enabled(&mut self, source: &str, folder: &str, enabled: bool) {
+    pub(super) fn set_folders_enabled(&mut self, source: &str, folders: &[String], enabled: bool) {
         self.status = match Index::open(&self.db_path)
-            .and_then(|db| db.set_folder_enabled(source, folder, enabled))
+            .and_then(|mut db| db.set_folders_enabled(source, folders, enabled))
         {
             Ok(()) => {
                 self.refresh_sources();
                 if enabled {
-                    "Folder enabled for retrieval".into()
+                    "Folder tree enabled for retrieval".into()
                 } else {
-                    "Folder excluded from retrieval".into()
+                    "Folder tree excluded from retrieval".into()
                 }
             }
-            Err(error) => format!("Could not update folder selection: {error:#}"),
+            Err(error) => format!("Could not update folder tree selection: {error:#}"),
         };
     }
 

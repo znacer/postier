@@ -13,7 +13,7 @@ use iced::{
     Element, Fill, Subscription, Task,
     widget::{container, row},
 };
-use std::{fs, path::PathBuf, sync::mpsc::Receiver, time::Duration};
+use std::{collections::HashSet, fs, path::PathBuf, sync::mpsc::Receiver, time::Duration};
 use theme::{app_theme, page_style};
 
 enum WorkerResult {
@@ -92,6 +92,7 @@ pub struct PstRagApp {
     count: u64,
     sources: Vec<IndexedSource>,
     pending_remove_source: Option<String>,
+    collapsed_source_folders: HashSet<(String, String)>,
     collapsed_sections: [bool; 4],
     busy: bool,
     config: LlmConfig,
@@ -113,7 +114,8 @@ enum Message {
     EmbeddingModelChanged(String),
     RemoteEmbeddingsChanged(bool),
     SourceEnabledChanged(String, bool),
-    FolderEnabledChanged(String, String, bool),
+    FolderTreeEnabledChanged(String, Vec<String>, bool),
+    ToggleFolderTreeNode(String, String),
     RemoveSourceRequested(String),
     ConfirmRemoveSource,
     CancelRemoveSource,
@@ -165,6 +167,7 @@ impl PstRagApp {
             count,
             sources,
             pending_remove_source: None,
+            collapsed_source_folders: HashSet::new(),
             collapsed_sections: [false; 4],
             busy: false,
             config,
@@ -189,8 +192,14 @@ impl PstRagApp {
             Message::SourceEnabledChanged(source, enabled) => {
                 self.set_source_enabled(&source, enabled)
             }
-            Message::FolderEnabledChanged(source, folder, enabled) => {
-                self.set_folder_enabled(&source, &folder, enabled)
+            Message::FolderTreeEnabledChanged(source, folders, enabled) => {
+                self.set_folders_enabled(&source, &folders, enabled)
+            }
+            Message::ToggleFolderTreeNode(source, folder) => {
+                let key = (source, folder);
+                if !self.collapsed_source_folders.remove(&key) {
+                    self.collapsed_source_folders.insert(key);
+                }
             }
             Message::RemoveSourceRequested(source) => self.pending_remove_source = Some(source),
             Message::ConfirmRemoveSource => self.remove_pending_source(),

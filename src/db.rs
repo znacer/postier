@@ -352,6 +352,27 @@ impl Index {
         Ok(())
     }
 
+    pub fn set_folders_enabled(
+        &mut self,
+        source_key: &str,
+        folders: &[String],
+        enabled: bool,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut statement = tx.prepare(
+                "INSERT INTO source_folder_settings(source_key, folder, enabled)
+                 VALUES(?1, ?2, ?3)
+                 ON CONFLICT(source_key, folder) DO UPDATE SET enabled=excluded.enabled",
+            )?;
+            for folder in folders {
+                statement.execute(params![source_key, folder, enabled])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn remove_source(&mut self, source_key: &str) -> Result<usize> {
         let tx = self.conn.transaction()?;
         let removed = tx.execute("DELETE FROM messages WHERE source_key=?1", [source_key])?;

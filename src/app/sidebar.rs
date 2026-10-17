@@ -1,8 +1,10 @@
 use iced::{
     Alignment, Element, Fill,
-    widget::{checkbox, column, container, horizontal_rule, row, scrollable, text, text_input},
+    widget::{
+        button, checkbox, column, container, horizontal_rule, row, scrollable, text, text_input,
+    },
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use super::{Message, PstRagApp, SidebarSection, theme::*};
 use crate::model::IndexedFolder;
@@ -16,10 +18,18 @@ struct FolderTree<'a> {
 struct FolderTreeRow<'a> {
     prefix: String,
     name: &'a str,
-    folder: Option<&'a IndexedFolder>,
+    path: String,
+    folder_paths: Vec<String>,
+    message_count: u64,
+    enabled: bool,
+    has_children: bool,
+    collapsed: bool,
 }
 
-fn folder_tree_rows(folders: &[IndexedFolder]) -> Vec<FolderTreeRow<'_>> {
+fn folder_tree_rows<'a>(
+    folders: &'a [IndexedFolder],
+    collapsed_paths: &HashSet<String>,
+) -> Vec<FolderTreeRow<'a>> {
     let mut root = FolderTree::default();
     for folder in folders {
         let mut node = &mut root;
@@ -36,23 +46,56 @@ fn folder_tree_rows(folders: &[IndexedFolder]) -> Vec<FolderTreeRow<'_>> {
     fn append_rows<'a>(
         node: &FolderTree<'a>,
         parent_prefix: &str,
+        parent_path: &str,
+        collapsed_paths: &HashSet<String>,
         rows: &mut Vec<FolderTreeRow<'a>>,
     ) {
         let child_count = node.children.len();
         for (index, (&name, child)) in node.children.iter().enumerate() {
             let is_last = index + 1 == child_count;
+            let path = if parent_path.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{parent_path}/{name}")
+            };
+            let mut descendant_folders = Vec::new();
+            collect_folders(child, &mut descendant_folders);
+            let collapsed = collapsed_paths.contains(&path);
             rows.push(FolderTreeRow {
                 prefix: format!("{parent_prefix}{}", if is_last { "|_ " } else { "|- " }),
                 name,
-                folder: child.folder,
+                path: path.clone(),
+                folder_paths: descendant_folders
+                    .iter()
+                    .map(|folder| folder.path.clone())
+                    .collect(),
+                message_count: descendant_folders
+                    .iter()
+                    .map(|folder| folder.message_count)
+                    .sum(),
+                enabled: descendant_folders.iter().all(|folder| folder.enabled),
+                has_children: !child.children.is_empty(),
+                collapsed,
             });
-            let child_prefix = format!("{parent_prefix}{}", if is_last { "   " } else { "|  " });
-            append_rows(child, &child_prefix, rows);
+            if !collapsed {
+                let child_prefix =
+                    format!("{parent_prefix}{}", if is_last { "   " } else { "|  " });
+                append_rows(child, &child_prefix, &path, collapsed_paths, rows);
+            }
+        }
+    }
+
+    fn collect_folders<'a>(node: &FolderTree<'a>, folders: &mut Vec<&'a IndexedFolder>) {
+        if let Some(folder) = node.folder {
+            folders.push(folder);
+        }
+        for child in node.children.values() {
+            collect_folders(child, folders);
         }
     }
 
     let mut rows = Vec::new();
-    append_rows(&root, "", &mut rows);
+    append_rows(&root, "", "", collapsed_paths, &mut rows);
     rows
 }
 
@@ -130,28 +173,49 @@ impl PstRagApp {
                 ))
             ]
             .spacing(5);
-            for row in folder_tree_rows(&source.folders) {
-                if let Some(folder) = row.folder {
+            let collapsed_paths: HashSet<_> = self
+                .collapsed_source_folders
+                .iter()
+                .filter(|(source_key, _)| source_key == &source.key)
+                .map(|(_, path)| path.clone())
+                .collect();
+            for tree_row in folder_tree_rows(&source.folders, &collapsed_paths) {
+                let source_key = source.key.clone();
+                let folder_paths = tree_row.folder_paths;
+                let selection = checkbox(
+                    format!("{} ({})", tree_row.name, tree_row.message_count),
+                    source.enabled && tree_row.enabled,
+                )
+                .on_toggle(move |enabled| {
+                    Message::FolderTreeEnabledChanged(
+                        source_key.clone(),
+                        folder_paths.clone(),
+                        enabled,
+                    )
+                });
+                if tree_row.has_children {
                     let source_key = source.key.clone();
-                    let folder_path = folder.path.clone();
+                    let folder_path = tree_row.path;
                     source_view = source_view.push(
-                        checkbox(
-                            format!("{}{} ({})", row.prefix, row.name, folder.message_count),
-                            source.enabled && folder.enabled,
-                        )
-                        .on_toggle(move |enabled| {
-                            Message::FolderEnabledChanged(
-                                source_key.clone(),
-                                folder_path.clone(),
-                                enabled,
-                            )
-                        }),
+                        row![
+                            button(text(format!(
+                                "{}{}",
+                                tree_row.prefix,
+                                if tree_row.collapsed { "[+]" } else { "[-]" }
+                            )))
+                            .padding(0)
+                            .style(button::text)
+                            .on_press(Message::ToggleFolderTreeNode(source_key, folder_path)),
+                            selection
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
                     );
                 } else {
                     source_view = source_view.push(
-                        text(format!("{}{}", row.prefix, row.name))
-                            .size(12)
-                            .color(muted()),
+                        row![text(format!("{}   ", tree_row.prefix)).size(12), selection]
+                            .spacing(4)
+                            .align_y(Alignment::Center),
                     );
                 }
             }
@@ -249,6 +313,7 @@ impl PstRagApp {
 mod tests {
     use super::folder_tree_rows;
     use crate::model::IndexedFolder;
+    use std::collections::HashSet;
 
     fn folder(path: &str) -> IndexedFolder {
         IndexedFolder {
@@ -265,7 +330,7 @@ mod tests {
             folder("Mailbox/Inbox"),
             folder("Archive"),
         ];
-        let rows = folder_tree_rows(&folders);
+        let rows = folder_tree_rows(&folders, &HashSet::new());
         let labels: Vec<_> = rows
             .iter()
             .map(|row| format!("{}{}", row.prefix, row.name))
@@ -274,14 +339,25 @@ mod tests {
         assert_eq!(
             labels,
             [
-                "├─ Archive",
-                "└─ Mailbox",
-                "   ├─ Inbox",
-                "   └─ Projects",
-                "      └─ Alpha",
+                "|- Archive",
+                "|_ Mailbox",
+                "   |- Inbox",
+                "   |_ Projects",
+                "      |_ Alpha",
             ]
         );
-        assert!(rows[1].folder.is_none());
-        assert_eq!(rows[2].folder.unwrap().path, "Mailbox/Inbox");
+        assert_eq!(rows[1].folder_paths.len(), 2);
+        assert_eq!(rows[2].folder_paths, ["Mailbox/Inbox"]);
+    }
+
+    #[test]
+    fn collapsed_folder_hides_all_descendants() {
+        let folders = [folder("Mailbox/Projects/Alpha"), folder("Mailbox/Inbox")];
+        let rows = folder_tree_rows(&folders, &HashSet::from(["Mailbox".into()]));
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Mailbox");
+        assert!(rows[0].collapsed);
+        assert_eq!(rows[0].folder_paths.len(), 2);
     }
 }
