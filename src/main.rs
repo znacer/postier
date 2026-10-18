@@ -6,6 +6,8 @@ mod laya;
 mod llm;
 mod model;
 mod pst;
+#[cfg(test)]
+mod tests;
 
 fn main() -> iced::Result {
     app::run()

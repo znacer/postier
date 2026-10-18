@@ -1,8 +1,8 @@
 mod actions;
 mod chat;
 mod explorer;
-mod markdown;
-mod sidebar;
+pub(crate) mod markdown;
+pub(crate) mod sidebar;
 mod theme;
 
 use crate::{

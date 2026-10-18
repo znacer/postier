@@ -16,18 +16,18 @@ struct FolderTree<'a> {
     children: BTreeMap<&'a str, FolderTree<'a>>,
 }
 
-struct FolderTreeRow<'a> {
-    depth: usize,
-    name: &'a str,
+pub(crate) struct FolderTreeRow<'a> {
+    pub(crate) depth: usize,
+    pub(crate) name: &'a str,
     path: String,
-    folder_paths: Vec<String>,
+    pub(crate) folder_paths: Vec<String>,
     message_count: u64,
     enabled: bool,
     has_children: bool,
-    collapsed: bool,
+    pub(crate) collapsed: bool,
 }
 
-fn folder_tree_rows<'a>(
+pub(crate) fn folder_tree_rows<'a>(
     folders: &'a [IndexedFolder],
     collapsed_paths: &HashSet<String>,
 ) -> Vec<FolderTreeRow<'a>> {
@@ -480,55 +480,5 @@ impl PstRagApp {
             .height(Fill)
             .style(sidebar_style)
             .into()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::folder_tree_rows;
-    use crate::model::IndexedFolder;
-    use std::collections::HashSet;
-
-    fn folder(path: &str) -> IndexedFolder {
-        IndexedFolder {
-            path: path.into(),
-            enabled: true,
-            message_count: 1,
-        }
-    }
-
-    #[test]
-    fn folder_paths_are_rendered_as_a_tree() {
-        let folders = [
-            folder("Mailbox/Projects/Alpha"),
-            folder("Mailbox/Inbox"),
-            folder("Archive"),
-        ];
-        let rows = folder_tree_rows(&folders, &HashSet::new());
-        let labels: Vec<_> = rows.iter().map(|row| (row.depth, row.name)).collect();
-
-        assert_eq!(
-            labels,
-            [
-                (0, "Archive"),
-                (0, "Mailbox"),
-                (1, "Inbox"),
-                (1, "Projects"),
-                (2, "Alpha"),
-            ]
-        );
-        assert_eq!(rows[1].folder_paths.len(), 2);
-        assert_eq!(rows[2].folder_paths, ["Mailbox/Inbox"]);
-    }
-
-    #[test]
-    fn collapsed_folder_hides_all_descendants() {
-        let folders = [folder("Mailbox/Projects/Alpha"), folder("Mailbox/Inbox")];
-        let rows = folder_tree_rows(&folders, &HashSet::from(["Mailbox".into()]));
-
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].name, "Mailbox");
-        assert!(rows[0].collapsed);
-        assert_eq!(rows[0].folder_paths.len(), 2);
     }
 }
