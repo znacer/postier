@@ -15,11 +15,13 @@ use crate::{
 };
 use actions::load_config;
 use chat::{ChatPaneMessage, chat_question_input_id};
-use explorer::{ExplorerMessage, explorer_filter_input_id};
+use explorer::{ExplorerMessage, explorer_filter_input_id, reader_header_id};
 use iced::{
-    Element, Fill, Subscription, Task, Theme,
+    Element, Fill, Point, Rectangle, Size, Subscription, Task, Theme, event,
     keyboard::{self, Key, key::Named},
+    mouse,
     widget::{container, row, text_input},
+    window,
 };
 use markdown::{MdBlock, parse_markdown};
 use sidebar::SidebarMessage;
@@ -32,7 +34,50 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use theme::{build_app_theme, page_style};
+use theme::{SplitAxis, build_app_theme, page_style, splitter};
+
+/// Draggable pane boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Splitter {
+    /// Left edge of the chat pane.
+    ChatWidth,
+    /// Boundary between the message table and the reading pane.
+    TableHeight,
+    /// Boundary between the mail header (subject, from, to) and the body.
+    HeaderHeight,
+}
+
+/// A boundary drag in progress.
+#[derive(Debug, Clone, Copy)]
+struct ActiveResize {
+    splitter: Splitter,
+    /// Pane size when the drag started. `None` while it is still being measured.
+    start_value: Option<f32>,
+    /// First cursor position seen during the drag, used for relative moves.
+    anchor: Option<Point>,
+}
+
+#[derive(Debug, Clone)]
+enum ResizeEvent {
+    Start(Splitter),
+    HeaderMeasured(Option<Rectangle>),
+    Moved(Point),
+    Released,
+    WindowResized(Size),
+}
+
+const SIDEBAR_WIDTH: f32 = 285.0;
+const SIDEBAR_COLLAPSED_WIDTH: f32 = 36.0;
+const CHAT_MIN_WIDTH: f32 = 310.0;
+const EXPLORER_MIN_WIDTH: f32 = 420.0;
+const TABLE_MIN_HEIGHT: f32 = 100.0;
+/// Approximate vertical space used by the toolbar, status bar and a minimal reader.
+const TABLE_RESERVED_HEIGHT: f32 = 330.0;
+/// Smallest mail header height (roughly the subject line plus padding).
+const HEADER_MIN_HEIGHT: f32 = 44.0;
+/// Tallest the mail header may grow, even in automatic sizing (e.g. mails with
+/// long To/Cc lists). Anything beyond this scrolls inside the header.
+const HEADER_MAX_HEIGHT: f32 = 160.0;
 
 #[derive(Debug, Clone)]
 enum WorkerEvent {
@@ -165,7 +210,13 @@ pub struct PstRagApp {
     sidebar_open: bool,
     chat_open: bool,
     chat_width: f32,
-    reader_split: f32,
+    table_height: f32,
+    /// Fixed mail header height, or `None` to size it to its content.
+    reader_header_height: Option<f32>,
+    /// Last measured natural (unconstrained) mail header height.
+    reader_header_natural: f32,
+    window_size: Size,
+    resizing: Option<ActiveResize>,
     busy: bool,
     config: LlmConfig,
     cancel_flag: Option<Arc<AtomicBool>>,
@@ -181,6 +232,7 @@ enum Message {
     LayaGgufChosen(Option<PathBuf>),
     Worker(WorkerEvent),
     KeyPressed(KeyShortcut),
+    Resize(ResizeEvent),
 }
 
 pub fn run() -> iced::Result {
@@ -243,7 +295,11 @@ impl PstRagApp {
             sidebar_open: true,
             chat_open: true,
             chat_width: 410.0,
-            reader_split: 45.0,
+            table_height: 320.0,
+            reader_header_height: None,
+            reader_header_natural: f32::INFINITY,
+            window_size: Size::new(1440.0, 860.0),
+            resizing: None,
             busy: false,
             config,
             cancel_flag: None,
@@ -281,7 +337,99 @@ impl PstRagApp {
                 Task::none()
             }
             Message::KeyPressed(shortcut) => self.handle_key_shortcut(shortcut),
+            Message::Resize(event) => self.handle_resize_event(event),
         }
+    }
+
+    fn is_resizing(&self, splitter: Splitter) -> bool {
+        self.resizing.is_some_and(|r| r.splitter == splitter)
+    }
+
+    fn max_chat_width(&self) -> f32 {
+        let sidebar = if self.sidebar_open {
+            SIDEBAR_WIDTH
+        } else {
+            SIDEBAR_COLLAPSED_WIDTH
+        };
+        (self.window_size.width - sidebar - EXPLORER_MIN_WIDTH).max(CHAT_MIN_WIDTH)
+    }
+
+    fn max_table_height(&self) -> f32 {
+        (self.window_size.height - TABLE_RESERVED_HEIGHT).max(TABLE_MIN_HEIGHT)
+    }
+
+    fn handle_resize_event(&mut self, event: ResizeEvent) -> Task<Message> {
+        match event {
+            ResizeEvent::Start(splitter) => {
+                let start_value = match splitter {
+                    Splitter::ChatWidth => Some(self.chat_width),
+                    Splitter::TableHeight => Some(self.table_height),
+                    Splitter::HeaderHeight => self.reader_header_height,
+                };
+                self.resizing = Some(ActiveResize {
+                    splitter,
+                    start_value,
+                    anchor: None,
+                });
+                // An auto-sized header has no known height yet: measure it.
+                if start_value.is_none() {
+                    return container::visible_bounds(reader_header_id())
+                        .map(|bounds| Message::Resize(ResizeEvent::HeaderMeasured(bounds)));
+                }
+            }
+            ResizeEvent::HeaderMeasured(bounds) => {
+                if let Some(bounds) = bounds {
+                    self.reader_header_natural = bounds.height;
+                    if let Some(active) = self.resizing.as_mut()
+                        && active.splitter == Splitter::HeaderHeight
+                        && active.start_value.is_none()
+                    {
+                        active.start_value = Some(bounds.height);
+                    }
+                } else {
+                    // Nothing to measure (no mail shown): abandon the drag.
+                    self.resizing = None;
+                }
+            }
+            ResizeEvent::Moved(position) => {
+                let Some(active) = self.resizing.as_mut() else {
+                    return Task::none();
+                };
+                let anchor = *active.anchor.get_or_insert(position);
+                let Some(start_value) = active.start_value else {
+                    return Task::none();
+                };
+                let dy = position.y - anchor.y;
+                match active.splitter {
+                    // The chat pane is flush with the right edge of the window,
+                    // so its width follows the cursor directly.
+                    Splitter::ChatWidth => {
+                        self.chat_width = (self.window_size.width - position.x)
+                            .clamp(CHAT_MIN_WIDTH, self.max_chat_width());
+                    }
+                    Splitter::TableHeight => {
+                        self.table_height =
+                            (start_value + dy).clamp(TABLE_MIN_HEIGHT, self.max_table_height());
+                    }
+                    // Dragging back to (or past) the natural height returns the
+                    // header to automatic sizing, so it never shows empty space.
+                    Splitter::HeaderHeight => {
+                        let height = start_value + dy;
+                        self.reader_header_height = (height < self.reader_header_natural)
+                            .then(|| height.max(HEADER_MIN_HEIGHT));
+                    }
+                }
+            }
+            ResizeEvent::Released => self.resizing = None,
+            ResizeEvent::WindowResized(size) => {
+                self.window_size = size;
+                self.chat_width = self.chat_width.clamp(CHAT_MIN_WIDTH, self.max_chat_width());
+                self.table_height = self
+                    .table_height
+                    .clamp(TABLE_MIN_HEIGHT, self.max_table_height());
+            }
+        }
+        Task::none()
     }
 
     fn update_sidebar(&mut self, message: SidebarMessage) -> Task<Message> {
@@ -454,9 +602,11 @@ impl PstRagApp {
                 Task::none()
             }
             ExplorerMessage::AskAboutEmail(message_id) => self.ask_about_email(message_id),
-            ExplorerMessage::ReaderSplitChanged(split) => {
-                self.reader_split = split.clamp(20.0, 80.0);
-                Task::none()
+            ExplorerMessage::ReaderResizeStart => {
+                self.handle_resize_event(ResizeEvent::Start(Splitter::TableHeight))
+            }
+            ExplorerMessage::ReaderHeaderResizeStart => {
+                self.handle_resize_event(ResizeEvent::Start(Splitter::HeaderHeight))
             }
             ExplorerMessage::CancelWorker => {
                 if let Some(flag) = &self.cancel_flag {
@@ -472,10 +622,6 @@ impl PstRagApp {
         match message {
             ChatPaneMessage::ToggleChatPane => {
                 self.chat_open = !self.chat_open;
-                Task::none()
-            }
-            ChatPaneMessage::WidthChanged(width) => {
-                self.chat_width = width.clamp(310.0, 760.0);
                 Task::none()
             }
             ChatPaneMessage::NewChat => {
@@ -547,7 +693,7 @@ impl PstRagApp {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        keyboard::on_key_press(|key, modifiers| {
+        let keys = keyboard::on_key_press(|key, modifiers| {
             if modifiers.command() || modifiers.control() || modifiers.alt() {
                 return None;
             }
@@ -567,7 +713,15 @@ impl PstRagApp {
                 }
                 _ => None,
             }
-        })
+        });
+        // Cursor movement is only listened to while a boundary is being dragged,
+        // so ordinary mouse motion doesn't trigger updates.
+        let window_events = if self.resizing.is_some() {
+            event::listen_with(drag_event)
+        } else {
+            event::listen_with(window_size_event)
+        };
+        Subscription::batch([keys, window_events])
     }
 
     fn handle_worker_event(&mut self, event: WorkerEvent) {
@@ -704,17 +858,46 @@ impl PstRagApp {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        container(
-            row![
-                self.sidebar().map(Message::Sidebar),
-                self.explorer().map(Message::Explorer),
-                self.chat_pane().map(Message::Chat),
-            ]
-            .height(Fill),
-        )
-        .width(Fill)
-        .height(Fill)
-        .style(page_style)
-        .into()
+        let mut panes = row![
+            self.sidebar().map(Message::Sidebar),
+            self.explorer().map(Message::Explorer),
+        ]
+        .height(Fill);
+        if self.chat_open {
+            panes = panes.push(splitter(
+                SplitAxis::Vertical,
+                self.is_resizing(Splitter::ChatWidth),
+                Message::Resize(ResizeEvent::Start(Splitter::ChatWidth)),
+            ));
+        }
+        panes = panes.push(self.chat_pane().map(Message::Chat));
+
+        container(panes)
+            .width(Fill)
+            .height(Fill)
+            .style(page_style)
+            .into()
+    }
+}
+
+fn window_size_event(event: iced::Event, _: event::Status, _: window::Id) -> Option<Message> {
+    match event {
+        iced::Event::Window(window::Event::Resized(size))
+        | iced::Event::Window(window::Event::Opened { size, .. }) => {
+            Some(Message::Resize(ResizeEvent::WindowResized(size)))
+        }
+        _ => None,
+    }
+}
+
+fn drag_event(event: iced::Event, status: event::Status, id: window::Id) -> Option<Message> {
+    match event {
+        iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+            Some(Message::Resize(ResizeEvent::Moved(position)))
+        }
+        iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            Some(Message::Resize(ResizeEvent::Released))
+        }
+        other => window_size_event(other, status, id),
     }
 }

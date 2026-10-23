@@ -1,6 +1,6 @@
 use iced::{
-    Border, Color, Element, Fill, Shadow, Theme, Vector, color,
-    widget::{button, container, row, text},
+    Border, Color, Element, Fill, Shadow, Theme, Vector, color, mouse,
+    widget::{Space, button, container, mouse_area, row, text},
 };
 
 const fn shade(color: Color, amount: f32) -> Color {
@@ -167,6 +167,51 @@ pub(super) fn label_badge<'a, M: 'a>(
             border: Border::default().rounded(8.0).color(base).width(1),
             ..Default::default()
         })
+        .into()
+}
+
+/// Orientation of the divider line drawn by [`splitter`].
+#[derive(Debug, Clone, Copy)]
+pub(super) enum SplitAxis {
+    /// A vertical line between two side-by-side panes (drag left/right).
+    Vertical,
+    /// A horizontal line between two stacked panes (drag up/down).
+    Horizontal,
+}
+
+/// Thickness of the grabbable area around a pane boundary.
+const SPLITTER_HIT_SIZE: f32 = 7.0;
+
+/// A draggable pane boundary. Emits `on_press` when the user grabs it; the
+/// drag itself is tracked by the application-level mouse subscription.
+pub(super) fn splitter<'a, M: Clone + 'a>(
+    axis: SplitAxis,
+    active: bool,
+    on_press: M,
+) -> Element<'a, M> {
+    let line_color = if active { ACCENT_TEXT } else { OUTLINE };
+    let thickness = if active { 2.0 } else { 1.0 };
+    let line = container(Space::new(0, 0)).style(move |_| container::Style {
+        background: Some(line_color.into()),
+        ..Default::default()
+    });
+    let (handle, interaction) = match axis {
+        SplitAxis::Vertical => (
+            container(line.width(thickness).height(Fill))
+                .center_x(SPLITTER_HIT_SIZE)
+                .height(Fill),
+            mouse::Interaction::ResizingHorizontally,
+        ),
+        SplitAxis::Horizontal => (
+            container(line.width(Fill).height(thickness))
+                .center_y(SPLITTER_HIT_SIZE)
+                .width(Fill),
+            mouse::Interaction::ResizingVertically,
+        ),
+    };
+    mouse_area(handle)
+        .on_press(on_press)
+        .interaction(interaction)
         .into()
 }
 

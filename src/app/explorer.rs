@@ -1,7 +1,7 @@
 use iced::{
-    Alignment, Element, Fill, FillPortion,
+    Alignment, Element, Fill, FillPortion, Length,
     widget::{
-        Space, button, checkbox, column, container, horizontal_rule, row, scrollable, slider, text,
+        Space, button, checkbox, column, container, horizontal_rule, row, scrollable, text,
         text_input,
     },
 };
@@ -31,12 +31,17 @@ pub(super) enum ExplorerMessage {
     ToggleManualLabel(i64, String),
     ToggleManualLabelOnChecked(String),
     AskAboutEmail(i64),
-    ReaderSplitChanged(f32),
+    ReaderResizeStart,
+    ReaderHeaderResizeStart,
     CancelWorker,
 }
 
 pub(super) fn explorer_filter_input_id() -> text_input::Id {
     text_input::Id::new("explorer-quick-filter")
+}
+
+pub(super) fn reader_header_id() -> container::Id {
+    container::Id::new("reader-mail-header")
 }
 
 impl PstRagApp {
@@ -51,18 +56,6 @@ impl PstRagApp {
             row![
                 text(&self.status).size(11).color(muted()).width(Fill),
                 cancel_btn,
-                row![
-                    text("Split").size(10).color(muted()),
-                    slider(
-                        20.0..=80.0,
-                        self.reader_split,
-                        ExplorerMessage::ReaderSplitChanged
-                    )
-                    .width(72)
-                    .height(12),
-                ]
-                .spacing(6)
-                .align_y(Alignment::Center),
                 text(format!(
                     "Showing {} of {} indexed, {} selected, Labeler: {}",
                     self.explorer_messages.len(),
@@ -87,7 +80,17 @@ impl PstRagApp {
         if !self.checked_message_ids.is_empty() {
             col = col.push(self.selection_action_bar());
         }
-        col = col.push(status_bar).push(message_table).push(reading_pane);
+        let split_area = column![
+            message_table,
+            splitter(
+                SplitAxis::Horizontal,
+                self.is_resizing(super::Splitter::TableHeight),
+                ExplorerMessage::ReaderResizeStart,
+            ),
+            reading_pane
+        ]
+        .height(Fill);
+        col = col.push(status_bar).push(split_area);
 
         container(col).width(Fill).height(Fill).into()
     }
@@ -388,15 +391,13 @@ impl PstRagApp {
             }
         }
 
-        let table_portion = (self.reader_split.round() as u16).clamp(20, 80);
-
         container(
             column![header, scrollable(list).height(Fill)]
                 .spacing(0)
                 .height(Fill),
         )
         .width(Fill)
-        .height(FillPortion(table_portion))
+        .height(self.table_height)
         .style(reader_body_style)
         .into()
     }
@@ -493,9 +494,6 @@ impl PstRagApp {
     }
 
     fn reading_pane(&self) -> Element<'_, ExplorerMessage> {
-        let table_portion = (self.reader_split.round() as u16).clamp(20, 80);
-        let reader_portion = 100u16.saturating_sub(table_portion).max(20);
-
         let Some(email) = self.selected_email() else {
             return container(
                 column![
@@ -510,7 +508,7 @@ impl PstRagApp {
                 .align_x(Alignment::Center),
             )
             .width(Fill)
-            .height(FillPortion(reader_portion))
+            .height(Fill)
             .center_x(Fill)
             .center_y(Fill)
             .style(reader_body_style)
@@ -570,59 +568,69 @@ impl PstRagApp {
             );
         }
 
-        let header = container(
-            column![
-                row![
-                    text(subject).size(17).color(bright_text()).width(Fill),
-                    small_button(
-                        "Label with Laya",
-                        (!self.busy)
-                            .then_some(ExplorerMessage::LabelSelectedWith(LabelerBackend::Laya))
-                    ),
-                    small_button(
-                        "Label with LLM Judge",
-                        (!self.busy).then_some(ExplorerMessage::LabelSelectedWith(
-                            LabelerBackend::LlmJudge
-                        ))
-                    ),
-                    small_button(
-                        "Ask Chat about this mail",
-                        Some(ExplorerMessage::AskAboutEmail(email.id))
-                    ),
-                ]
-                .spacing(6)
-                .align_y(Alignment::Center),
-                row![
-                    text(format!("From: {}", email.sender))
-                        .size(12)
-                        .color(bright_text()),
-                    Space::new(16, 0),
-                    text(format!("To: {}", email.recipients))
-                        .size(11)
-                        .color(muted()),
-                    Space::new(Fill, 0),
-                    text(format!(
-                        "{} - {} / {}",
-                        email.sent_at.as_deref().unwrap_or("Unknown date"),
-                        source_name,
-                        email.folder
-                    ))
+        let header_content = column![
+            row![
+                text(subject).size(17).color(bright_text()).width(Fill),
+                small_button(
+                    "Label with Laya",
+                    (!self.busy)
+                        .then_some(ExplorerMessage::LabelSelectedWith(LabelerBackend::Laya))
+                ),
+                small_button(
+                    "Label with LLM Judge",
+                    (!self.busy)
+                        .then_some(ExplorerMessage::LabelSelectedWith(LabelerBackend::LlmJudge))
+                ),
+                small_button(
+                    "Ask Chat about this mail",
+                    Some(ExplorerMessage::AskAboutEmail(email.id))
+                ),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+            row![
+                text(format!("From: {}", email.sender))
+                    .size(12)
+                    .color(bright_text()),
+                Space::new(16, 0),
+                text(format!("To: {}", email.recipients))
                     .size(11)
                     .color(muted()),
-                ]
-                .align_y(Alignment::Center),
-                horizontal_rule(1),
-                row![
-                    container(assigned_row.wrap()).width(FillPortion(1)),
-                    container(quick_toggle_row.wrap()).width(FillPortion(1)),
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center),
+                Space::new(Fill, 0),
+                text(format!(
+                    "{} - {} / {}",
+                    email.sent_at.as_deref().unwrap_or("Unknown date"),
+                    source_name,
+                    email.folder
+                ))
+                .size(11)
+                .color(muted()),
             ]
-            .spacing(6),
+            .align_y(Alignment::Center),
+            horizontal_rule(1),
+            row![
+                container(assigned_row.wrap()).width(FillPortion(1)),
+                container(quick_toggle_row.wrap()).width(FillPortion(1)),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(6);
+
+        // When the user has shrunk the header, or it exceeds the max height,
+        // its contents scroll inside it.
+        let (outer_height, inner_height) = match self.reader_header_height {
+            Some(height) => (Length::Fixed(height.min(super::HEADER_MAX_HEIGHT)), Fill),
+            None => (Length::Shrink, Length::Shrink),
+        };
+        let header = container(
+            scrollable(container(header_content).padding([10, 14]).width(Fill))
+                .height(inner_height),
         )
-        .padding([10, 14])
+        .id(reader_header_id())
         .width(Fill)
+        .height(outer_height)
+        .max_height(super::HEADER_MAX_HEIGHT)
         .style(reader_header_style);
 
         let body_text = if email.body.trim().is_empty() {
@@ -648,11 +656,18 @@ impl PstRagApp {
         .height(Fill)
         .style(reader_body_style);
 
-        column![header, body]
-            .spacing(6)
-            .width(Fill)
-            .height(FillPortion(reader_portion))
-            .into()
+        column![
+            header,
+            splitter(
+                SplitAxis::Horizontal,
+                self.is_resizing(super::Splitter::HeaderHeight),
+                ExplorerMessage::ReaderHeaderResizeStart,
+            ),
+            body
+        ]
+        .width(Fill)
+        .height(Fill)
+        .into()
     }
 }
 

@@ -2,7 +2,7 @@ use crate::model::SearchHit;
 use iced::{
     Alignment, Element, Fill,
     widget::{
-        Space, button, checkbox, column, container, horizontal_rule, row, scrollable, slider, text,
+        Space, button, checkbox, column, container, horizontal_rule, row, scrollable, text,
         text_input,
     },
 };
@@ -12,7 +12,6 @@ use super::{ChatMessage, ChatRole, PstRagApp, markdown::render_markdown_blocks, 
 #[derive(Debug, Clone)]
 pub(super) enum ChatPaneMessage {
     ToggleChatPane,
-    WidthChanged(f32),
     NewChat,
     QuestionChanged(String),
     Ask,
@@ -70,49 +69,20 @@ impl PstRagApp {
                 .into();
         }
 
-        let header = column![
-            row![
-                column![
-                    text("Archive Chat").size(17).color(bright_text()),
-                    text("Grounded RAG assistant - Markdown enabled")
-                        .size(11)
-                        .color(muted())
-                ]
-                .spacing(2)
-                .width(Fill),
-                small_button(
-                    "Wider",
-                    (self.chat_width < 740.0).then_some(ChatPaneMessage::WidthChanged(
-                        (self.chat_width + 80.0).min(760.0)
-                    ))
-                ),
-                small_button(
-                    "Narrower",
-                    (self.chat_width > 330.0).then_some(ChatPaneMessage::WidthChanged(
-                        (self.chat_width - 80.0).max(310.0)
-                    ))
-                ),
-                small_button("New", Some(ChatPaneMessage::NewChat)),
-                small_button("Hide", Some(ChatPaneMessage::ToggleChatPane)),
-            ]
-            .spacing(5)
-            .align_y(Alignment::Center),
-            row![
-                text("Pane width").size(10).color(muted()),
-                slider(
-                    310.0..=760.0,
-                    self.chat_width,
-                    ChatPaneMessage::WidthChanged
-                )
-                .height(14),
-                text(format!("{:.0}px", self.chat_width))
-                    .size(10)
+        let header = row![
+            column![
+                text("Archive Chat").size(17).color(bright_text()),
+                text("Grounded RAG assistant - Markdown enabled")
+                    .size(11)
                     .color(muted())
             ]
-            .spacing(8)
-            .align_y(Alignment::Center)
+            .spacing(2)
+            .width(Fill),
+            small_button("New", Some(ChatPaneMessage::NewChat)),
+            small_button("Hide", Some(ChatPaneMessage::ToggleChatPane)),
         ]
-        .spacing(6);
+        .spacing(5)
+        .align_y(Alignment::Center);
 
         let mut conversation = column![].spacing(12).width(Fill);
         if self.messages.is_empty() {
