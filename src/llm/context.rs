@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{i18n::Language, model::SearchHit};
 
-pub const AGENT_SYSTEM_PROMPT: &str = r#"You are Dungbeetle, an expert email archive intelligence assistant.
+pub const AGENT_SYSTEM_PROMPT: &str = r#"You are an expert email archive intelligence assistant.
 Your task is to answer user questions accurately, objectively, and concisely using ONLY the provided email evidence.
 
 Key Instructions:
@@ -29,7 +29,7 @@ Key Instructions:
    - If the provided email evidence is insufficient, incomplete, or contradictory, explicitly state what is known and what cannot be determined from the available records.
 "#;
 
-pub const AGENT_SYSTEM_PROMPT_FR: &str = r#"Vous êtes Dungbeetle, un assistant expert en analyse d'archives de courriels.
+pub const AGENT_SYSTEM_PROMPT_FR: &str = r#"Vous êtes un assistant expert en analyse d'archives de courriels.
 Votre tâche consiste à répondre aux questions de l'utilisateur de manière précise, objective et concise en utilisant UNIQUEMENT les preuves fournies dans les courriels.
 
 Instructions clés :

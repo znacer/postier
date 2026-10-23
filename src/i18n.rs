@@ -930,7 +930,7 @@ impl Language {
     }
 
     pub fn assistant_badge(self) -> &'static str {
-        "DUNGBEETLE"
+        "ASSISTANT"
     }
 
     pub fn show_context_checkbox(self) -> &'static str {

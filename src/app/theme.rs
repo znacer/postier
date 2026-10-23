@@ -62,7 +62,7 @@ pub(super) fn parse_hex_color(hex: &str) -> Color {
 
 pub(super) fn build_app_theme() -> Theme {
     Theme::custom(
-        "Dungbeetle Material 3".into(),
+        "PSTBeetle Material 3".into(),
         iced::theme::Palette {
             background: BACKGROUND,
             text: NEUTRAL,
@@ -385,7 +385,6 @@ pub(super) fn source_style(_: &Theme) -> container::Style {
 pub(super) fn accent_tile_style(_: &Theme) -> container::Style {
     panel(PRIMARY, PRIMARY, 9.0)
 }
-
 pub(super) fn user_avatar_style(_: &Theme) -> container::Style {
     panel(USER_BUBBLE, USER_BUBBLE, 14.0)
 }

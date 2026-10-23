@@ -310,7 +310,7 @@ pub(crate) fn endpoint_for_log(url: &url::Url) -> String {
 
 fn debug_log(args: std::fmt::Arguments<'_>) {
     #[cfg(debug_assertions)]
-    eprintln!("[dungbeetle] {args}");
+    eprintln!("[pstbeetle] {args}");
     #[cfg(not(debug_assertions))]
     let _ = args;
 }
