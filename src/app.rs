@@ -9,15 +9,20 @@ use crate::{
     db::Index,
     llm::LlmConfig,
     model::{
-        AssignedLabel, EmailRecord, IndexedSource, LabelDefinition, LabelFilter, LabelerBackend,
-        MailScope, MailSort, SearchHit,
+        AssignedLabel, EmailRecord, IndexedSource, LabelDefinition, LabelFilter, MailScope,
+        MailSort, SearchHit,
     },
 };
 use actions::load_config;
+use chat::{ChatPaneMessage, chat_question_input_id};
+use explorer::{ExplorerMessage, explorer_filter_input_id};
 use iced::{
-    Element, Fill, Subscription, Task,
-    widget::{container, row},
+    Element, Fill, Subscription, Task, Theme,
+    keyboard::{self, Key, key::Named},
+    widget::{container, row, text_input},
 };
+use markdown::{MdBlock, parse_markdown};
+use sidebar::SidebarMessage;
 use std::{
     collections::HashSet,
     fs,
@@ -25,12 +30,11 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::Receiver,
     },
-    time::Duration,
 };
-use theme::{app_theme, page_style};
+use theme::{build_app_theme, page_style};
 
+#[derive(Debug, Clone)]
 enum WorkerEvent {
     Progress(String),
     EmailLabeled {
@@ -40,19 +44,22 @@ enum WorkerEvent {
     Finished(WorkerResult),
 }
 
+#[derive(Debug, Clone)]
 enum WorkerResult {
     Indexed(Result<IndexOutcome, String>),
-    Searched(Result<Vec<SearchHit>, String>),
-    Answered(Result<(String, Vec<SearchHit>, String), String>),
+    Searched(Result<Arc<Vec<SearchHit>>, String>),
+    Answered(Result<Arc<(String, Vec<SearchHit>, String)>, String>),
     Labeled(Result<LabelOutcome, String>),
     LayaDownloaded(Result<PathBuf, String>),
 }
 
+#[derive(Debug, Clone)]
 struct IndexOutcome {
     added: usize,
     embedded: usize,
 }
 
+#[derive(Debug, Clone)]
 struct LabelOutcome {
     messages_processed: usize,
     labels_assigned: usize,
@@ -90,30 +97,45 @@ enum ChatRole {
 struct ChatMessage {
     role: ChatRole,
     content: String,
+    blocks: Vec<MdBlock>,
     context_preview: String,
     show_context: bool,
 }
 
 impl ChatMessage {
     fn user(content: String) -> Self {
+        let blocks = parse_markdown(&content);
         Self {
             role: ChatRole::User,
             content,
+            blocks,
             context_preview: String::new(),
             show_context: false,
         }
     }
     fn assistant(content: String, context_preview: String) -> Self {
+        let blocks = parse_markdown(&content);
         Self {
             role: ChatRole::Assistant,
             content,
+            blocks,
             context_preview,
             show_context: false,
         }
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum KeyShortcut {
+    SelectPrevEmail,
+    SelectNextEmail,
+    ToggleCheckSelected,
+    FocusQuickFilter,
+    ClearFilterOrSelection,
+}
+
 pub struct PstRagApp {
+    theme: Theme,
     storage_location_path: PathBuf,
     storage_dir: PathBuf,
     db_path: PathBuf,
@@ -143,69 +165,22 @@ pub struct PstRagApp {
     sidebar_open: bool,
     chat_open: bool,
     chat_width: f32,
+    reader_split: f32,
     busy: bool,
     config: LlmConfig,
-    worker: Option<Receiver<WorkerEvent>>,
     cancel_flag: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    ChooseArchive,
-    ChooseStorage,
-    Index,
-    SaveCredentials,
-    Ask,
-    SearchLocally,
-    NewChat,
-    QuestionChanged(String),
-    EndpointChanged(String),
-    ModelChanged(String),
-    EmbeddingModelChanged(String),
-    RemoteEmbeddingsChanged(bool),
-    SourceEnabledChanged(String, bool),
-    FolderTreeEnabledChanged(String, Vec<String>, bool),
-    ToggleFolderTreeNode(String, String),
-    RemoveSourceRequested(String),
-    ConfirmRemoveSource,
-    CancelRemoveSource,
-    ToggleSidebarSection(SidebarSection),
-    TokenChanged(String),
-    ToggleContext(usize, bool),
-    ToggleSources,
-    ToggleHit(usize),
-    UsePrompt(&'static str),
-    SelectEmail(i64),
-    ToggleCheckEmail(i64, bool),
-    ToggleCheckAllVisible(bool),
-    SelectUnlabeledVisible,
-    SelectRangeTo(i64),
-    ClearCheckedEmails,
-    SelectMailScope(MailScope),
-    SelectLabelFilter(LabelFilter),
-    ExplorerFilterChanged(String),
-    SetMailSort(MailSort),
-    SetLabelerBackend(LabelerBackend),
-    LabelFocusedEmail,
-    LabelSelectedWith(LabelerBackend),
-    LabelCheckedWith(LabelerBackend),
-    LabelVisibleMessages,
-    ToggleManualLabel(i64, String),
-    ToggleManualLabelOnChecked(String),
-    NewLabelNameChanged(String),
-    NewLabelDescriptionChanged(String),
-    SaveLabelDefinition,
-    RemoveLabelDefinition(String),
-    LayaGgufPathChanged(String),
-    ChooseLayaGguf,
-    DownloadLayaGguf,
-    ToggleSidebar,
-    ToggleChatPane,
-    ChatWidthChanged(f32),
-    AskAboutEmail(i64),
-    MarkdownLinkClicked(String),
-    CancelWorker,
-    Tick,
+    Sidebar(SidebarMessage),
+    Explorer(ExplorerMessage),
+    Chat(ChatPaneMessage),
+    ArchiveChosen(Option<PathBuf>),
+    StorageDirChosen(Option<PathBuf>),
+    LayaGgufChosen(Option<PathBuf>),
+    Worker(WorkerEvent),
+    KeyPressed(KeyShortcut),
 }
 
 pub fn run() -> iced::Result {
@@ -215,7 +190,7 @@ pub fn run() -> iced::Result {
         PstRagApp::view,
     )
     .subscription(PstRagApp::subscription)
-    .theme(|_| app_theme())
+    .theme(PstRagApp::theme)
     .window_size((1440.0, 860.0))
     .run_with(|| (PstRagApp::new(), Task::none()))
 }
@@ -238,6 +213,7 @@ impl PstRagApp {
             .map(|db| (db.count().unwrap_or(0), db.sources().unwrap_or_default()))
             .unwrap_or_default();
         let mut app = Self {
+            theme: build_app_theme(),
             storage_location_path,
             storage_dir,
             db_path,
@@ -267,197 +243,363 @@ impl PstRagApp {
             sidebar_open: true,
             chat_open: true,
             chat_width: 410.0,
+            reader_split: 45.0,
             busy: false,
             config,
-            worker: None,
             cancel_flag: None,
         };
         app.refresh_explorer();
         app
     }
 
+    fn theme(&self) -> Theme {
+        self.theme.clone()
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::ChooseArchive => self.choose_archive(),
-            Message::ChooseStorage => self.choose_storage_dir(),
-            Message::Index => self.index(),
-            Message::SaveCredentials => self.save_credentials(),
-            Message::Ask => self.ask(),
-            Message::SearchLocally => self.search_locally(),
-            Message::NewChat => self.new_chat(),
-            Message::QuestionChanged(value) => self.question = value,
-            Message::EndpointChanged(value) => self.config.endpoint = value,
-            Message::ModelChanged(value) => self.config.model = value,
-            Message::EmbeddingModelChanged(value) => self.config.embedding_model = value,
-            Message::RemoteEmbeddingsChanged(value) => self.config.use_remote_embeddings = value,
-            Message::SourceEnabledChanged(source, enabled) => {
-                self.set_source_enabled(&source, enabled)
+            Message::Sidebar(msg) => self.update_sidebar(msg),
+            Message::Explorer(msg) => self.update_explorer(msg),
+            Message::Chat(msg) => self.update_chat(msg),
+            Message::ArchiveChosen(Some(path)) => {
+                self.archive = Some(path);
+                Task::none()
             }
-            Message::FolderTreeEnabledChanged(source, folders, enabled) => {
-                self.set_folders_enabled(&source, &folders, enabled)
+            Message::ArchiveChosen(None) => Task::none(),
+            Message::StorageDirChosen(Some(path)) => {
+                self.apply_storage_dir(path);
+                Task::none()
             }
-            Message::ToggleFolderTreeNode(source, folder) => {
+            Message::StorageDirChosen(None) => Task::none(),
+            Message::LayaGgufChosen(Some(path)) => {
+                self.apply_laya_gguf(path);
+                Task::none()
+            }
+            Message::LayaGgufChosen(None) => Task::none(),
+            Message::Worker(event) => {
+                self.handle_worker_event(event);
+                Task::none()
+            }
+            Message::KeyPressed(shortcut) => self.handle_key_shortcut(shortcut),
+        }
+    }
+
+    fn update_sidebar(&mut self, message: SidebarMessage) -> Task<Message> {
+        match message {
+            SidebarMessage::ToggleSidebar => {
+                self.sidebar_open = !self.sidebar_open;
+                Task::none()
+            }
+            SidebarMessage::ToggleSection(section) => {
+                let index = section.index();
+                self.collapsed_sections[index] = !self.collapsed_sections[index];
+                Task::none()
+            }
+            SidebarMessage::ChooseArchive => self.choose_archive(),
+            SidebarMessage::Index => self.index(),
+            SidebarMessage::ChooseStorage => self.choose_storage_dir(),
+            SidebarMessage::SaveCredentials => {
+                self.save_credentials();
+                Task::none()
+            }
+            SidebarMessage::SelectMailScope(scope) => {
+                self.mail_scope = scope;
+                self.refresh_explorer_messages();
+                Task::none()
+            }
+            SidebarMessage::SourceEnabledChanged(source, enabled) => {
+                self.set_source_enabled(&source, enabled);
+                Task::none()
+            }
+            SidebarMessage::FolderTreeEnabledChanged(source, folders, enabled) => {
+                self.set_folders_enabled(&source, &folders, enabled);
+                Task::none()
+            }
+            SidebarMessage::ToggleFolderTreeNode(source, folder) => {
                 let key = (source, folder);
                 if !self.collapsed_source_folders.remove(&key) {
                     self.collapsed_source_folders.insert(key);
                 }
+                Task::none()
             }
-            Message::RemoveSourceRequested(source) => self.pending_remove_source = Some(source),
-            Message::ConfirmRemoveSource => self.remove_pending_source(),
-            Message::CancelRemoveSource => self.pending_remove_source = None,
-            Message::ToggleSidebarSection(section) => {
-                let index = section.index();
-                self.collapsed_sections[index] = !self.collapsed_sections[index];
+            SidebarMessage::RemoveSourceRequested(source) => {
+                self.pending_remove_source = Some(source);
+                Task::none()
             }
-            Message::TokenChanged(value) => self.config.bearer_token = value,
-            Message::ToggleContext(index, value) => {
-                if let Some(message) = self.messages.get_mut(index) {
-                    message.show_context = value
-                }
+            SidebarMessage::ConfirmRemoveSource => {
+                self.remove_pending_source();
+                Task::none()
             }
-            Message::ToggleSources => self.show_sources = !self.show_sources,
-            Message::ToggleHit(index) => {
-                self.expanded_hit = (self.expanded_hit != Some(index)).then_some(index)
+            SidebarMessage::CancelRemoveSource => {
+                self.pending_remove_source = None;
+                Task::none()
             }
-            Message::UsePrompt(prompt) => {
-                self.question = prompt.into();
-                self.chat_open = true;
+            SidebarMessage::SelectLabelFilter(filter) => {
+                self.label_filter = filter;
+                self.refresh_explorer_messages();
+                Task::none()
             }
-            Message::SelectEmail(id) => self.select_email(id),
-            Message::ToggleCheckEmail(id, checked) => self.toggle_check_email(id, checked),
-            Message::ToggleCheckAllVisible(checked) => self.toggle_check_all_visible(checked),
-            Message::SelectUnlabeledVisible => self.select_unlabeled_visible(),
-            Message::SelectRangeTo(id) => self.select_range_to(id),
-            Message::ClearCheckedEmails => {
+            SidebarMessage::NewLabelNameChanged(value) => {
+                self.new_label_name = value;
+                Task::none()
+            }
+            SidebarMessage::NewLabelDescriptionChanged(value) => {
+                self.new_label_description = value;
+                Task::none()
+            }
+            SidebarMessage::SaveLabelDefinition => {
+                self.save_label_definition();
+                Task::none()
+            }
+            SidebarMessage::RemoveLabelDefinition(name) => {
+                self.remove_label_definition(&name);
+                Task::none()
+            }
+            SidebarMessage::LayaGgufPathChanged(path) => {
+                self.config.laya_gguf_path = path;
+                Task::none()
+            }
+            SidebarMessage::ChooseLayaGguf => self.choose_laya_gguf(),
+            SidebarMessage::DownloadLayaGguf => self.download_laya_gguf(),
+            SidebarMessage::EndpointChanged(value) => {
+                self.config.endpoint = value;
+                Task::none()
+            }
+            SidebarMessage::ModelChanged(value) => {
+                self.config.model = value;
+                Task::none()
+            }
+            SidebarMessage::TokenChanged(value) => {
+                self.config.bearer_token = value;
+                Task::none()
+            }
+            SidebarMessage::RemoteEmbeddingsChanged(value) => {
+                self.config.use_remote_embeddings = value;
+                Task::none()
+            }
+            SidebarMessage::EmbeddingModelChanged(value) => {
+                self.config.embedding_model = value;
+                Task::none()
+            }
+        }
+    }
+
+    fn update_explorer(&mut self, message: ExplorerMessage) -> Task<Message> {
+        match message {
+            ExplorerMessage::ToggleSidebar => {
+                self.sidebar_open = !self.sidebar_open;
+                Task::none()
+            }
+            ExplorerMessage::ToggleChatPane => {
+                self.chat_open = !self.chat_open;
+                Task::none()
+            }
+            ExplorerMessage::SelectEmail(id) => {
+                self.select_email(id);
+                Task::none()
+            }
+            ExplorerMessage::ToggleCheckEmail(id, checked) => {
+                self.toggle_check_email(id, checked);
+                Task::none()
+            }
+            ExplorerMessage::ToggleCheckAllVisible(checked) => {
+                self.toggle_check_all_visible(checked);
+                Task::none()
+            }
+            ExplorerMessage::SelectUnlabeledVisible => {
+                self.select_unlabeled_visible();
+                Task::none()
+            }
+            ExplorerMessage::SelectRangeTo(id) => {
+                self.select_range_to(id);
+                Task::none()
+            }
+            ExplorerMessage::ClearCheckedEmails => {
                 self.checked_message_ids.clear();
                 self.status = "Cleared mail selection".into();
+                Task::none()
             }
-            Message::SelectMailScope(scope) => {
-                self.mail_scope = scope;
-                self.refresh_explorer();
-            }
-            Message::SelectLabelFilter(filter) => {
+            ExplorerMessage::SelectLabelFilter(filter) => {
                 self.label_filter = filter;
-                self.refresh_explorer();
+                self.refresh_explorer_messages();
+                Task::none()
             }
-            Message::ExplorerFilterChanged(query) => {
+            ExplorerMessage::FilterChanged(query) => {
                 self.filter_query = query;
-                self.refresh_explorer();
+                self.refresh_explorer_messages();
+                Task::none()
             }
-            Message::SetMailSort(sort) => {
+            ExplorerMessage::SetMailSort(sort) => {
                 self.mail_sort = sort;
-                self.refresh_explorer();
+                self.refresh_explorer_messages();
+                Task::none()
             }
-            Message::SetLabelerBackend(backend) => {
+            ExplorerMessage::SetLabelerBackend(backend) => {
                 self.config.labeler_backend = backend;
                 self.status = format!("Active mail labeler switched to {}", backend.display_name());
+                Task::none()
             }
-            Message::LabelFocusedEmail => {
-                self.label_selected_message(self.config.labeler_backend);
+            ExplorerMessage::LabelFocusedEmail => {
+                self.label_selected_message(self.config.labeler_backend)
             }
-            Message::LabelSelectedWith(backend) => {
-                self.label_selected_message(backend);
-            }
-            Message::LabelCheckedWith(backend) => {
-                self.label_checked_messages(backend);
-            }
-            Message::LabelVisibleMessages => {
-                self.label_visible_messages();
-            }
-            Message::ToggleManualLabel(message_id, label) => {
+            ExplorerMessage::LabelSelectedWith(backend) => self.label_selected_message(backend),
+            ExplorerMessage::LabelCheckedWith(backend) => self.label_checked_messages(backend),
+            ExplorerMessage::LabelVisibleMessages => self.label_visible_messages(),
+            ExplorerMessage::ToggleManualLabel(message_id, label) => {
                 self.toggle_manual_label(message_id, &label);
+                Task::none()
             }
-            Message::ToggleManualLabelOnChecked(label) => {
+            ExplorerMessage::ToggleManualLabelOnChecked(label) => {
                 self.toggle_manual_label_on_checked(&label);
+                Task::none()
             }
-            Message::NewLabelNameChanged(value) => self.new_label_name = value,
-            Message::NewLabelDescriptionChanged(value) => self.new_label_description = value,
-            Message::SaveLabelDefinition => self.save_label_definition(),
-            Message::RemoveLabelDefinition(name) => self.remove_label_definition(&name),
-            Message::LayaGgufPathChanged(path) => self.config.laya_gguf_path = path,
-            Message::ChooseLayaGguf => self.choose_laya_gguf(),
-            Message::DownloadLayaGguf => self.download_laya_gguf(),
-            Message::ToggleSidebar => self.sidebar_open = !self.sidebar_open,
-            Message::ToggleChatPane => self.chat_open = !self.chat_open,
-            Message::ChatWidthChanged(width) => self.chat_width = width.clamp(310.0, 760.0),
-            Message::AskAboutEmail(message_id) => self.ask_about_email(message_id),
-            Message::MarkdownLinkClicked(url) => {
-                self.status = format!("Link: {url}");
+            ExplorerMessage::AskAboutEmail(message_id) => self.ask_about_email(message_id),
+            ExplorerMessage::ReaderSplitChanged(split) => {
+                self.reader_split = split.clamp(20.0, 80.0);
+                Task::none()
             }
-            Message::CancelWorker => {
+            ExplorerMessage::CancelWorker => {
                 if let Some(flag) = &self.cancel_flag {
                     flag.store(true, Ordering::Relaxed);
                 }
                 self.status = "Cancelling background task...".into();
+                Task::none()
             }
-            Message::Tick => self.poll_worker(),
         }
-        Task::none()
+    }
+
+    fn update_chat(&mut self, message: ChatPaneMessage) -> Task<Message> {
+        match message {
+            ChatPaneMessage::ToggleChatPane => {
+                self.chat_open = !self.chat_open;
+                Task::none()
+            }
+            ChatPaneMessage::WidthChanged(width) => {
+                self.chat_width = width.clamp(310.0, 760.0);
+                Task::none()
+            }
+            ChatPaneMessage::NewChat => {
+                self.new_chat();
+                Task::none()
+            }
+            ChatPaneMessage::QuestionChanged(value) => {
+                self.question = value;
+                Task::none()
+            }
+            ChatPaneMessage::Ask => self.ask(),
+            ChatPaneMessage::SearchLocally => self.search_locally(),
+            ChatPaneMessage::UsePrompt(prompt) => {
+                self.question = prompt.into();
+                self.chat_open = true;
+                text_input::focus(chat_question_input_id())
+            }
+            ChatPaneMessage::ToggleContext(index, value) => {
+                if let Some(message) = self.messages.get_mut(index) {
+                    message.show_context = value;
+                }
+                Task::none()
+            }
+            ChatPaneMessage::ToggleSources => {
+                self.show_sources = !self.show_sources;
+                Task::none()
+            }
+            ChatPaneMessage::ToggleHit(index) => {
+                self.expanded_hit = (self.expanded_hit != Some(index)).then_some(index);
+                Task::none()
+            }
+            ChatPaneMessage::SelectEmail(id) => {
+                self.select_email(id);
+                Task::none()
+            }
+            ChatPaneMessage::MarkdownLinkClicked(url) => {
+                self.status = format!("Link: {url}");
+                Task::none()
+            }
+        }
+    }
+
+    fn handle_key_shortcut(&mut self, shortcut: KeyShortcut) -> Task<Message> {
+        match shortcut {
+            KeyShortcut::SelectPrevEmail => {
+                self.select_adjacent_email(-1);
+                Task::none()
+            }
+            KeyShortcut::SelectNextEmail => {
+                self.select_adjacent_email(1);
+                Task::none()
+            }
+            KeyShortcut::ToggleCheckSelected => {
+                self.toggle_check_selected_email();
+                Task::none()
+            }
+            KeyShortcut::FocusQuickFilter => text_input::focus(explorer_filter_input_id()),
+            KeyShortcut::ClearFilterOrSelection => {
+                if !self.filter_query.is_empty() {
+                    self.filter_query.clear();
+                    self.refresh_explorer_messages();
+                } else if !self.checked_message_ids.is_empty() {
+                    self.checked_message_ids.clear();
+                    self.status = "Cleared mail selection".into();
+                }
+                Task::none()
+            }
+        }
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        if self.busy {
-            iced::time::every(Duration::from_millis(30)).map(|_| Message::Tick)
-        } else {
-            Subscription::none()
-        }
+        keyboard::on_key_press(|key, modifiers| {
+            if modifiers.command() || modifiers.control() || modifiers.alt() {
+                return None;
+            }
+            match key.as_ref() {
+                Key::Named(Named::ArrowUp) | Key::Character("k") => {
+                    Some(Message::KeyPressed(KeyShortcut::SelectPrevEmail))
+                }
+                Key::Named(Named::ArrowDown) | Key::Character("j") => {
+                    Some(Message::KeyPressed(KeyShortcut::SelectNextEmail))
+                }
+                Key::Named(Named::Space) | Key::Character("x") => {
+                    Some(Message::KeyPressed(KeyShortcut::ToggleCheckSelected))
+                }
+                Key::Character("/") => Some(Message::KeyPressed(KeyShortcut::FocusQuickFilter)),
+                Key::Named(Named::Escape) => {
+                    Some(Message::KeyPressed(KeyShortcut::ClearFilterOrSelection))
+                }
+                _ => None,
+            }
+        })
     }
 
-    fn poll_worker(&mut self) {
-        let mut events = Vec::new();
-        let mut disconnected = false;
-        if let Some(receiver) = &self.worker {
-            loop {
-                match receiver.try_recv() {
-                    Ok(event) => events.push(event),
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
-                    }
-                }
+    fn handle_worker_event(&mut self, event: WorkerEvent) {
+        match event {
+            WorkerEvent::Progress(status) => {
+                self.status = status;
             }
-        }
-
-        for event in events {
-            match event {
-                WorkerEvent::Progress(status) => {
-                    self.status = status;
-                }
-                WorkerEvent::EmailLabeled { message_id, labels } => {
-                    if let Some(email) = self
-                        .explorer_messages
-                        .iter_mut()
-                        .find(|m| m.id == message_id)
-                    {
-                        let mut merged: Vec<AssignedLabel> = email
-                            .labels
-                            .iter()
-                            .filter(|l| l.source == "manual")
-                            .cloned()
-                            .collect();
-                        for assigned in labels {
-                            if !merged.iter().any(|l| l.label == assigned.label) {
-                                merged.push(assigned);
-                            }
+            WorkerEvent::EmailLabeled { message_id, labels } => {
+                if let Some(email) = self
+                    .explorer_messages
+                    .iter_mut()
+                    .find(|m| m.id == message_id)
+                {
+                    let mut merged: Vec<AssignedLabel> = email
+                        .labels
+                        .iter()
+                        .filter(|l| l.source == "manual")
+                        .cloned()
+                        .collect();
+                    for assigned in labels {
+                        if !merged.iter().any(|l| l.label == assigned.label) {
+                            merged.push(assigned);
                         }
-                        email.labels = merged;
                     }
-                }
-                WorkerEvent::Finished(result) => {
-                    self.busy = false;
-                    self.worker = None;
-                    self.cancel_flag = None;
-                    self.handle_worker_result(result);
-                    return;
+                    email.labels = merged;
                 }
             }
-        }
-
-        if disconnected {
-            self.busy = false;
-            self.worker = None;
-            self.cancel_flag = None;
+            WorkerEvent::Finished(result) => {
+                self.busy = false;
+                self.cancel_flag = None;
+                self.handle_worker_result(result);
+            }
         }
     }
 
@@ -480,6 +622,7 @@ impl PstRagApp {
             }
             WorkerResult::Indexed(Err(error)) => self.status = error,
             WorkerResult::Searched(Ok(hits)) => {
+                let hits = Arc::unwrap_or_clone(hits);
                 let count = hits.len();
                 self.hits = hits;
                 self.show_sources = false;
@@ -503,7 +646,8 @@ impl PstRagApp {
                 ));
                 self.status = error;
             }
-            WorkerResult::Answered(Ok((answer, hits, preview))) => {
+            WorkerResult::Answered(Ok(payload)) => {
+                let (answer, hits, preview) = Arc::unwrap_or_clone(payload);
                 self.chat_open = true;
                 self.messages.push(ChatMessage::assistant(answer, preview));
                 self.hits = hits;
@@ -560,10 +704,17 @@ impl PstRagApp {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        container(row![self.sidebar(), self.explorer(), self.chat_pane()].height(Fill))
-            .width(Fill)
-            .height(Fill)
-            .style(page_style)
-            .into()
+        container(
+            row![
+                self.sidebar().map(Message::Sidebar),
+                self.explorer().map(Message::Explorer),
+                self.chat_pane().map(Message::Chat),
+            ]
+            .height(Fill),
+        )
+        .width(Fill)
+        .height(Fill)
+        .style(page_style)
+        .into()
     }
 }

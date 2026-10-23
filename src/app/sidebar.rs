@@ -7,8 +7,38 @@ use iced::{
 };
 use std::collections::{BTreeMap, HashSet};
 
-use super::{Message, PstRagApp, SidebarSection, theme::*};
+use super::{PstRagApp, SidebarSection, theme::*};
 use crate::model::{IndexedFolder, LabelFilter, MailScope};
+
+#[derive(Debug, Clone)]
+pub(super) enum SidebarMessage {
+    ToggleSidebar,
+    ToggleSection(SidebarSection),
+    ChooseArchive,
+    Index,
+    ChooseStorage,
+    SaveCredentials,
+    SelectMailScope(MailScope),
+    SourceEnabledChanged(String, bool),
+    FolderTreeEnabledChanged(String, Vec<String>, bool),
+    ToggleFolderTreeNode(String, String),
+    RemoveSourceRequested(String),
+    ConfirmRemoveSource,
+    CancelRemoveSource,
+    SelectLabelFilter(LabelFilter),
+    NewLabelNameChanged(String),
+    NewLabelDescriptionChanged(String),
+    SaveLabelDefinition,
+    RemoveLabelDefinition(String),
+    LayaGgufPathChanged(String),
+    ChooseLayaGguf,
+    DownloadLayaGguf,
+    EndpointChanged(String),
+    ModelChanged(String),
+    TokenChanged(String),
+    RemoteEmbeddingsChanged(bool),
+    EmbeddingModelChanged(String),
+}
 
 #[derive(Default)]
 struct FolderTree<'a> {
@@ -97,7 +127,7 @@ pub(crate) fn folder_tree_rows<'a>(
 }
 
 impl PstRagApp {
-    pub(super) fn sidebar(&self) -> Element<'_, Message> {
+    pub(super) fn sidebar(&self) -> Element<'_, SidebarMessage> {
         if !self.sidebar_open {
             let expand_rail = button(
                 column![
@@ -115,7 +145,7 @@ impl PstRagApp {
             .height(Fill)
             .padding([16, 4])
             .style(button::text)
-            .on_press(Message::ToggleSidebar);
+            .on_press(SidebarMessage::ToggleSidebar);
 
             return container(expand_rail)
                 .width(36)
@@ -130,16 +160,19 @@ impl PstRagApp {
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .unwrap_or("No archive selected");
-        let choose = small_button("Choose PST", (!self.busy).then_some(Message::ChooseArchive));
+        let choose = small_button(
+            "Choose PST",
+            (!self.busy).then_some(SidebarMessage::ChooseArchive),
+        );
         let index = small_button(
             "Index now",
-            (!self.busy && self.archive.is_some()).then_some(Message::Index),
+            (!self.busy && self.archive.is_some()).then_some(SidebarMessage::Index),
         );
         let storage = small_button(
             "Choose directory",
-            (!self.busy).then_some(Message::ChooseStorage),
+            (!self.busy).then_some(SidebarMessage::ChooseStorage),
         );
-        let save = small_button("Save AI settings", Some(Message::SaveCredentials));
+        let save = small_button("Save AI settings", Some(SidebarMessage::SaveCredentials));
 
         let all_selected = self.mail_scope == MailScope::AllMessages;
         let all_mail_btn = button(
@@ -156,7 +189,7 @@ impl PstRagApp {
         } else {
             button::secondary
         })
-        .on_press(Message::SelectMailScope(MailScope::AllMessages));
+        .on_press(SidebarMessage::SelectMailScope(MailScope::AllMessages));
 
         let mut mailbox_col = column![
             all_mail_btn,
@@ -181,7 +214,7 @@ impl PstRagApp {
                     checkbox("", source.enabled)
                         .size(14)
                         .on_toggle(move |enabled| {
-                            Message::SourceEnabledChanged(source_key.clone(), enabled)
+                            SidebarMessage::SourceEnabledChanged(source_key.clone(), enabled)
                         }),
                     button(text(format!("{} ({})", source.name, source.message_count)).size(12))
                         .padding([3, 6])
@@ -191,7 +224,7 @@ impl PstRagApp {
                         } else {
                             button::text
                         })
-                        .on_press(Message::SelectMailScope(MailScope::Source(
+                        .on_press(SidebarMessage::SelectMailScope(MailScope::Source(
                             source_key_select
                         ))),
                 ]
@@ -221,7 +254,7 @@ impl PstRagApp {
                 let check = checkbox("", source.enabled && tree_row.enabled)
                     .size(13)
                     .on_toggle(move |enabled| {
-                        Message::FolderTreeEnabledChanged(
+                        SidebarMessage::FolderTreeEnabledChanged(
                             source_key.clone(),
                             folder_paths.clone(),
                             enabled,
@@ -237,7 +270,7 @@ impl PstRagApp {
                 } else {
                     button::text
                 })
-                .on_press(Message::SelectMailScope(MailScope::Folder {
+                .on_press(SidebarMessage::SelectMailScope(MailScope::Folder {
                     source_key: source_key_folder,
                     folder_prefix: row_path,
                 }));
@@ -254,7 +287,10 @@ impl PstRagApp {
                             button(text(toggle_label).size(10).color(muted()))
                                 .padding([2, 4])
                                 .style(button::text)
-                                .on_press(Message::ToggleFolderTreeNode(source_key, folder_path)),
+                                .on_press(SidebarMessage::ToggleFolderTreeNode(
+                                    source_key,
+                                    folder_path
+                                )),
                         ]
                         .spacing(4)
                         .align_y(Alignment::Center),
@@ -272,8 +308,8 @@ impl PstRagApp {
                     column![
                         text("Remove this PST's messages and embeddings?").size(10),
                         row![
-                            small_button("Cancel", Some(Message::CancelRemoveSource)),
-                            small_button("Remove", Some(Message::ConfirmRemoveSource))
+                            small_button("Cancel", Some(SidebarMessage::CancelRemoveSource)),
+                            small_button("Remove", Some(SidebarMessage::ConfirmRemoveSource))
                         ]
                         .spacing(6)
                     ]
@@ -282,7 +318,8 @@ impl PstRagApp {
             } else {
                 source_view = source_view.push(small_button(
                     "Remove index",
-                    (!self.busy).then_some(Message::RemoveSourceRequested(source.key.clone())),
+                    (!self.busy)
+                        .then_some(SidebarMessage::RemoveSourceRequested(source.key.clone())),
                 ));
             }
             mailbox_col = mailbox_col.push(container(source_view).padding([4, 0]));
@@ -291,10 +328,13 @@ impl PstRagApp {
 
         let mut labels_col = column![
             row![
-                small_button("All", Some(Message::SelectLabelFilter(LabelFilter::Any))),
+                small_button(
+                    "All",
+                    Some(SidebarMessage::SelectLabelFilter(LabelFilter::Any))
+                ),
                 small_button(
                     format!("Unlabeled ({})", self.unlabeled_count),
-                    Some(Message::SelectLabelFilter(LabelFilter::Unlabeled))
+                    Some(SidebarMessage::SelectLabelFilter(LabelFilter::Unlabeled))
                 ),
             ]
             .spacing(6)
@@ -321,8 +361,13 @@ impl PstRagApp {
                     } else {
                         button::text
                     })
-                    .on_press(Message::SelectLabelFilter(LabelFilter::Labeled(label_name))),
-                    small_button("Delete", Some(Message::RemoveLabelDefinition(label_del))),
+                    .on_press(SidebarMessage::SelectLabelFilter(LabelFilter::Labeled(
+                        label_name
+                    ))),
+                    small_button(
+                        "Delete",
+                        Some(SidebarMessage::RemoveLabelDefinition(label_del))
+                    ),
                 ]
                 .spacing(4)
                 .align_y(Alignment::Center),
@@ -335,7 +380,8 @@ impl PstRagApp {
             .push(text("Add or update label").size(11).color(muted()))
             .push(
                 text_input("Label name (e.g. Billing)", &self.new_label_name)
-                    .on_input(Message::NewLabelNameChanged)
+                    .on_input(SidebarMessage::NewLabelNameChanged)
+                    .on_submit_maybe(can_add_label.then_some(SidebarMessage::SaveLabelDefinition))
                     .size(11)
                     .padding(6),
             )
@@ -344,13 +390,14 @@ impl PstRagApp {
                     "Criteria description for Laya or LLM Judge",
                     &self.new_label_description,
                 )
-                .on_input(Message::NewLabelDescriptionChanged)
+                .on_input(SidebarMessage::NewLabelDescriptionChanged)
+                .on_submit_maybe(can_add_label.then_some(SidebarMessage::SaveLabelDefinition))
                 .size(11)
                 .padding(6),
             )
             .push(small_button(
                 "Save Label",
-                can_add_label.then_some(Message::SaveLabelDefinition),
+                can_add_label.then_some(SidebarMessage::SaveLabelDefinition),
             ));
         let labels_card = card(labels_col);
 
@@ -367,17 +414,17 @@ impl PstRagApp {
                     "Optional path to Laya-Q8_0.gguf",
                     &self.config.laya_gguf_path
                 )
-                .on_input(Message::LayaGgufPathChanged)
+                .on_input(SidebarMessage::LayaGgufPathChanged)
                 .size(11)
                 .padding(6),
                 row![
                     small_button(
                         "Choose GGUF...",
-                        (!self.busy).then_some(Message::ChooseLayaGguf)
+                        (!self.busy).then_some(SidebarMessage::ChooseLayaGguf)
                     ),
                     small_button(
                         "Download Q8_0",
-                        (!self.busy).then_some(Message::DownloadLayaGguf)
+                        (!self.busy).then_some(SidebarMessage::DownloadLayaGguf)
                     ),
                 ]
                 .spacing(6),
@@ -392,18 +439,18 @@ impl PstRagApp {
             column![
                 text("Endpoint").size(11),
                 text_input("https://...", &self.config.endpoint)
-                    .on_input(Message::EndpointChanged)
+                    .on_input(SidebarMessage::EndpointChanged)
                     .size(11)
                     .padding(6),
                 text("Model").size(11),
                 text_input("Model name", &self.config.model)
-                    .on_input(Message::ModelChanged)
+                    .on_input(SidebarMessage::ModelChanged)
                     .size(11)
                     .padding(6),
                 text("API key").size(11),
                 text_input("Optional bearer token", &self.config.bearer_token)
                     .secure(true)
-                    .on_input(Message::TokenChanged)
+                    .on_input(SidebarMessage::TokenChanged)
                     .size(11)
                     .padding(6),
                 horizontal_rule(1),
@@ -413,10 +460,10 @@ impl PstRagApp {
                 )
                 .size(13)
                 .text_size(11)
-                .on_toggle(Message::RemoteEmbeddingsChanged),
+                .on_toggle(SidebarMessage::RemoteEmbeddingsChanged),
                 text("Embedding model").size(11),
                 text_input("Embedding model name", &self.config.embedding_model)
-                    .on_input(Message::EmbeddingModelChanged)
+                    .on_input(SidebarMessage::EmbeddingModelChanged)
                     .size(11)
                     .padding(6),
                 text("HTTPS required except for 127.0.0.1")
@@ -451,7 +498,7 @@ impl PstRagApp {
             ]
             .spacing(1)
             .width(Fill),
-            small_button("Hide", Some(Message::ToggleSidebar)),
+            small_button("Hide", Some(SidebarMessage::ToggleSidebar)),
         ]
         .spacing(10)
         .align_y(Alignment::Center);
@@ -469,7 +516,11 @@ impl PstRagApp {
             (SidebarSection::Storage, "STORAGE", storage_card),
         ] {
             let collapsed = self.collapsed_sections[section.index()];
-            contents = contents.push(collapsible_section_label(label, collapsed, section));
+            contents = contents.push(collapsible_section_label(
+                label,
+                collapsed,
+                SidebarMessage::ToggleSection(section),
+            ));
             if !collapsed {
                 contents = contents.push(body);
             }

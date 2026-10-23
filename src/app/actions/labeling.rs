@@ -1,11 +1,9 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-    thread,
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
+
+use iced::Task;
 
 use crate::{
     db::Index,
@@ -15,8 +13,8 @@ use crate::{
 };
 
 use super::{
-    super::{LabelOutcome, PstRagApp, WorkerEvent, WorkerResult},
-    CUSTOM_LABEL_PALETTE,
+    super::{LabelOutcome, Message, PstRagApp, WorkerEvent, WorkerResult},
+    CUSTOM_LABEL_PALETTE, emit_worker_event, spawn_worker,
 };
 
 impl PstRagApp {
@@ -28,24 +26,29 @@ impl PstRagApp {
             .unwrap_or("#2563eb")
     }
 
-    pub(in crate::app) fn label_selected_message(&mut self, backend: LabelerBackend) {
+    pub(in crate::app) fn label_selected_message(
+        &mut self,
+        backend: LabelerBackend,
+    ) -> Task<Message> {
         if self.busy {
-            return;
+            return Task::none();
         }
         let Some(selected) = self.selected_email().cloned() else {
             self.status = "Select an email in the explorer first".into();
-            return;
+            return Task::none();
         };
-        self.run_labeling_job(vec![selected], backend);
+        self.run_labeling_job(vec![selected], backend)
     }
 
-    pub(in crate::app) fn label_checked_messages(&mut self, backend: LabelerBackend) {
+    pub(in crate::app) fn label_checked_messages(
+        &mut self,
+        backend: LabelerBackend,
+    ) -> Task<Message> {
         if self.busy {
-            return;
+            return Task::none();
         }
         if self.checked_message_ids.is_empty() {
-            self.label_selected_message(backend);
-            return;
+            return self.label_selected_message(backend);
         }
         let mut ordered_ids: Vec<i64> = self
             .explorer_messages
@@ -63,36 +66,38 @@ impl PstRagApp {
                 Ok(records) if !records.is_empty() => records,
                 Ok(_) => {
                     self.status = "No matching emails found for selection".into();
-                    return;
+                    return Task::none();
                 }
                 Err(error) => {
                     self.status = format!("Could not load selected emails: {error:#}");
-                    return;
+                    return Task::none();
                 }
             };
-        self.run_labeling_job(batch, backend);
+        self.run_labeling_job(batch, backend)
     }
 
-    pub(in crate::app) fn label_visible_messages(&mut self) {
+    pub(in crate::app) fn label_visible_messages(&mut self) -> Task<Message> {
         if self.busy {
-            return;
+            return Task::none();
         }
         if self.explorer_messages.is_empty() {
             self.status = "No messages in the current explorer view to label".into();
-            return;
+            return Task::none();
         }
         let batch: Vec<EmailRecord> = self.explorer_messages.iter().take(50).cloned().collect();
-        self.run_labeling_job(batch, self.config.labeler_backend);
+        self.run_labeling_job(batch, self.config.labeler_backend)
     }
 
-    fn run_labeling_job(&mut self, emails: Vec<EmailRecord>, backend: LabelerBackend) {
+    fn run_labeling_job(
+        &mut self,
+        emails: Vec<EmailRecord>,
+        backend: LabelerBackend,
+    ) -> Task<Message> {
         let db_path = self.db_path.clone();
         let config = self.config.clone();
         let laya_path = self.active_laya_gguf_path();
         let total = emails.len();
-        let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        self.worker = Some(rx);
         self.cancel_flag = Some(cancel.clone());
         self.busy = true;
         self.status = format!(
@@ -101,7 +106,7 @@ impl PstRagApp {
             if total == 1 { "" } else { "s" },
             backend.display_name()
         );
-        thread::spawn(move || {
+        spawn_worker(move |tx| {
             let result = (|| {
                 let mut db = Index::open(&db_path)?;
                 let definitions = db.label_definitions()?;
@@ -118,19 +123,25 @@ impl PstRagApp {
                                 break;
                             }
                             if total > 1 {
-                                let _ = tx.send(WorkerEvent::Progress(format!(
-                                    "Labeling email {} of {} with Laya...",
-                                    idx + 1,
-                                    total
-                                )));
+                                emit_worker_event(
+                                    tx,
+                                    WorkerEvent::Progress(format!(
+                                        "Labeling email {} of {} with Laya...",
+                                        idx + 1,
+                                        total
+                                    )),
+                                );
                             }
                             let assigned = model.label_email(email, &definitions)?;
                             total_assigned += assigned.len();
                             db.set_message_labels(email.id, &assigned)?;
-                            let _ = tx.send(WorkerEvent::EmailLabeled {
-                                message_id: email.id,
-                                labels: assigned,
-                            });
+                            emit_worker_event(
+                                tx,
+                                WorkerEvent::EmailLabeled {
+                                    message_id: email.id,
+                                    labels: assigned,
+                                },
+                            );
                             processed += 1;
                         }
                         if model.is_embedded {
@@ -144,18 +155,24 @@ impl PstRagApp {
                             if cancel.load(Ordering::Relaxed) {
                                 break;
                             }
-                            let _ = tx.send(WorkerEvent::Progress(format!(
-                                "Labeling email {} of {} with LLM Judge...",
-                                idx + 1,
-                                total
-                            )));
+                            emit_worker_event(
+                                tx,
+                                WorkerEvent::Progress(format!(
+                                    "Labeling email {} of {} with LLM Judge...",
+                                    idx + 1,
+                                    total
+                                )),
+                            );
                             let assigned = llm::judge_labels(&config, email, &definitions)?;
                             total_assigned += assigned.len();
                             db.set_message_labels(email.id, &assigned)?;
-                            let _ = tx.send(WorkerEvent::EmailLabeled {
-                                message_id: email.id,
-                                labels: assigned,
-                            });
+                            emit_worker_event(
+                                tx,
+                                WorkerEvent::EmailLabeled {
+                                    message_id: email.id,
+                                    labels: assigned,
+                                },
+                            );
                             processed += 1;
                         }
                         "llm-judge".to_string()
@@ -169,8 +186,8 @@ impl PstRagApp {
                 })
             })()
             .map_err(|error: anyhow::Error| format!("{error:#}"));
-            let _ = tx.send(WorkerEvent::Finished(WorkerResult::Labeled(result)));
-        });
+            WorkerResult::Labeled(result)
+        })
     }
 
     pub(in crate::app) fn toggle_manual_label(&mut self, message_id: i64, label: &str) {

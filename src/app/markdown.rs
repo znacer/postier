@@ -7,16 +7,16 @@ use iced::{
 
 pub(crate) use self::parser::{MdBlock, MdSpan, parse_inline, parse_markdown};
 
-use super::{
-    Message,
-    theme::{
-        accent_text, blockquote_style, bright_text, code_block_style, md_table_header_style,
-        md_table_row_style, muted, on_primary,
-    },
+use super::theme::{
+    accent_text, blockquote_style, bright_text, code_block_style, md_table_header_style,
+    md_table_row_style, muted, on_primary,
 };
 
-pub(super) fn render_markdown<'a>(content: &'a str, is_user: bool) -> Element<'a, Message> {
-    let blocks = parse_markdown(content);
+pub(super) fn render_markdown_blocks<'a, M: Clone + 'static>(
+    blocks: &'a [MdBlock],
+    is_user: bool,
+    on_link: impl Fn(&str) -> M + Copy + 'a,
+) -> Element<'a, M> {
     if blocks.is_empty() {
         return Space::new(0, 0).into();
     }
@@ -36,16 +36,23 @@ pub(super) fn render_markdown<'a>(content: &'a str, is_user: bool) -> Element<'a
                 };
                 let heading_color = if is_user {
                     on_primary()
-                } else if level <= 2 {
+                } else if *level <= 2 {
                     bright_text()
                 } else {
                     accent_text()
                 };
-                col = col.push(render_inline_text(&title, size, heading_color, true, false));
+                col = col.push(render_inline_text(
+                    title,
+                    size,
+                    heading_color,
+                    true,
+                    false,
+                    on_link,
+                ));
             }
             MdBlock::Paragraph(paragraph) => {
                 col = col.push(render_inline_text(
-                    &paragraph, 13.0, base_color, false, false,
+                    paragraph, 13.0, base_color, false, false, on_link,
                 ));
             }
             MdBlock::CodeBlock { lang, code } => {
@@ -64,7 +71,7 @@ pub(super) fn render_markdown<'a>(content: &'a str, is_user: bool) -> Element<'a
                 }
                 let code_content = scrollable(
                     container(
-                        text(code)
+                        text(code.as_str())
                             .size(11.5)
                             .line_height(1.45)
                             .font(Font::MONOSPACE)
@@ -86,8 +93,14 @@ pub(super) fn render_markdown<'a>(content: &'a str, is_user: bool) -> Element<'a
             MdBlock::BlockQuote(lines) => {
                 let mut quote_col = column![].spacing(4).width(Fill);
                 for line in lines {
-                    quote_col =
-                        quote_col.push(render_inline_text(&line, 12.5, muted(), false, true));
+                    quote_col = quote_col.push(render_inline_text(
+                        line,
+                        12.5,
+                        muted(),
+                        false,
+                        true,
+                        on_link,
+                    ));
                 }
                 col = col.push(
                     container(quote_col)
@@ -103,7 +116,7 @@ pub(super) fn render_markdown<'a>(content: &'a str, is_user: bool) -> Element<'a
                     let bullet_label = match item.task_checked {
                         Some(true) => "Done:".to_owned(),
                         Some(false) => "Todo:".to_owned(),
-                        None => item.marker,
+                        None => item.marker.clone(),
                     };
                     let bullet_color = match item.task_checked {
                         Some(true) => accent_text(),
@@ -112,7 +125,7 @@ pub(super) fn render_markdown<'a>(content: &'a str, is_user: bool) -> Element<'a
                     let item_row = row![
                         Space::new(indent_px, 0),
                         text(bullet_label).size(12.5).color(bullet_color),
-                        render_inline_text(&item.text, 13.0, base_color, false, false),
+                        render_inline_text(&item.text, 13.0, base_color, false, false, on_link),
                     ]
                     .spacing(6)
                     .align_y(Alignment::Start);
@@ -138,6 +151,7 @@ pub(super) fn render_markdown<'a>(content: &'a str, is_user: bool) -> Element<'a
                                 bright_text(),
                                 true,
                                 false,
+                                on_link,
                             ))
                             .width(FillPortion(1)),
                         );
@@ -156,7 +170,7 @@ pub(super) fn render_markdown<'a>(content: &'a str, is_user: bool) -> Element<'a
                         let cell_text = data_row.get(col_idx).map(String::as_str).unwrap_or("");
                         r = r.push(
                             container(render_inline_text(
-                                cell_text, 11.5, base_color, false, false,
+                                cell_text, 11.5, base_color, false, false, on_link,
                             ))
                             .width(FillPortion(1)),
                         );
@@ -180,13 +194,14 @@ pub(super) fn render_markdown<'a>(content: &'a str, is_user: bool) -> Element<'a
     col.into()
 }
 
-fn render_inline_text<'a>(
+fn render_inline_text<'a, M: Clone + 'static>(
     input: &str,
     font_size: f32,
     default_color: Color,
     force_bold: bool,
     force_italic: bool,
-) -> Element<'a, Message> {
+    on_link: impl Fn(&str) -> M + Copy + 'a,
+) -> Element<'a, M> {
     let parsed = parse_inline(input);
     let spans: Vec<_> = parsed
         .into_iter()
@@ -240,7 +255,7 @@ fn render_inline_text<'a>(
                     left: 4.0,
                 }),
             MdSpan::Link { text: label, url } => {
-                let link_msg = parse_link_message(&url);
+                let link_msg = on_link(&url);
                 span(label)
                     .size(font_size)
                     .color(accent_text())
@@ -268,17 +283,4 @@ fn styled_font(bold: bool, italic: bool) -> Font {
         },
         ..Font::default()
     }
-}
-
-fn parse_link_message(url: &str) -> Message {
-    let trimmed = url.trim();
-    if let Some(rest) = trimmed
-        .strip_prefix("mail://")
-        .or_else(|| trimmed.strip_prefix("#mail-"))
-        .or_else(|| trimmed.strip_prefix('#'))
-        && let Ok(id) = rest.trim().parse::<i64>()
-    {
-        return Message::SelectEmail(id);
-    }
-    Message::MarkdownLinkClicked(trimmed.to_owned())
 }

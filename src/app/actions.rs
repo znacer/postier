@@ -6,52 +6,88 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
-    thread,
 };
 
 use anyhow::Context;
+use iced::{Task, widget::text_input};
 
 use crate::{db::Index, laya, llm, model::EmailRecord, pst};
 
-use super::{ChatMessage, ChatRole, IndexOutcome, PstRagApp, WorkerEvent, WorkerResult};
+use super::{
+    ChatMessage, ChatRole, IndexOutcome, Message, PstRagApp, WorkerEvent, WorkerResult,
+    chat::chat_question_input_id,
+};
 
 const CUSTOM_LABEL_PALETTE: &[&str] = &[
     "#0f766e", "#2563eb", "#7c3aed", "#d97706", "#be123c", "#4f46e5", "#15803d",
 ];
 
+pub(super) fn emit_worker_event(
+    tx: &mut iced::futures::channel::mpsc::Sender<WorkerEvent>,
+    event: WorkerEvent,
+) {
+    use iced::futures::SinkExt;
+    let _ = iced::futures::executor::block_on(tx.send(event));
+}
+
+pub(super) fn spawn_worker(
+    work: impl FnOnce(&mut iced::futures::channel::mpsc::Sender<WorkerEvent>) -> WorkerResult
+    + Send
+    + 'static,
+) -> Task<Message> {
+    Task::run(
+        iced::stream::channel(128, move |mut output| async move {
+            let _ = tokio::task::spawn_blocking(move || {
+                let result = work(&mut output);
+                emit_worker_event(&mut output, WorkerEvent::Finished(result));
+            })
+            .await;
+        }),
+        Message::Worker,
+    )
+}
+
 impl PstRagApp {
-    pub(super) fn choose_storage_dir(&mut self) {
+    pub(super) fn choose_storage_dir(&self) -> Task<Message> {
         if self.busy {
-            return;
+            return Task::none();
         }
-        if let Some(path) = rfd::FileDialog::new()
-            .set_directory(&self.storage_dir)
-            .pick_folder()
-        {
-            self.storage_dir = path;
-            self.db_path = self.storage_dir.join("index.sqlite");
-            self.config = load_config(&self.storage_dir).unwrap_or_default();
-            self.count = Index::open(&self.db_path)
-                .and_then(|d| d.count())
-                .unwrap_or(0);
-            self.checked_message_ids.clear();
-            self.refresh_sources();
-            self.refresh_explorer();
-            self.status = match fs::write(
-                &self.storage_location_path,
-                self.storage_dir.to_string_lossy().as_bytes(),
-            ) {
-                Ok(()) => format!(
-                    "Storage directory changed to {}",
-                    self.storage_dir.display()
-                ),
-                Err(error) => format!(
-                    "Storage changed for this session, but the selection could not be saved: {error}"
-                ),
-            };
-        }
+        let dir = self.storage_dir.clone();
+        Task::perform(
+            async move {
+                rfd::AsyncFileDialog::new()
+                    .set_directory(&dir)
+                    .pick_folder()
+                    .await
+                    .map(PathBuf::from)
+            },
+            Message::StorageDirChosen,
+        )
+    }
+
+    pub(super) fn apply_storage_dir(&mut self, path: PathBuf) {
+        self.storage_dir = path;
+        self.db_path = self.storage_dir.join("index.sqlite");
+        self.config = load_config(&self.storage_dir).unwrap_or_default();
+        self.count = Index::open(&self.db_path)
+            .and_then(|d| d.count())
+            .unwrap_or(0);
+        self.checked_message_ids.clear();
+        self.refresh_sources();
+        self.refresh_explorer();
+        self.status = match fs::write(
+            &self.storage_location_path,
+            self.storage_dir.to_string_lossy().as_bytes(),
+        ) {
+            Ok(()) => format!(
+                "Storage directory changed to {}",
+                self.storage_dir.display()
+            ),
+            Err(error) => format!(
+                "Storage changed for this session, but the selection could not be saved: {error}"
+            ),
+        };
     }
 
     pub(super) fn save_credentials(&mut self) {
@@ -61,54 +97,65 @@ impl PstRagApp {
         };
     }
 
-    pub(super) fn choose_archive(&mut self) {
+    pub(super) fn choose_archive(&self) -> Task<Message> {
         if self.busy {
-            return;
+            return Task::none();
         }
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Outlook archive", &["pst"])
-            .add_filter("Development fixture", &["jsonl"])
-            .pick_file()
-        {
-            self.archive = Some(path);
-        }
+        Task::perform(
+            async {
+                rfd::AsyncFileDialog::new()
+                    .add_filter("Outlook archive", &["pst"])
+                    .add_filter("Development fixture", &["jsonl"])
+                    .pick_file()
+                    .await
+                    .map(PathBuf::from)
+            },
+            Message::ArchiveChosen,
+        )
     }
 
-    pub(super) fn choose_laya_gguf(&mut self) {
+    pub(super) fn choose_laya_gguf(&self) -> Task<Message> {
         if self.busy {
-            return;
+            return Task::none();
         }
-        if let Some(path) = rfd::FileDialog::new()
-            .set_directory(&self.storage_dir)
-            .add_filter("GGUF model weights", &["gguf"])
-            .pick_file()
-        {
-            self.config.laya_gguf_path = path.to_string_lossy().to_string();
-            let _ = save_config(&self.storage_dir, &self.config);
-            self.status = format!("Selected Laya GGUF weights at {}", path.display());
-        }
+        let dir = self.storage_dir.clone();
+        Task::perform(
+            async move {
+                rfd::AsyncFileDialog::new()
+                    .set_directory(&dir)
+                    .add_filter("GGUF model weights", &["gguf"])
+                    .pick_file()
+                    .await
+                    .map(PathBuf::from)
+            },
+            Message::LayaGgufChosen,
+        )
     }
 
-    pub(super) fn download_laya_gguf(&mut self) {
+    pub(super) fn apply_laya_gguf(&mut self, path: PathBuf) {
+        self.config.laya_gguf_path = path.to_string_lossy().to_string();
+        let _ = save_config(&self.storage_dir, &self.config);
+        self.status = format!("Selected Laya GGUF weights at {}", path.display());
+    }
+
+    pub(super) fn download_laya_gguf(&mut self) -> Task<Message> {
         if self.busy {
-            return;
+            return Task::none();
         }
         let target = if self.config.laya_gguf_path.trim().is_empty() {
             laya::default_gguf_path(&self.storage_dir)
         } else {
             PathBuf::from(self.config.laya_gguf_path.trim())
         };
-        let (tx, rx) = mpsc::channel();
-        self.worker = Some(rx);
         self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
         self.busy = true;
         self.status = format!("Downloading ggml-org/Laya-GGUF to {}...", target.display());
-        thread::spawn(move || {
+        spawn_worker(move |_tx| {
             let result = laya::download_laya_gguf(&target)
                 .map(|_| target)
                 .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(WorkerEvent::Finished(WorkerResult::LayaDownloaded(result)));
-        });
+            WorkerResult::LayaDownloaded(result)
+        })
     }
 
     pub(super) fn active_laya_gguf_path(&self) -> Option<PathBuf> {
@@ -126,23 +173,21 @@ impl PstRagApp {
         None
     }
 
-    pub(super) fn index(&mut self) {
+    pub(super) fn index(&mut self) -> Task<Message> {
         if self.busy {
-            return;
+            return Task::none();
         }
         let Some(path) = self.archive.clone() else {
             self.status = "Select an archive first".into();
-            return;
+            return Task::none();
         };
         let db_path = self.db_path.clone();
         let config = self.config.clone();
         if config.use_remote_embeddings && config.embedding_model.trim().is_empty() {
             self.status = "Enter an embedding model before enabling remote embeddings".into();
-            return;
+            return Task::none();
         }
-        let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        self.worker = Some(rx);
         self.cancel_flag = Some(cancel.clone());
         self.busy = true;
         self.status = if config.use_remote_embeddings {
@@ -150,13 +195,16 @@ impl PstRagApp {
         } else {
             "Indexing BM25 locally...".into()
         };
-        thread::spawn(move || {
+        spawn_worker(move |tx| {
             let result = (|| {
                 let emails = pst::import(&path)?;
-                let _ = tx.send(WorkerEvent::Progress(format!(
-                    "Parsed {} emails, writing to local SQLite index...",
-                    emails.len()
-                )));
+                emit_worker_event(
+                    tx,
+                    WorkerEvent::Progress(format!(
+                        "Parsed {} emails, writing to local SQLite index...",
+                        emails.len()
+                    )),
+                );
                 let mut db = Index::open(&db_path)?;
                 let added = db.index_batch(&emails)?;
                 let mut embedded = 0;
@@ -168,9 +216,12 @@ impl PstRagApp {
                         if cancel.load(Ordering::Relaxed) {
                             break;
                         }
-                        let _ = tx.send(WorkerEvent::Progress(format!(
-                            "Generating remote embeddings ({embedded}/{total_docs})..."
-                        )));
+                        emit_worker_event(
+                            tx,
+                            WorkerEvent::Progress(format!(
+                                "Generating remote embeddings ({embedded}/{total_docs})..."
+                            )),
+                        );
                         let vectors = llm::embed(
                             &config,
                             batch.iter().map(|document| document.text.clone()).collect(),
@@ -194,17 +245,17 @@ impl PstRagApp {
                 Ok(IndexOutcome { added, embedded })
             })()
             .map_err(|error: anyhow::Error| format!("{error:#}"));
-            let _ = tx.send(WorkerEvent::Finished(WorkerResult::Indexed(result)));
-        });
+            WorkerResult::Indexed(result)
+        })
     }
 
-    pub(super) fn ask(&mut self) {
+    pub(super) fn ask(&mut self) -> Task<Message> {
         if self.busy {
-            return;
+            return Task::none();
         }
         if self.question.trim().is_empty() {
             self.status = "Enter a question first".into();
-            return;
+            return Task::none();
         }
         let question = self.question.trim().to_owned();
         self.chat_open = true;
@@ -247,20 +298,21 @@ impl PstRagApp {
         self.question.clear();
         let db_path = self.db_path.clone();
         let config = self.config.clone();
-        let (tx, rx) = mpsc::channel();
-        self.worker = Some(rx);
         self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
         self.busy = true;
         self.status = "Searching local index...".into();
-        thread::spawn(move || {
+        spawn_worker(move |tx| {
             let result = (|| {
                 let db = Index::open(&db_path)?;
                 let search_query = llm::contextualize_search_query(&question, &history);
                 let mut hits =
                     if config.use_remote_embeddings && !config.embedding_model.trim().is_empty() {
-                        let _ = tx.send(WorkerEvent::Progress(
-                            "Embedding query and running hybrid search...".into(),
-                        ));
+                        emit_worker_event(
+                            tx,
+                            WorkerEvent::Progress(
+                                "Embedding query and running hybrid search...".into(),
+                            ),
+                        );
                         let mut embeddings = llm::embed(&config, vec![search_query.clone()])?;
                         let query_embedding = embeddings
                             .pop()
@@ -275,20 +327,23 @@ impl PstRagApp {
                         db.search(&search_query, 8)?
                     };
                 db.expand_threads(&mut hits, 12)?;
-                let _ = tx.send(WorkerEvent::Progress(format!(
-                    "Found {} relevant emails, waiting for LLM answer...",
-                    hits.len()
-                )));
+                emit_worker_event(
+                    tx,
+                    WorkerEvent::Progress(format!(
+                        "Found {} relevant emails, waiting for LLM answer...",
+                        hits.len()
+                    )),
+                );
                 let context = llm::build_context(&hits, config.max_context_chars);
                 let answer = llm::ask_with_history(&config, &question, &context, &history)?;
-                Ok((answer, hits, context))
+                Ok(Arc::new((answer, hits, context)))
             })()
             .map_err(|error: anyhow::Error| format!("{error:#}"));
-            let _ = tx.send(WorkerEvent::Finished(WorkerResult::Answered(result)));
-        });
+            WorkerResult::Answered(result)
+        })
     }
 
-    pub(super) fn ask_about_email(&mut self, message_id: i64) {
+    pub(super) fn ask_about_email(&mut self, message_id: i64) -> Task<Message> {
         self.select_email(message_id);
         self.chat_open = true;
         if let Some(email) = self.selected_email() {
@@ -298,32 +353,32 @@ impl PstRagApp {
             );
             self.status = "Prepared prompt for the selected email in the Chat pane".into();
         }
+        text_input::focus(chat_question_input_id())
     }
 
-    pub(super) fn search_locally(&mut self) {
+    pub(super) fn search_locally(&mut self) -> Task<Message> {
         if self.busy {
-            return;
+            return Task::none();
         }
         if self.question.trim().is_empty() {
             self.status = "Enter search terms first".into();
-            return;
+            return Task::none();
         }
         let query = self.question.trim().to_owned();
         self.chat_open = true;
         self.messages.push(ChatMessage::user(query.clone()));
         self.question.clear();
         let db_path = self.db_path.clone();
-        let (tx, rx) = mpsc::channel();
-        self.worker = Some(rx);
         self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
         self.busy = true;
         self.status = "Searching locally - no network request...".into();
-        thread::spawn(move || {
+        spawn_worker(move |_tx| {
             let result = Index::open(&db_path)
                 .and_then(|db| db.search(&query, 50))
+                .map(Arc::new)
                 .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(WorkerEvent::Finished(WorkerResult::Searched(result)));
-        });
+            WorkerResult::Searched(result)
+        })
     }
 
     pub(super) fn new_chat(&mut self) {
@@ -348,6 +403,17 @@ impl PstRagApp {
         self.count = db.count().unwrap_or(self.count);
         self.labels_with_counts = db.label_definitions_with_counts().unwrap_or_default();
         self.unlabeled_count = db.unlabeled_count().unwrap_or(0);
+        self.refresh_explorer_messages_with(&db);
+    }
+
+    pub(super) fn refresh_explorer_messages(&mut self) {
+        let Ok(db) = Index::open(&self.db_path) else {
+            return;
+        };
+        self.refresh_explorer_messages_with(&db);
+    }
+
+    fn refresh_explorer_messages_with(&mut self, db: &Index) {
         self.explorer_messages = db
             .list_messages(
                 &self.mail_scope,
@@ -379,6 +445,30 @@ impl PstRagApp {
         {
             self.explorer_messages.insert(0, record);
         }
+    }
+
+    pub(super) fn select_adjacent_email(&mut self, delta: isize) {
+        if self.explorer_messages.is_empty() {
+            return;
+        }
+        let current_idx = self
+            .selected_message_id
+            .and_then(|id| self.explorer_messages.iter().position(|m| m.id == id))
+            .unwrap_or(0);
+        let next_idx = (current_idx as isize + delta)
+            .clamp(0, self.explorer_messages.len().saturating_sub(1) as isize)
+            as usize;
+        if let Some(email) = self.explorer_messages.get(next_idx) {
+            self.selected_message_id = Some(email.id);
+        }
+    }
+
+    pub(super) fn toggle_check_selected_email(&mut self) {
+        let Some(id) = self.selected_message_id else {
+            return;
+        };
+        let is_checked = self.checked_message_ids.contains(&id);
+        self.toggle_check_email(id, !is_checked);
     }
 
     pub(super) fn toggle_check_email(&mut self, id: i64, checked: bool) {

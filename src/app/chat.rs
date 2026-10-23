@@ -7,10 +7,43 @@ use iced::{
     },
 };
 
-use super::{ChatMessage, ChatRole, Message, PstRagApp, markdown::render_markdown, theme::*};
+use super::{ChatMessage, ChatRole, PstRagApp, markdown::render_markdown_blocks, theme::*};
+
+#[derive(Debug, Clone)]
+pub(super) enum ChatPaneMessage {
+    ToggleChatPane,
+    WidthChanged(f32),
+    NewChat,
+    QuestionChanged(String),
+    Ask,
+    SearchLocally,
+    UsePrompt(&'static str),
+    ToggleContext(usize, bool),
+    ToggleSources,
+    ToggleHit(usize),
+    SelectEmail(i64),
+    MarkdownLinkClicked(String),
+}
+
+pub(super) fn chat_question_input_id() -> text_input::Id {
+    text_input::Id::new("chat-question-input")
+}
+
+fn parse_link_message(url: &str) -> ChatPaneMessage {
+    let trimmed = url.trim();
+    if let Some(rest) = trimmed
+        .strip_prefix("mail://")
+        .or_else(|| trimmed.strip_prefix("#mail-"))
+        .or_else(|| trimmed.strip_prefix('#'))
+        && let Ok(id) = rest.trim().parse::<i64>()
+    {
+        return ChatPaneMessage::SelectEmail(id);
+    }
+    ChatPaneMessage::MarkdownLinkClicked(trimmed.to_owned())
+}
 
 impl PstRagApp {
-    pub(super) fn chat_pane(&self) -> Element<'_, Message> {
+    pub(super) fn chat_pane(&self) -> Element<'_, ChatPaneMessage> {
         if !self.chat_open {
             let expand_rail = button(
                 column![
@@ -28,7 +61,7 @@ impl PstRagApp {
             .height(Fill)
             .padding([16, 4])
             .style(button::text)
-            .on_press(Message::ToggleChatPane);
+            .on_press(ChatPaneMessage::ToggleChatPane);
 
             return container(expand_rail)
                 .width(36)
@@ -49,24 +82,29 @@ impl PstRagApp {
                 .width(Fill),
                 small_button(
                     "Wider",
-                    (self.chat_width < 740.0).then_some(Message::ChatWidthChanged(
+                    (self.chat_width < 740.0).then_some(ChatPaneMessage::WidthChanged(
                         (self.chat_width + 80.0).min(760.0)
                     ))
                 ),
                 small_button(
                     "Narrower",
-                    (self.chat_width > 330.0).then_some(Message::ChatWidthChanged(
+                    (self.chat_width > 330.0).then_some(ChatPaneMessage::WidthChanged(
                         (self.chat_width - 80.0).max(310.0)
                     ))
                 ),
-                small_button("New", Some(Message::NewChat)),
-                small_button("Hide", Some(Message::ToggleChatPane)),
+                small_button("New", Some(ChatPaneMessage::NewChat)),
+                small_button("Hide", Some(ChatPaneMessage::ToggleChatPane)),
             ]
             .spacing(5)
             .align_y(Alignment::Center),
             row![
                 text("Pane width").size(10).color(muted()),
-                slider(310.0..=760.0, self.chat_width, Message::ChatWidthChanged).height(14),
+                slider(
+                    310.0..=760.0,
+                    self.chat_width,
+                    ChatPaneMessage::WidthChanged
+                )
+                .height(14),
                 text(format!("{:.0}px", self.chat_width))
                     .size(10)
                     .color(muted())
@@ -81,15 +119,17 @@ impl PstRagApp {
             let prompts = column![
                 prompt_button(
                     "Summarize the latest decisions",
-                    "Summarize the latest decisions in my archive"
+                    ChatPaneMessage::UsePrompt("Summarize the latest decisions in my archive")
                 ),
                 prompt_button(
                     "Find messages about a project",
-                    "Find the latest messages about my current projects"
+                    ChatPaneMessage::UsePrompt(
+                        "Find the latest messages about my current projects"
+                    )
                 ),
                 prompt_button(
                     "What needs a follow-up?",
-                    "Which recent messages need a follow-up?"
+                    ChatPaneMessage::UsePrompt("Which recent messages need a follow-up?")
                 )
             ]
             .spacing(6)
@@ -114,13 +154,12 @@ impl PstRagApp {
         conversation = self.sources_view(conversation);
 
         let enabled = !self.busy && self.count > 0 && !self.question.trim().is_empty();
-        let mut question_input = text_input("Ask your archive...", &self.question)
-            .on_input(Message::QuestionChanged)
+        let question_input = text_input("Ask your archive...", &self.question)
+            .id(chat_question_input_id())
+            .on_input(ChatPaneMessage::QuestionChanged)
+            .on_submit_maybe(enabled.then_some(ChatPaneMessage::Ask))
             .padding(10)
             .size(13);
-        if enabled {
-            question_input = question_input.on_submit(Message::Ask);
-        }
         let helper = if self.count == 0 {
             "Index an archive to start chatting"
         } else if self.busy {
@@ -133,8 +172,11 @@ impl PstRagApp {
                 question_input,
                 row![
                     text(helper).size(10).color(muted()).width(Fill),
-                    enabled_button("Search only", enabled.then_some(Message::SearchLocally)),
-                    primary_button("Send", enabled.then_some(Message::Ask))
+                    enabled_button(
+                        "Search only",
+                        enabled.then_some(ChatPaneMessage::SearchLocally)
+                    ),
+                    primary_button("Send", enabled.then_some(ChatPaneMessage::Ask))
                 ]
                 .spacing(6)
                 .align_y(Alignment::Center)
@@ -162,8 +204,8 @@ impl PstRagApp {
 
     fn sources_view<'a>(
         &'a self,
-        mut conversation: iced::widget::Column<'a, Message>,
-    ) -> iced::widget::Column<'a, Message> {
+        mut conversation: iced::widget::Column<'a, ChatPaneMessage>,
+    ) -> iced::widget::Column<'a, ChatPaneMessage> {
         if self.hits.is_empty() {
             return conversation;
         }
@@ -188,7 +230,7 @@ impl PstRagApp {
             .width(Fill)
             .padding([8, 10])
             .style(button::secondary)
-            .on_press(Message::ToggleSources),
+            .on_press(ChatPaneMessage::ToggleSources),
         );
         if self.show_sources {
             for (index, hit) in self.hits.iter().enumerate() {
@@ -198,7 +240,11 @@ impl PstRagApp {
         conversation
     }
 
-    fn message_view<'a>(&'a self, index: usize, message: &'a ChatMessage) -> Element<'a, Message> {
+    fn message_view<'a>(
+        &'a self,
+        index: usize,
+        message: &'a ChatMessage,
+    ) -> Element<'a, ChatPaneMessage> {
         let is_user = matches!(message.role, ChatRole::User);
         let avatar = container(text(if is_user { "Y" } else { "D" }).size(10))
             .width(26)
@@ -214,7 +260,7 @@ impl PstRagApp {
             text(if is_user { "YOU" } else { "DUNGBEETLE" })
                 .size(9)
                 .color(if is_user { on_primary() } else { accent_text() }),
-            render_markdown(&message.content, is_user)
+            render_markdown_blocks(&message.blocks, is_user, parse_link_message)
         ]
         .spacing(6);
         if !message.context_preview.is_empty() {
@@ -222,7 +268,7 @@ impl PstRagApp {
                 checkbox("Show context sent to LLM", message.show_context)
                     .size(12)
                     .text_size(11)
-                    .on_toggle(move |value| Message::ToggleContext(index, value)),
+                    .on_toggle(move |value| ChatPaneMessage::ToggleContext(index, value)),
             );
             if message.show_context {
                 contents = contents.push(
@@ -253,7 +299,7 @@ impl PstRagApp {
         }
     }
 
-    fn hit_view<'a>(&'a self, index: usize, hit: &'a SearchHit) -> Element<'a, Message> {
+    fn hit_view<'a>(&'a self, index: usize, hit: &'a SearchHit) -> Element<'a, ChatPaneMessage> {
         let subject = if hit.subject.is_empty() {
             "(No subject)"
         } else {
@@ -280,7 +326,7 @@ impl PstRagApp {
                 ]
                 .spacing(2)
                 .width(Fill),
-                small_button("Open Mail", Some(Message::SelectEmail(hit.id))),
+                small_button("Open Mail", Some(ChatPaneMessage::SelectEmail(hit.id))),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -291,7 +337,7 @@ impl PstRagApp {
                 } else {
                     "Metadata and full excerpt"
                 },
-                Some(Message::ToggleHit(index))
+                Some(ChatPaneMessage::ToggleHit(index))
             )
         ]
         .spacing(6);
