@@ -13,7 +13,12 @@ use crate::model::{AssignedLabel, EmailRecord, LabelDefinition, LabelerBackend};
 
 #[cfg(test)]
 pub(crate) use self::context::clean_email_body;
-pub use self::context::{AGENT_SYSTEM_PROMPT, ChatTurn, build_context, contextualize_search_query};
+#[allow(unused_imports)]
+pub use self::context::{
+    AGENT_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT_FR, ChatTurn, agent_system_prompt, build_context,
+    contextualize_search_query,
+};
+pub use crate::i18n::Language;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LlmConfig {
@@ -31,6 +36,8 @@ pub struct LlmConfig {
     pub labeler_backend: LabelerBackend,
     #[serde(default)]
     pub laya_gguf_path: String,
+    #[serde(default)]
+    pub language: Language,
 }
 
 fn default_context_chars() -> usize {
@@ -48,6 +55,7 @@ impl Default for LlmConfig {
             max_context_chars: default_context_chars(),
             labeler_backend: LabelerBackend::Laya,
             laya_gguf_path: String::new(),
+            language: Language::default(),
         }
     }
 }
@@ -80,7 +88,7 @@ pub fn ask_with_history(
 
     let agent = client
         .agent(&config.model)
-        .preamble(AGENT_SYSTEM_PROMPT)
+        .preamble(agent_system_prompt(config.language))
         .context(context)
         .build();
 

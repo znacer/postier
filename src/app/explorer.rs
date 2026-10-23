@@ -46,9 +46,10 @@ pub(super) fn reader_header_id() -> container::Id {
 
 impl PstRagApp {
     pub(super) fn explorer(&self) -> Element<'_, ExplorerMessage> {
+        let tr = self.config.language;
         let toolbar = self.explorer_toolbar();
         let cancel_btn: Element<'_, ExplorerMessage> = if self.busy {
-            small_button("Stop Task", Some(ExplorerMessage::CancelWorker)).into()
+            small_button(tr.btn_stop_task(), Some(ExplorerMessage::CancelWorker)).into()
         } else {
             Space::new(0, 0).into()
         };
@@ -56,12 +57,11 @@ impl PstRagApp {
             row![
                 text(&self.status).size(11).color(muted()).width(Fill),
                 cancel_btn,
-                text(format!(
-                    "Showing {} of {} indexed, {} selected, Labeler: {}",
+                text(tr.status_showing(
                     self.explorer_messages.len(),
                     self.count,
                     self.checked_message_ids.len(),
-                    self.config.labeler_backend.display_name()
+                    tr.backend_name(self.config.labeler_backend)
                 ))
                 .size(11)
                 .color(muted())
@@ -96,8 +96,9 @@ impl PstRagApp {
     }
 
     fn explorer_toolbar(&self) -> Element<'_, ExplorerMessage> {
+        let tr = self.config.language;
         let scope_title = match &self.mail_scope {
-            MailScope::AllMessages => "All Mailboxes".to_owned(),
+            MailScope::AllMessages => tr.all_mailboxes().to_owned(),
             MailScope::Source(source) => std::path::Path::new(source)
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -120,7 +121,7 @@ impl PstRagApp {
             LabelFilter::Labeled(label) => row![
                 label_badge(label, self.label_color(label), None),
                 small_button(
-                    "All labels",
+                    tr.all_labels(),
                     Some(ExplorerMessage::SelectLabelFilter(LabelFilter::Any))
                 )
             ]
@@ -128,9 +129,9 @@ impl PstRagApp {
             .align_y(Alignment::Center)
             .into(),
             LabelFilter::Unlabeled => row![
-                label_badge("Unlabeled", "#7F8C8D", None),
+                label_badge(tr.unlabeled(), "#7F8C8D", None),
                 small_button(
-                    "All labels",
+                    tr.all_labels(),
                     Some(ExplorerMessage::SelectLabelFilter(LabelFilter::Any))
                 )
             ]
@@ -140,7 +141,7 @@ impl PstRagApp {
         };
 
         let filter_input = text_input(
-            "Quick filter (subject, sender, body)... [/]",
+            tr.filter_placeholder(),
             &self.filter_query,
         )
         .id(explorer_filter_input_id())
@@ -152,10 +153,10 @@ impl PstRagApp {
         let clear_filter: Element<'_, ExplorerMessage> = if self.filter_query.is_empty() {
             Space::new(0, 0).into()
         } else {
-            small_button("Clear", Some(ExplorerMessage::FilterChanged(String::new()))).into()
+            small_button(tr.btn_clear(), Some(ExplorerMessage::FilterChanged(String::new()))).into()
         };
 
-        let laya_btn = button(text("Laya (GGUF)").size(11))
+        let laya_btn = button(text(tr.backend_name(LabelerBackend::Laya)).size(11))
             .padding([5, 10])
             .style(if self.config.labeler_backend == LabelerBackend::Laya {
                 button::primary
@@ -164,7 +165,7 @@ impl PstRagApp {
             })
             .on_press(ExplorerMessage::SetLabelerBackend(LabelerBackend::Laya));
 
-        let llm_btn = button(text("LLM Judge").size(11))
+        let llm_btn = button(text(tr.backend_name(LabelerBackend::LlmJudge)).size(11))
             .padding([5, 10])
             .style(if self.config.labeler_backend == LabelerBackend::LlmJudge {
                 button::primary
@@ -176,14 +177,14 @@ impl PstRagApp {
         let checked_count = self.checked_message_ids.len();
         let (label_action_title, label_action_msg) = if checked_count > 0 {
             (
-                format!("Label Selection ({checked_count})"),
+                tr.label_selection_count(checked_count),
                 (!self.busy).then_some(ExplorerMessage::LabelCheckedWith(
                     self.config.labeler_backend,
                 )),
             )
         } else {
             (
-                "Label Focused Mail".to_owned(),
+                tr.label_focused_mail().to_owned(),
                 (!self.busy && self.selected_email().is_some())
                     .then_some(ExplorerMessage::LabelFocusedEmail),
             )
@@ -191,28 +192,24 @@ impl PstRagApp {
         let can_label_view = !self.busy && !self.explorer_messages.is_empty();
 
         let sidebar_toggle_btn: Element<'_, ExplorerMessage> = if !self.sidebar_open {
-            small_button("Show Sidebar", Some(ExplorerMessage::ToggleSidebar)).into()
+            small_button(tr.btn_show_sidebar(), Some(ExplorerMessage::ToggleSidebar)).into()
         } else {
             Space::new(0, 0).into()
         };
 
         let chat_toggle_label = if self.chat_open {
-            "Hide Chat"
+            tr.btn_hide_chat()
         } else {
-            "Open Chat"
+            tr.btn_open_chat()
         };
 
         let top_row = row![
             sidebar_toggle_btn,
             column![
                 text(scope_title).size(15).color(bright_text()),
-                text(format!(
-                    "{} in view, {} checked",
-                    self.explorer_messages.len(),
-                    checked_count
-                ))
-                .size(10)
-                .color(muted())
+                text(tr.in_view_checked(self.explorer_messages.len(), checked_count))
+                    .size(10)
+                    .color(muted())
             ]
             .spacing(1),
             label_filter_badge,
@@ -225,16 +222,16 @@ impl PstRagApp {
         .align_y(Alignment::Center);
 
         let bottom_row = row![
-            text("Decision engine:").size(11).color(muted()),
+            text(tr.decision_engine_label()).size(11).color(muted()),
             row![laya_btn, llm_btn].spacing(4),
             Space::new(8, 0),
             enabled_button(label_action_title, label_action_msg),
             enabled_button(
-                "Label View",
+                tr.btn_label_view(),
                 can_label_view.then_some(ExplorerMessage::LabelVisibleMessages)
             ),
             small_button(
-                "Select Unlabeled",
+                tr.btn_select_unlabeled(),
                 Some(ExplorerMessage::SelectUnlabeledVisible)
             ),
             Space::new(Fill, 0),
@@ -250,8 +247,9 @@ impl PstRagApp {
     }
 
     fn selection_action_bar(&self) -> Element<'_, ExplorerMessage> {
+        let tr = self.config.language;
         let count = self.checked_message_ids.len();
-        let mut manual_chips = row![text("Batch label:").size(10).color(muted())]
+        let mut manual_chips = row![text(tr.batch_label_label()).size(10).color(muted())]
             .spacing(5)
             .align_y(Alignment::Center);
 
@@ -266,9 +264,9 @@ impl PstRagApp {
                     .iter()
                     .any(|m| self.checked_message_ids.contains(&m.id));
             let chip_label = if all_have_label {
-                format!("Remove {}", def.name)
+                tr.remove_label_chip(&def.name)
             } else {
-                format!("Add {}", def.name)
+                tr.add_label_chip(&def.name)
             };
             let label_name = def.name.clone();
             manual_chips = manual_chips.push(
@@ -285,24 +283,21 @@ impl PstRagApp {
 
         container(
             row![
-                text(format!(
-                    "{count} mail{} selected",
-                    if count == 1 { "" } else { "s" }
-                ))
-                .size(12)
-                .color(on_primary()),
+                text(tr.mails_selected_count(count))
+                    .size(12)
+                    .color(on_primary()),
                 primary_button(
-                    format!("Label {count} with Laya"),
+                    tr.label_count_with_laya(count),
                     (!self.busy).then_some(ExplorerMessage::LabelCheckedWith(LabelerBackend::Laya))
                 ),
                 small_button(
-                    format!("Label {count} with LLM Judge"),
+                    tr.label_count_with_llm(count),
                     (!self.busy)
                         .then_some(ExplorerMessage::LabelCheckedWith(LabelerBackend::LlmJudge))
                 ),
                 Space::new(8, 0),
                 container(manual_chips.wrap()).width(Fill),
-                small_button("Clear Selection", Some(ExplorerMessage::ClearCheckedEmails)),
+                small_button(tr.btn_clear_selection(), Some(ExplorerMessage::ClearCheckedEmails)),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -314,20 +309,21 @@ impl PstRagApp {
     }
 
     fn message_table(&self) -> Element<'_, ExplorerMessage> {
+        let tr = self.config.language;
         let sort_date_label = match self.mail_sort {
-            MailSort::DateDesc => "DATE (Newest)",
-            MailSort::DateAsc => "DATE (Oldest)",
-            _ => "DATE",
+            MailSort::DateDesc => tr.table_header_date_newest(),
+            MailSort::DateAsc => tr.table_header_date_oldest(),
+            _ => tr.table_header_date(),
         };
         let sort_subj_label = if self.mail_sort == MailSort::SubjectAsc {
-            "SUBJECT (A-Z)"
+            tr.table_header_subj_az()
         } else {
-            "SUBJECT"
+            tr.table_header_subj()
         };
         let sort_from_label = if self.mail_sort == MailSort::SenderAsc {
-            "CORRESPONDENT (A-Z)"
+            tr.table_header_from_az()
         } else {
-            "CORRESPONDENT"
+            tr.table_header_from()
         };
 
         let all_visible_checked = !self.explorer_messages.is_empty()
@@ -341,19 +337,19 @@ impl PstRagApp {
                 checkbox("", all_visible_checked)
                     .on_toggle(ExplorerMessage::ToggleCheckAllVisible)
                     .size(14),
-                small_button("Unlabeled", Some(ExplorerMessage::SelectUnlabeledVisible)),
+                small_button(tr.unlabeled(), Some(ExplorerMessage::SelectUnlabeledVisible)),
                 button(text(sort_subj_label).size(10).color(muted()))
                     .padding(0)
                     .style(button::text)
                     .width(FillPortion(4))
                     .on_press(ExplorerMessage::SetMailSort(MailSort::SubjectAsc)),
-                text("LABELS").size(10).color(muted()).width(FillPortion(3)),
+                text(tr.table_header_labels()).size(10).color(muted()).width(FillPortion(3)),
                 button(text(sort_from_label).size(10).color(muted()))
                     .padding(0)
                     .style(button::text)
                     .width(FillPortion(3))
                     .on_press(ExplorerMessage::SetMailSort(MailSort::SenderAsc)),
-                text("FOLDER").size(10).color(muted()).width(FillPortion(2)),
+                text(tr.table_header_folder()).size(10).color(muted()).width(FillPortion(2)),
                 button(text(sort_date_label).size(10).color(muted()))
                     .padding(0)
                     .style(button::text)
@@ -376,9 +372,9 @@ impl PstRagApp {
         let mut list = column![].spacing(1).width(Fill);
         if self.explorer_messages.is_empty() {
             let empty_msg = if self.count == 0 {
-                "No emails indexed yet. Choose a .pst archive or .jsonl fixture in the left pane and click 'Index now'."
+                tr.empty_table_no_indexed()
             } else {
-                "No messages match the current folder, label, or quick-filter selection."
+                tr.empty_table_no_match()
             };
             list = list.push(
                 container(text(empty_msg).size(12).color(muted()))
@@ -403,21 +399,22 @@ impl PstRagApp {
     }
 
     fn message_row<'a>(&'a self, email: &'a EmailRecord) -> Element<'a, ExplorerMessage> {
+        let tr = self.config.language;
         let is_selected = self.selected_message_id == Some(email.id);
         let is_checked = self.checked_message_ids.contains(&email.id);
         let email_id = email.id;
         let subject = if email.subject.trim().is_empty() {
-            "(No subject)"
+            tr.no_subject()
         } else {
             email.subject.as_str()
         };
         let sender = if email.sender.trim().is_empty() {
-            "(Unknown sender)"
+            tr.unknown_sender()
         } else {
             email.sender.as_str()
         };
         let folder = if email.folder.trim().is_empty() {
-            "Root"
+            tr.root_folder()
         } else {
             email.folder.as_str()
         };
@@ -425,11 +422,11 @@ impl PstRagApp {
             .sent_at
             .as_deref()
             .map(short_date)
-            .unwrap_or("Unknown");
+            .unwrap_or_else(|| tr.unknown_date());
 
         let mut label_row = row![].spacing(4).align_y(Alignment::Center);
         if email.labels.is_empty() {
-            label_row = label_row.push(text("None").size(10).color(muted()));
+            label_row = label_row.push(text(tr.none_label()).size(10).color(muted()));
         } else {
             for assigned in email.labels.iter().take(2) {
                 let color = self.label_color(&assigned.label);
@@ -438,7 +435,7 @@ impl PstRagApp {
             }
         }
 
-        let range_btn: Element<'a, ExplorerMessage> = button(text("Range").size(9).color(muted()))
+        let range_btn: Element<'a, ExplorerMessage> = button(text(tr.btn_range()).size(9).color(muted()))
             .padding([2, 5])
             .style(button::text)
             .on_press(ExplorerMessage::SelectRangeTo(email_id))
@@ -494,15 +491,14 @@ impl PstRagApp {
     }
 
     fn reading_pane(&self) -> Element<'_, ExplorerMessage> {
+        let tr = self.config.language;
         let Some(email) = self.selected_email() else {
             return container(
                 column![
-                    text("No message selected").size(16).color(bright_text()),
-                    text(
-                        "Select a message in the table above to read its content, or check multiple messages to label a selection."
-                    )
-                    .size(12)
-                    .color(muted())
+                    text(tr.no_message_selected()).size(16).color(bright_text()),
+                    text(tr.no_message_selected_hint())
+                        .size(12)
+                        .color(muted())
                 ]
                 .spacing(6)
                 .align_x(Alignment::Center),
@@ -516,7 +512,7 @@ impl PstRagApp {
         };
 
         let subject = if email.subject.trim().is_empty() {
-            "(No subject)"
+            tr.no_subject()
         } else {
             email.subject.as_str()
         };
@@ -525,11 +521,11 @@ impl PstRagApp {
             .and_then(|n| n.to_str())
             .unwrap_or(&email.source_key);
 
-        let mut assigned_row = row![text("Labels:").size(11).color(muted())]
+        let mut assigned_row = row![text(tr.labels_heading()).size(11).color(muted())]
             .spacing(6)
             .align_y(Alignment::Center);
         if email.labels.is_empty() {
-            assigned_row = assigned_row.push(text("None assigned").size(11).color(muted()));
+            assigned_row = assigned_row.push(text(tr.none_assigned()).size(11).color(muted()));
         } else {
             for assigned in &email.labels {
                 let detail = match assigned.confidence {
@@ -544,15 +540,15 @@ impl PstRagApp {
             }
         }
 
-        let mut quick_toggle_row = row![text("Toggle:").size(10).color(muted())]
+        let mut quick_toggle_row = row![text(tr.toggle_heading()).size(10).color(muted())]
             .spacing(5)
             .align_y(Alignment::Center);
         for (def, _) in &self.labels_with_counts {
             let active = email.labels.iter().any(|l| l.label == def.name);
             let btn_label = if active {
-                format!("Remove {}", def.name)
+                tr.remove_label_chip(&def.name)
             } else {
-                format!("Add {}", def.name)
+                tr.add_label_chip(&def.name)
             };
             let msg_id = email.id;
             let label_name = def.name.clone();
@@ -572,34 +568,34 @@ impl PstRagApp {
             row![
                 text(subject).size(17).color(bright_text()).width(Fill),
                 small_button(
-                    "Label with Laya",
+                    tr.btn_label_with_laya(),
                     (!self.busy)
                         .then_some(ExplorerMessage::LabelSelectedWith(LabelerBackend::Laya))
                 ),
                 small_button(
-                    "Label with LLM Judge",
+                    tr.btn_label_with_llm(),
                     (!self.busy)
                         .then_some(ExplorerMessage::LabelSelectedWith(LabelerBackend::LlmJudge))
                 ),
                 small_button(
-                    "Ask Chat about this mail",
+                    tr.btn_ask_about_mail(),
                     Some(ExplorerMessage::AskAboutEmail(email.id))
                 ),
             ]
             .spacing(6)
             .align_y(Alignment::Center),
             row![
-                text(format!("From: {}", email.sender))
+                text(tr.from_prefix(&email.sender))
                     .size(12)
                     .color(bright_text()),
                 Space::new(16, 0),
-                text(format!("To: {}", email.recipients))
+                text(tr.to_prefix(&email.recipients))
                     .size(11)
                     .color(muted()),
                 Space::new(Fill, 0),
                 text(format!(
                     "{} - {} / {}",
-                    email.sent_at.as_deref().unwrap_or("Unknown date"),
+                    email.sent_at.as_deref().unwrap_or_else(|| tr.unknown_date_full()),
                     source_name,
                     email.folder
                 ))
@@ -634,7 +630,7 @@ impl PstRagApp {
         .style(reader_header_style);
 
         let body_text = if email.body.trim().is_empty() {
-            "(Empty message body)"
+            tr.empty_body()
         } else {
             email.body.as_str()
         };

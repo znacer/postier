@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::SearchHit;
+use crate::{i18n::Language, model::SearchHit};
 
 pub const AGENT_SYSTEM_PROMPT: &str = r#"You are Dungbeetle, an expert email archive intelligence assistant.
 Your task is to answer user questions accurately, objectively, and concisely using ONLY the provided email evidence.
@@ -28,6 +28,40 @@ Key Instructions:
 5. Evidence Limits:
    - If the provided email evidence is insufficient, incomplete, or contradictory, explicitly state what is known and what cannot be determined from the available records.
 "#;
+
+pub const AGENT_SYSTEM_PROMPT_FR: &str = r#"Vous êtes Dungbeetle, un assistant expert en analyse d'archives de courriels.
+Votre tâche consiste à répondre aux questions de l'utilisateur de manière précise, objective et concise en utilisant UNIQUEMENT les preuves fournies dans les courriels.
+
+Instructions clés :
+1. Ancrage et citations :
+   - Fondez toutes vos réponses strictement sur les preuves issues des courriels fournis. N'inventez jamais de faits, de dates et ne supposez aucune information absente des courriels.
+   - Citez toujours vos sources avec des références entre crochets du type [Email 1], [Email 2] pour chaque affirmation de fond, citation, décision ou action à mener.
+   - Si plusieurs courriels corroborent ou abordent un point, citez l'ensemble des courriels pertinents (ex. [Email 1, Email 3]).
+
+2. Chronologie et évolution :
+   - Accordez une attention particulière aux dates des courriels et à l'ordre chronologique. Les échanges évoluent dans le temps et les messages ultérieurs révisent, remplacent ou finalisent souvent les propositions formulées dans les messages précédents.
+   - Mentionnez explicitement les échéanciers et la séquence lors des réponses sur l'état d'avancement, les plans ou les résultats (ex. « Initialement prévu en mai dans [Email 1], mais reporté à juin dans [Email 2] »).
+
+3. Métadonnées et prise en compte du contexte :
+   - Tirez parti des métadonnées (De, À, Sujet, Dossier, Archive, Pièces jointes et Étiquettes telles que Urgent ou Action requise) lorsqu'elles sont pertinentes.
+   - Si l'utilisateur pose une question sur des fichiers, des accords ou des pièces jointes, vérifiez les métadonnées de pièces jointes.
+   - Identifiez clairement les expéditeurs et les destinataires.
+
+4. Formatage et synthèse :
+   - Commencez par une réponse synthétique et directe en français.
+   - Utilisez des puces structurées, des titres clairs ou des résumés chronologiques pour les sujets complexes.
+   - Distinguez clairement les décisions concrètes, les questions en suspens et les actions en attente.
+
+5. Limites des preuves :
+   - Si les preuves fournies dans les courriels sont insuffisantes, incomplètes ou contradictoires, indiquez explicitement ce qui est certain et ce qui ne peut être déterminé à partir des archives disponibles.
+"#;
+
+pub fn agent_system_prompt(lang: Language) -> &'static str {
+    match lang {
+        Language::English => AGENT_SYSTEM_PROMPT,
+        Language::French => AGENT_SYSTEM_PROMPT_FR,
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatTurn {
@@ -366,7 +400,34 @@ pub fn contextualize_search_query(query: &str, history: &[ChatTurn]) -> String {
         || lower.starts_with("when was")
         || lower.starts_with("who was")
         || lower.starts_with("who sent")
-        || lower.starts_with("what was");
+        || lower.starts_with("what was")
+        || lower.contains(" cela")
+        || lower.starts_with("cela")
+        || lower.contains(" ceci")
+        || lower.starts_with("ceci")
+        || lower.contains(" ça")
+        || lower.starts_with("ça")
+        || lower.contains(" il ")
+        || lower.starts_with("il ")
+        || lower.contains(" elle")
+        || lower.starts_with("elle")
+        || lower.contains(" ils")
+        || lower.starts_with("ils")
+        || lower.contains(" elles")
+        || lower.starts_with("elles")
+        || lower.starts_with("qui a")
+        || lower.starts_with("quand a")
+        || lower.starts_with("qu'est-ce")
+        || lower.starts_with("quel est")
+        || lower.starts_with("qu'en")
+        || lower.contains(" qu'en")
+        || lower.starts_with("et pour")
+        || lower.contains(" et pour")
+        || lower.contains(" son ")
+        || lower.contains(" sa ")
+        || lower.contains(" ses ")
+        || lower.contains(" leur ")
+        || lower.contains(" leurs ");
 
     if !is_short && !has_pronoun {
         return trimmed.to_string();
@@ -424,6 +485,45 @@ pub fn contextualize_search_query(query: &str, history: &[ChatTurn]) -> String {
             "do",
             "does",
             "did",
+            "le",
+            "la",
+            "les",
+            "un",
+            "une",
+            "des",
+            "du",
+            "de",
+            "dans",
+            "en",
+            "sur",
+            "pour",
+            "par",
+            "avec",
+            "est",
+            "sont",
+            "qui",
+            "que",
+            "quoi",
+            "dont",
+            "où",
+            "comment",
+            "quand",
+            "quel",
+            "quelle",
+            "quels",
+            "quelles",
+            "mon",
+            "mes",
+            "notre",
+            "nos",
+            "votre",
+            "vos",
+            "leur",
+            "leurs",
+            "courriel",
+            "courriels",
+            "résumer",
+            "trouver",
         ];
         let key_terms: Vec<&str> = prev_clean
             .split_whitespace()

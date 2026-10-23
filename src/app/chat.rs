@@ -43,10 +43,11 @@ fn parse_link_message(url: &str) -> ChatPaneMessage {
 
 impl PstRagApp {
     pub(super) fn chat_pane(&self) -> Element<'_, ChatPaneMessage> {
+        let tr = self.config.language;
         if !self.chat_open {
             let expand_rail = button(
                 column![
-                    text("Open").size(10).color(accent_text()),
+                    text(tr.btn_open()).size(10).color(accent_text()),
                     Space::new(0, 8),
                     text("C").size(10).color(muted()),
                     text("H").size(10).color(muted()),
@@ -71,15 +72,15 @@ impl PstRagApp {
 
         let header = row![
             column![
-                text("Archive Chat").size(17).color(bright_text()),
-                text("Grounded RAG assistant - Markdown enabled")
+                text(tr.chat_title()).size(17).color(bright_text()),
+                text(tr.chat_subtitle())
                     .size(11)
                     .color(muted())
             ]
             .spacing(2)
             .width(Fill),
-            small_button("New", Some(ChatPaneMessage::NewChat)),
-            small_button("Hide", Some(ChatPaneMessage::ToggleChatPane)),
+            small_button(tr.btn_new(), Some(ChatPaneMessage::NewChat)),
+            small_button(tr.btn_hide(), Some(ChatPaneMessage::ToggleChatPane)),
         ]
         .spacing(5)
         .align_y(Alignment::Center);
@@ -88,18 +89,16 @@ impl PstRagApp {
         if self.messages.is_empty() {
             let prompts = column![
                 prompt_button(
-                    "Summarize the latest decisions",
-                    ChatPaneMessage::UsePrompt("Summarize the latest decisions in my archive")
+                    tr.prompt_summary_label(),
+                    ChatPaneMessage::UsePrompt(tr.prompt_summary_query())
                 ),
                 prompt_button(
-                    "Find messages about a project",
-                    ChatPaneMessage::UsePrompt(
-                        "Find the latest messages about my current projects"
-                    )
+                    tr.prompt_project_label(),
+                    ChatPaneMessage::UsePrompt(tr.prompt_project_query())
                 ),
                 prompt_button(
-                    "What needs a follow-up?",
-                    ChatPaneMessage::UsePrompt("Which recent messages need a follow-up?")
+                    tr.prompt_followup_label(),
+                    ChatPaneMessage::UsePrompt(tr.prompt_followup_query())
                 )
             ]
             .spacing(6)
@@ -107,8 +106,8 @@ impl PstRagApp {
             conversation = conversation.push(
                 container(
                     column![
-                        text("Ask your archive").size(16).color(bright_text()),
-                        text("Ask about decisions, people, dates, or projects. Only selected evidence is sent to your configured LLM.")
+                        text(tr.chat_welcome_title()).size(16).color(bright_text()),
+                        text(tr.chat_welcome_desc())
                             .size(11)
                             .color(muted()),
                         prompts
@@ -124,18 +123,18 @@ impl PstRagApp {
         conversation = self.sources_view(conversation);
 
         let enabled = !self.busy && self.count > 0 && !self.question.trim().is_empty();
-        let question_input = text_input("Ask your archive...", &self.question)
+        let question_input = text_input(tr.chat_input_placeholder(), &self.question)
             .id(chat_question_input_id())
             .on_input(ChatPaneMessage::QuestionChanged)
             .on_submit_maybe(enabled.then_some(ChatPaneMessage::Ask))
             .padding(10)
             .size(13);
         let helper = if self.count == 0 {
-            "Index an archive to start chatting"
+            tr.chat_helper_need_index()
         } else if self.busy {
-            "Working with your local archive..."
+            tr.chat_helper_busy()
         } else {
-            "Enter to send - Search only stays local"
+            tr.chat_helper_ready()
         };
         let composer = container(
             column![
@@ -143,10 +142,10 @@ impl PstRagApp {
                 row![
                     text(helper).size(10).color(muted()).width(Fill),
                     enabled_button(
-                        "Search only",
+                        tr.btn_search_only(),
                         enabled.then_some(ChatPaneMessage::SearchLocally)
                     ),
-                    primary_button("Send", enabled.then_some(ChatPaneMessage::Ask))
+                    primary_button(tr.btn_send(), enabled.then_some(ChatPaneMessage::Ask))
                 ]
                 .spacing(6)
                 .align_y(Alignment::Center)
@@ -179,15 +178,16 @@ impl PstRagApp {
         if self.hits.is_empty() {
             return conversation;
         }
+        let tr = self.config.language;
         let label = if self.show_sources {
-            "Hide evidence"
+            tr.btn_hide_evidence()
         } else {
-            "Show evidence"
+            tr.btn_show_evidence()
         };
         conversation = conversation.push(Space::new(0, 4)).push(
             button(
                 row![
-                    text("EVIDENCE").size(10).color(accent_text()),
+                    text(tr.evidence_heading()).size(10).color(accent_text()),
                     container(text(self.hits.len()).size(10))
                         .padding([2, 6])
                         .style(badge_style),
@@ -215,6 +215,7 @@ impl PstRagApp {
         index: usize,
         message: &'a ChatMessage,
     ) -> Element<'a, ChatPaneMessage> {
+        let tr = self.config.language;
         let is_user = matches!(message.role, ChatRole::User);
         let avatar = container(text(if is_user { "Y" } else { "D" }).size(10))
             .width(26)
@@ -227,7 +228,7 @@ impl PstRagApp {
                 assistant_avatar_style
             });
         let mut contents = column![
-            text(if is_user { "YOU" } else { "DUNGBEETLE" })
+            text(if is_user { tr.user_badge() } else { tr.assistant_badge() })
                 .size(9)
                 .color(if is_user { on_primary() } else { accent_text() }),
             render_markdown_blocks(&message.blocks, is_user, parse_link_message)
@@ -235,7 +236,7 @@ impl PstRagApp {
         .spacing(6);
         if !message.context_preview.is_empty() {
             contents = contents.push(horizontal_rule(1)).push(
-                checkbox("Show context sent to LLM", message.show_context)
+                checkbox(tr.show_context_checkbox(), message.show_context)
                     .size(12)
                     .text_size(11)
                     .on_toggle(move |value| ChatPaneMessage::ToggleContext(index, value)),
@@ -270,8 +271,9 @@ impl PstRagApp {
     }
 
     fn hit_view<'a>(&'a self, index: usize, hit: &'a SearchHit) -> Element<'a, ChatPaneMessage> {
+        let tr = self.config.language;
         let subject = if hit.subject.is_empty() {
-            "(No subject)"
+            tr.no_subject()
         } else {
             &hit.subject
         };
@@ -289,23 +291,23 @@ impl PstRagApp {
                     text(format!(
                         "{} - {}",
                         hit.sender,
-                        hit.sent_at.as_deref().unwrap_or("Unknown date")
+                        hit.sent_at.as_deref().unwrap_or_else(|| tr.unknown_date_full())
                     ))
                     .size(10)
                     .color(muted())
                 ]
                 .spacing(2)
                 .width(Fill),
-                small_button("Open Mail", Some(ChatPaneMessage::SelectEmail(hit.id))),
+                small_button(tr.btn_open_mail(), Some(ChatPaneMessage::SelectEmail(hit.id))),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
             text(hit.excerpt(240)).size(11),
             small_button(
                 if self.expanded_hit == Some(index) {
-                    "Hide details"
+                    tr.btn_hide_details()
                 } else {
-                    "Metadata and full excerpt"
+                    tr.btn_metadata_and_excerpt()
                 },
                 Some(ChatPaneMessage::ToggleHit(index))
             )
@@ -322,7 +324,7 @@ impl PstRagApp {
             contents = contents.push(text(meta_text).size(10).color(muted()));
             if !hit.attachment_names.trim().is_empty() {
                 contents = contents.push(
-                    text(format!("Attachments: {}", hit.attachment_names.trim()))
+                    text(tr.attachments_prefix(hit.attachment_names.trim()))
                         .size(10)
                         .color(accent_text()),
                 );
@@ -341,7 +343,7 @@ impl PstRagApp {
                     .collect::<Vec<_>>()
                     .join(", ");
                 contents = contents.push(
-                    text(format!("Labels: {}", label_str))
+                    text(tr.labels_prefix(&label_str))
                         .size(10)
                         .color(accent_text()),
                 );

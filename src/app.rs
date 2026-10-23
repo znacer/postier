@@ -237,7 +237,7 @@ enum Message {
 
 pub fn run() -> iced::Result {
     iced::application(
-        "PSTbeetle - Mail Explorer and Local RAG",
+        PstRagApp::title,
         PstRagApp::update,
         PstRagApp::view,
     )
@@ -248,6 +248,10 @@ pub fn run() -> iced::Result {
 }
 
 impl PstRagApp {
+    fn title(&self) -> String {
+        self.config.language.app_title().to_owned()
+    }
+
     fn new() -> Self {
         let base = std::env::current_exe()
             .ok()
@@ -275,7 +279,7 @@ impl PstRagApp {
             hits: vec![],
             show_sources: false,
             expanded_hit: None,
-            status: "Ready - Thunderbird mail explorer with Laya and LLM Judge labeling".into(),
+            status: config.language.status_ready().into(),
             count,
             sources,
             pending_remove_source: None,
@@ -529,6 +533,18 @@ impl PstRagApp {
                 self.config.embedding_model = value;
                 Task::none()
             }
+            SidebarMessage::LanguageChanged(language) => {
+                self.set_language(language);
+                Task::none()
+            }
+        }
+    }
+
+    fn set_language(&mut self, language: crate::i18n::Language) {
+        if self.config.language != language {
+            self.config.language = language;
+            let _ = actions::save_config(&self.storage_dir, &self.config);
+            self.status = language.status_language_changed().to_string();
         }
     }
 
@@ -564,7 +580,7 @@ impl PstRagApp {
             }
             ExplorerMessage::ClearCheckedEmails => {
                 self.checked_message_ids.clear();
-                self.status = "Cleared mail selection".into();
+                self.status = self.config.language.status_cleared_selection().into();
                 Task::none()
             }
             ExplorerMessage::SelectLabelFilter(filter) => {
@@ -584,7 +600,10 @@ impl PstRagApp {
             }
             ExplorerMessage::SetLabelerBackend(backend) => {
                 self.config.labeler_backend = backend;
-                self.status = format!("Active mail labeler switched to {}", backend.display_name());
+                self.status = match self.config.language {
+                    crate::i18n::Language::English => format!("Active mail labeler switched to {}", self.config.language.backend_name(backend)),
+                    crate::i18n::Language::French => format!("Moteur d'étiquetage actif basculé sur {}", self.config.language.backend_name(backend)),
+                };
                 Task::none()
             }
             ExplorerMessage::LabelFocusedEmail => {
@@ -612,7 +631,10 @@ impl PstRagApp {
                 if let Some(flag) = &self.cancel_flag {
                     flag.store(true, Ordering::Relaxed);
                 }
-                self.status = "Cancelling background task...".into();
+                self.status = match self.config.language {
+                    crate::i18n::Language::English => "Cancelling background task...".into(),
+                    crate::i18n::Language::French => "Annulation de la tâche en arrière-plan...".into(),
+                };
                 Task::none()
             }
         }
@@ -685,7 +707,7 @@ impl PstRagApp {
                     self.refresh_explorer_messages();
                 } else if !self.checked_message_ids.is_empty() {
                     self.checked_message_ids.clear();
-                    self.status = "Cleared mail selection".into();
+                    self.status = self.config.language.status_cleared_selection().into();
                 }
                 Task::none()
             }
@@ -758,6 +780,7 @@ impl PstRagApp {
     }
 
     fn handle_worker_result(&mut self, result: WorkerResult) {
+        let tr = self.config.language;
         match result {
             WorkerResult::Indexed(Ok(outcome)) => {
                 self.count = Index::open(&self.db_path)
@@ -765,14 +788,7 @@ impl PstRagApp {
                     .unwrap_or(self.count);
                 self.refresh_sources();
                 self.refresh_explorer();
-                self.status = if outcome.embedded > 0 {
-                    format!(
-                        "Indexed {} new messages with BM25 and stored {} remote embeddings",
-                        outcome.added, outcome.embedded
-                    )
-                } else {
-                    format!("Indexed {} new messages with local BM25", outcome.added)
-                };
+                self.status = tr.worker_indexed(outcome.added, outcome.embedded);
             }
             WorkerResult::Indexed(Err(error)) => self.status = error,
             WorkerResult::Searched(Ok(hits)) => {
@@ -783,19 +799,15 @@ impl PstRagApp {
                 self.expanded_hit = None;
                 self.chat_open = true;
                 self.messages.push(ChatMessage::assistant(
-                    format!(
-                        "I found {count} matching email{} in your local archive. The sources are shown below.",
-                        if count == 1 { "" } else { "s" }
-                    ),
+                    tr.worker_search_found(count),
                     String::new(),
                 ));
-                self.status =
-                    format!("Found {count} local results - nothing was sent over the network");
+                self.status = tr.worker_search_status(count);
             }
             WorkerResult::Searched(Err(error)) => {
                 self.chat_open = true;
                 self.messages.push(ChatMessage::assistant(
-                    format!("I could not complete that local search: {error}"),
+                    tr.worker_search_failed(&error),
                     String::new(),
                 ));
                 self.status = error;
@@ -807,49 +819,33 @@ impl PstRagApp {
                 self.hits = hits;
                 self.show_sources = false;
                 self.expanded_hit = None;
-                self.status = "Answer received".into();
+                self.status = tr.worker_answer_received().into();
             }
             WorkerResult::Answered(Err(error)) => {
                 self.chat_open = true;
                 self.messages.push(ChatMessage::assistant(
-                    format!("I could not answer that question: {error}"),
+                    tr.worker_answer_failed(&error),
                     String::new(),
                 ));
                 self.status = error;
             }
             WorkerResult::Labeled(Ok(outcome)) => {
                 self.refresh_explorer();
-                let prefix = if outcome.cancelled {
-                    "Stopped labeling after"
-                } else {
-                    "Labeled"
-                };
-                self.status = format!(
-                    "{} {} email{} ({} label{} assigned via {})",
-                    prefix,
+                self.status = tr.worker_labeled(
+                    outcome.cancelled,
                     outcome.messages_processed,
-                    if outcome.messages_processed == 1 {
-                        ""
-                    } else {
-                        "s"
-                    },
                     outcome.labels_assigned,
-                    if outcome.labels_assigned == 1 {
-                        ""
-                    } else {
-                        "s"
-                    },
-                    outcome.source_name
+                    &outcome.source_name,
                 );
             }
             WorkerResult::Labeled(Err(error)) => {
                 self.refresh_explorer();
-                self.status = format!("Labeling failed: {error}");
+                self.status = tr.worker_labeling_failed(&error);
             }
             WorkerResult::LayaDownloaded(Ok(path)) => {
                 self.config.laya_gguf_path = path.to_string_lossy().to_string();
                 let _ = actions::save_config(&self.storage_dir, &self.config);
-                self.status = format!("Downloaded Laya GGUF weights to {}", path.display());
+                self.status = tr.worker_laya_downloaded(&path.display().to_string());
             }
             WorkerResult::LayaDownloaded(Err(error)) => {
                 self.status = format!("Laya GGUF download failed: {error}");

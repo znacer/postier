@@ -38,6 +38,7 @@ pub(super) enum SidebarMessage {
     TokenChanged(String),
     RemoteEmbeddingsChanged(bool),
     EmbeddingModelChanged(String),
+    LanguageChanged(crate::i18n::Language),
 }
 
 #[derive(Default)]
@@ -128,10 +129,11 @@ pub(crate) fn folder_tree_rows<'a>(
 
 impl PstRagApp {
     pub(super) fn sidebar(&self) -> Element<'_, SidebarMessage> {
+        let tr = self.config.language;
         if !self.sidebar_open {
             let expand_rail = button(
                 column![
-                    text("Open").size(10).color(accent_text()),
+                    text(tr.btn_open()).size(10).color(accent_text()),
                     Space::new(0, 8),
                     text("M").size(10).color(muted()),
                     text("A").size(10).color(muted()),
@@ -159,25 +161,25 @@ impl PstRagApp {
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
-            .unwrap_or("No archive selected");
+            .unwrap_or_else(|| tr.no_archive_selected());
         let choose = small_button(
-            "Choose PST",
+            tr.btn_choose_pst(),
             (!self.busy).then_some(SidebarMessage::ChooseArchive),
         );
         let index = small_button(
-            "Index now",
+            tr.btn_index_now(),
             (!self.busy && self.archive.is_some()).then_some(SidebarMessage::Index),
         );
         let storage = small_button(
-            "Choose directory",
+            tr.btn_choose_directory(),
             (!self.busy).then_some(SidebarMessage::ChooseStorage),
         );
-        let save = small_button("Save AI settings", Some(SidebarMessage::SaveCredentials));
+        let save = small_button(tr.btn_save_ai_settings(), Some(SidebarMessage::SaveCredentials));
 
         let all_selected = self.mail_scope == MailScope::AllMessages;
         let all_mail_btn = button(
             row![
-                text("All Messages").size(12).width(Fill),
+                text(tr.all_messages()).size(12).width(Fill),
                 text(self.count).size(11).color(accent_text())
             ]
             .align_y(Alignment::Center),
@@ -194,7 +196,7 @@ impl PstRagApp {
         let mut mailbox_col = column![
             all_mail_btn,
             horizontal_rule(1),
-            text(format!("Import: {name}")).size(11).color(muted()),
+            text(tr.import_prefix(name)).size(11).color(muted()),
             row![choose, index].spacing(6),
             horizontal_rule(1),
         ]
@@ -202,7 +204,7 @@ impl PstRagApp {
 
         if self.sources.is_empty() {
             mailbox_col =
-                mailbox_col.push(text("No PST files indexed yet").size(11).color(muted()));
+                mailbox_col.push(text(tr.no_pst_indexed()).size(11).color(muted()));
         }
         for source in &self.sources {
             let source_key = source.key.clone();
@@ -278,7 +280,7 @@ impl PstRagApp {
                 if tree_row.has_children {
                     let source_key = source.key.clone();
                     let folder_path = tree_row.path;
-                    let toggle_label = if tree_row.collapsed { "Show" } else { "Hide" };
+                    let toggle_label = if tree_row.collapsed { tr.btn_show() } else { tr.btn_hide() };
                     source_view = source_view.push(
                         row![
                             Space::new(indent_px, 0),
@@ -306,10 +308,10 @@ impl PstRagApp {
             if self.pending_remove_source.as_deref() == Some(&source.key) {
                 source_view = source_view.push(
                     column![
-                        text("Remove this PST's messages and embeddings?").size(10),
+                        text(tr.confirm_remove_pst()).size(10),
                         row![
-                            small_button("Cancel", Some(SidebarMessage::CancelRemoveSource)),
-                            small_button("Remove", Some(SidebarMessage::ConfirmRemoveSource))
+                            small_button(tr.btn_cancel(), Some(SidebarMessage::CancelRemoveSource)),
+                            small_button(tr.btn_remove(), Some(SidebarMessage::ConfirmRemoveSource))
                         ]
                         .spacing(6)
                     ]
@@ -317,7 +319,7 @@ impl PstRagApp {
                 );
             } else {
                 source_view = source_view.push(small_button(
-                    "Remove index",
+                    tr.btn_remove_index(),
                     (!self.busy)
                         .then_some(SidebarMessage::RemoveSourceRequested(source.key.clone())),
                 ));
@@ -329,11 +331,11 @@ impl PstRagApp {
         let mut labels_col = column![
             row![
                 small_button(
-                    "All",
+                    tr.btn_all(),
                     Some(SidebarMessage::SelectLabelFilter(LabelFilter::Any))
                 ),
                 small_button(
-                    format!("Unlabeled ({})", self.unlabeled_count),
+                    tr.unlabeled_count(self.unlabeled_count),
                     Some(SidebarMessage::SelectLabelFilter(LabelFilter::Unlabeled))
                 ),
             ]
@@ -365,7 +367,7 @@ impl PstRagApp {
                         label_name
                     ))),
                     small_button(
-                        "Delete",
+                        tr.btn_delete(),
                         Some(SidebarMessage::RemoveLabelDefinition(label_del))
                     ),
                 ]
@@ -377,9 +379,9 @@ impl PstRagApp {
         let can_add_label = !self.new_label_name.trim().is_empty();
         labels_col = labels_col
             .push(horizontal_rule(1))
-            .push(text("Add or update label").size(11).color(muted()))
+            .push(text(tr.add_or_update_label()).size(11).color(muted()))
             .push(
-                text_input("Label name (e.g. Billing)", &self.new_label_name)
+                text_input(tr.label_name_placeholder(), &self.new_label_name)
                     .on_input(SidebarMessage::NewLabelNameChanged)
                     .on_submit_maybe(can_add_label.then_some(SidebarMessage::SaveLabelDefinition))
                     .size(11)
@@ -387,7 +389,7 @@ impl PstRagApp {
             )
             .push(
                 text_input(
-                    "Criteria description for Laya or LLM Judge",
+                    tr.label_desc_placeholder(),
                     &self.new_label_description,
                 )
                 .on_input(SidebarMessage::NewLabelDescriptionChanged)
@@ -396,22 +398,22 @@ impl PstRagApp {
                 .padding(6),
             )
             .push(small_button(
-                "Save Label",
+                tr.btn_save_label(),
                 can_add_label.then_some(SidebarMessage::SaveLabelDefinition),
             ));
         let labels_card = card(labels_col);
 
         let external_gguf = self.active_laya_gguf_path();
         let laya_status = match &external_gguf {
-            Some(path) => format!("External GGUF ready: {}", path.display()),
-            None => "Active: Built-in packaged Laya-GGUF decision model".to_owned(),
+            Some(path) => tr.laya_ready(&path.display().to_string()),
+            None => tr.laya_builtin_active().to_owned(),
         };
         let laya_card = card(
             column![
                 text("ggml-org/Laya-GGUF").size(12).color(bright_text()),
                 text(laya_status).size(10).color(muted()),
                 text_input(
-                    "Optional path to Laya-Q8_0.gguf",
+                    tr.laya_path_placeholder(),
                     &self.config.laya_gguf_path
                 )
                 .on_input(SidebarMessage::LayaGgufPathChanged)
@@ -419,16 +421,16 @@ impl PstRagApp {
                 .padding(6),
                 row![
                     small_button(
-                        "Choose GGUF...",
+                        tr.btn_choose_gguf(),
                         (!self.busy).then_some(SidebarMessage::ChooseLayaGguf)
                     ),
                     small_button(
-                        "Download Q8_0",
+                        tr.btn_download_q8(),
                         (!self.busy).then_some(SidebarMessage::DownloadLayaGguf)
                     ),
                 ]
                 .spacing(6),
-                text("Packaged Laya-GGUF runs in-process offline. Downloading Laya-Q8_0.gguf switches to the full 421M checkpoint.")
+                text(tr.laya_explanation())
                     .size(10)
                     .color(muted()),
             ]
@@ -437,36 +439,36 @@ impl PstRagApp {
 
         let llm = card(
             column![
-                text("Endpoint").size(11),
+                text(tr.endpoint_label()).size(11),
                 text_input("https://...", &self.config.endpoint)
                     .on_input(SidebarMessage::EndpointChanged)
                     .size(11)
                     .padding(6),
-                text("Model").size(11),
-                text_input("Model name", &self.config.model)
+                text(tr.model_label()).size(11),
+                text_input(tr.model_placeholder(), &self.config.model)
                     .on_input(SidebarMessage::ModelChanged)
                     .size(11)
                     .padding(6),
-                text("API key").size(11),
-                text_input("Optional bearer token", &self.config.bearer_token)
+                text(tr.api_key_label()).size(11),
+                text_input(tr.token_placeholder(), &self.config.bearer_token)
                     .secure(true)
                     .on_input(SidebarMessage::TokenChanged)
                     .size(11)
                     .padding(6),
                 horizontal_rule(1),
                 checkbox(
-                    "Remote embeddings on index",
+                    tr.remote_embeddings_checkbox(),
                     self.config.use_remote_embeddings
                 )
                 .size(13)
                 .text_size(11)
                 .on_toggle(SidebarMessage::RemoteEmbeddingsChanged),
-                text("Embedding model").size(11),
-                text_input("Embedding model name", &self.config.embedding_model)
+                text(tr.embedding_model_label()).size(11),
+                text_input(tr.embedding_model_placeholder(), &self.config.embedding_model)
                     .on_input(SidebarMessage::EmbeddingModelChanged)
                     .size(11)
                     .padding(6),
-                text("HTTPS required except for 127.0.0.1")
+                text(tr.https_required_notice())
                     .size(10)
                     .color(muted()),
                 save
@@ -477,7 +479,7 @@ impl PstRagApp {
         let storage_card = card(
             column![
                 text(self.storage_dir.display().to_string()).size(10),
-                text("Contains SQLite index, labels, models, and credentials")
+                text(tr.storage_notice())
                     .size(10)
                     .color(muted()),
                 storage
@@ -494,26 +496,49 @@ impl PstRagApp {
                 .style(accent_tile_style),
             column![
                 text("PSTbeetle").size(14).color(bright_text()),
-                text("Thunderbird Mail Explorer").size(10).color(muted())
+                text(tr.brand_subtitle()).size(10).color(muted())
             ]
             .spacing(1)
             .width(Fill),
-            small_button("Hide", Some(SidebarMessage::ToggleSidebar)),
+            small_button(tr.btn_hide(), Some(SidebarMessage::ToggleSidebar)),
         ]
         .spacing(10)
         .align_y(Alignment::Center);
 
-        let mut contents = column![brand, horizontal_rule(1)].spacing(10).padding(14);
+        let lang_selector = row![
+            text(tr.language_label()).size(11).color(muted()),
+            Space::new(Fill, 0),
+            button(text("Français").size(10))
+                .padding([2, 8])
+                .style(if self.config.language == crate::i18n::Language::French {
+                    button::primary
+                } else {
+                    button::secondary
+                })
+                .on_press(SidebarMessage::LanguageChanged(crate::i18n::Language::French)),
+            button(text("English").size(10))
+                .padding([2, 8])
+                .style(if self.config.language == crate::i18n::Language::English {
+                    button::primary
+                } else {
+                    button::secondary
+                })
+                .on_press(SidebarMessage::LanguageChanged(crate::i18n::Language::English)),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+
+        let mut contents = column![brand, lang_selector, horizontal_rule(1)].spacing(10).padding(14);
         for (section, label, body) in [
             (
                 SidebarSection::Mailboxes,
-                "MAILBOXES AND FOLDERS",
+                tr.section_mailboxes(),
                 mailboxes_card,
             ),
-            (SidebarSection::Labels, "MAIL LABELS", labels_card),
-            (SidebarSection::LayaModel, "LAYA DECISION MODEL", laya_card),
-            (SidebarSection::AiModels, "LLM JUDGE AND RAG", llm),
-            (SidebarSection::Storage, "STORAGE", storage_card),
+            (SidebarSection::Labels, tr.section_labels(), labels_card),
+            (SidebarSection::LayaModel, tr.section_laya(), laya_card),
+            (SidebarSection::AiModels, tr.section_ai(), llm),
+            (SidebarSection::Storage, tr.section_storage(), storage_card),
         ] {
             let collapsed = self.collapsed_sections[section.index()];
             contents = contents.push(collapsible_section_label(

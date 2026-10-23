@@ -34,7 +34,7 @@ impl PstRagApp {
             return Task::none();
         }
         let Some(selected) = self.selected_email().cloned() else {
-            self.status = "Select an email in the explorer first".into();
+            self.status = self.config.language.status_labeling_select_first().into();
             return Task::none();
         };
         self.run_labeling_job(vec![selected], backend)
@@ -65,11 +65,14 @@ impl PstRagApp {
             match Index::open(&self.db_path).and_then(|db| db.get_messages_by_ids(&ordered_ids)) {
                 Ok(records) if !records.is_empty() => records,
                 Ok(_) => {
-                    self.status = "No matching emails found for selection".into();
+                    self.status = self.config.language.status_labeling_no_matches().into();
                     return Task::none();
                 }
                 Err(error) => {
-                    self.status = format!("Could not load selected emails: {error:#}");
+                    self.status = self
+                        .config
+                        .language
+                        .status_labeling_load_err(&format!("{error:#}"));
                     return Task::none();
                 }
             };
@@ -81,7 +84,7 @@ impl PstRagApp {
             return Task::none();
         }
         if self.explorer_messages.is_empty() {
-            self.status = "No messages in the current explorer view to label".into();
+            self.status = self.config.language.status_labeling_no_visible().into();
             return Task::none();
         }
         let batch: Vec<EmailRecord> = self.explorer_messages.iter().take(50).cloned().collect();
@@ -100,12 +103,10 @@ impl PstRagApp {
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_flag = Some(cancel.clone());
         self.busy = true;
-        self.status = format!(
-            "Labeling {} email{} with {}...",
-            total,
-            if total == 1 { "" } else { "s" },
-            backend.display_name()
-        );
+        self.status = self
+            .config
+            .language
+            .status_labeling_emails_with(total, backend.display_name());
         spawn_worker(move |tx| {
             let result = (|| {
                 let mut db = Index::open(&db_path)?;
@@ -125,10 +126,10 @@ impl PstRagApp {
                             if total > 1 {
                                 emit_worker_event(
                                     tx,
-                                    WorkerEvent::Progress(format!(
-                                        "Labeling email {} of {} with Laya...",
+                                    WorkerEvent::Progress(config.language.status_labeling_progress(
                                         idx + 1,
-                                        total
+                                        total,
+                                        "Laya",
                                     )),
                                 );
                             }
@@ -157,10 +158,10 @@ impl PstRagApp {
                             }
                             emit_worker_event(
                                 tx,
-                                WorkerEvent::Progress(format!(
-                                    "Labeling email {} of {} with LLM Judge...",
+                                WorkerEvent::Progress(config.language.status_labeling_progress(
                                     idx + 1,
-                                    total
+                                    total,
+                                    "LLM Judge",
                                 )),
                             );
                             let assigned = llm::judge_labels(&config, email, &definitions)?;
@@ -194,21 +195,20 @@ impl PstRagApp {
         match Index::open(&self.db_path).and_then(|db| db.toggle_manual_label(message_id, label)) {
             Ok(added) => {
                 self.refresh_explorer();
-                self.status = if added {
-                    format!("Applied label '{label}'")
-                } else {
-                    format!("Removed label '{label}'")
-                };
+                self.status = self.config.language.status_label_updated(label, added);
             }
             Err(error) => {
-                self.status = format!("Could not update label '{label}': {error:#}");
+                self.status = self
+                    .config
+                    .language
+                    .status_label_update_err(label, &format!("{error:#}"));
             }
         }
     }
 
     pub(in crate::app) fn toggle_manual_label_on_checked(&mut self, label: &str) {
         if self.checked_message_ids.is_empty() {
-            self.status = "Check one or more emails first".into();
+            self.status = self.config.language.status_check_emails_first().into();
             return;
         }
         let ids: Vec<i64> = self.checked_message_ids.iter().copied().collect();
@@ -228,14 +228,16 @@ impl PstRagApp {
         {
             Ok(_) => {
                 self.refresh_explorer();
-                self.status = if assign {
-                    format!("Applied label '{label}' to {} selected emails", ids.len())
-                } else {
-                    format!("Removed label '{label}' from {} selected emails", ids.len())
-                };
+                self.status =
+                    self.config
+                        .language
+                        .status_label_batch_updated(label, assign, ids.len());
             }
             Err(error) => {
-                self.status = format!("Could not update label '{label}' on selection: {error:#}");
+                self.status = self
+                    .config
+                    .language
+                    .status_label_batch_err(label, &format!("{error:#}"));
             }
         }
     }
@@ -243,7 +245,7 @@ impl PstRagApp {
     pub(in crate::app) fn save_label_definition(&mut self) {
         let name = self.new_label_name.trim().to_string();
         if name.is_empty() {
-            self.status = "Enter a label name first".into();
+            self.status = self.config.language.status_enter_label_name_first().into();
             return;
         }
         let description = if self.new_label_description.trim().is_empty() {
@@ -264,10 +266,13 @@ impl PstRagApp {
                 self.new_label_name.clear();
                 self.new_label_description.clear();
                 self.refresh_explorer();
-                self.status = format!("Saved label '{name}'");
+                self.status = self.config.language.status_saved_label(&name);
             }
             Err(error) => {
-                self.status = format!("Could not save label '{name}': {error:#}");
+                self.status = self
+                    .config
+                    .language
+                    .status_label_save_err(&name, &format!("{error:#}"));
             }
         }
     }
@@ -279,10 +284,13 @@ impl PstRagApp {
                     self.label_filter = LabelFilter::Any;
                 }
                 self.refresh_explorer();
-                self.status = format!("Removed label '{name}'");
+                self.status = self.config.language.status_removed_label(name);
             }
             Err(error) => {
-                self.status = format!("Could not remove label '{name}': {error:#}");
+                self.status = self
+                    .config
+                    .language
+                    .status_label_remove_err(name, &format!("{error:#}"));
             }
         }
     }

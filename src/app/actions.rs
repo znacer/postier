@@ -80,20 +80,15 @@ impl PstRagApp {
             &self.storage_location_path,
             self.storage_dir.to_string_lossy().as_bytes(),
         ) {
-            Ok(()) => format!(
-                "Storage directory changed to {}",
-                self.storage_dir.display()
-            ),
-            Err(error) => format!(
-                "Storage changed for this session, but the selection could not be saved: {error}"
-            ),
+            Ok(()) => self.config.language.status_storage_changed(&self.storage_dir.display().to_string()),
+            Err(error) => self.config.language.status_storage_saved_err(&error.to_string()),
         };
     }
 
     pub(super) fn save_credentials(&mut self) {
         self.status = match save_config(&self.storage_dir, &self.config) {
-            Ok(()) => format!("Settings saved in {}", self.storage_dir.display()),
-            Err(error) => format!("Could not save settings: {error:#}"),
+            Ok(()) => self.config.language.status_settings_saved(&self.storage_dir.display().to_string()),
+            Err(error) => self.config.language.status_settings_save_err(&format!("{error:#}")),
         };
     }
 
@@ -135,7 +130,7 @@ impl PstRagApp {
     pub(super) fn apply_laya_gguf(&mut self, path: PathBuf) {
         self.config.laya_gguf_path = path.to_string_lossy().to_string();
         let _ = save_config(&self.storage_dir, &self.config);
-        self.status = format!("Selected Laya GGUF weights at {}", path.display());
+        self.status = self.config.language.status_selected_laya_gguf(&path.display().to_string());
     }
 
     pub(super) fn download_laya_gguf(&mut self) -> Task<Message> {
@@ -149,7 +144,7 @@ impl PstRagApp {
         };
         self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
         self.busy = true;
-        self.status = format!("Downloading ggml-org/Laya-GGUF to {}...", target.display());
+        self.status = self.config.language.status_downloading_laya(&target.display().to_string());
         spawn_worker(move |_tx| {
             let result = laya::download_laya_gguf(&target)
                 .map(|_| target)
@@ -178,22 +173,29 @@ impl PstRagApp {
             return Task::none();
         }
         let Some(path) = self.archive.clone() else {
-            self.status = "Select an archive first".into();
+            self.status = self.config.language.status_select_archive_first().into();
             return Task::none();
         };
         let db_path = self.db_path.clone();
         let config = self.config.clone();
         if config.use_remote_embeddings && config.embedding_model.trim().is_empty() {
-            self.status = "Enter an embedding model before enabling remote embeddings".into();
+            self.status = self.config.language.status_enter_embedding_model_first().into();
             return Task::none();
         }
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_flag = Some(cancel.clone());
         self.busy = true;
-        self.status = if config.use_remote_embeddings {
-            "Importing archive and indexing BM25 locally...".into()
-        } else {
-            "Indexing BM25 locally...".into()
+        self.status = match self.config.language {
+            crate::i18n::Language::English => if config.use_remote_embeddings {
+                "Importing archive and indexing BM25 locally...".into()
+            } else {
+                "Indexing BM25 locally...".into()
+            },
+            crate::i18n::Language::French => if config.use_remote_embeddings {
+                "Importation de l'archive et indexation BM25 locale en cours...".into()
+            } else {
+                "Indexation BM25 locale en cours...".into()
+            },
         };
         spawn_worker(move |tx| {
             let result = (|| {
@@ -254,7 +256,7 @@ impl PstRagApp {
             return Task::none();
         }
         if self.question.trim().is_empty() {
-            self.status = "Enter a question first".into();
+            self.status = self.config.language.status_enter_question_first().into();
             return Task::none();
         }
         let question = self.question.trim().to_owned();
@@ -300,7 +302,7 @@ impl PstRagApp {
         let config = self.config.clone();
         self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
         self.busy = true;
-        self.status = "Searching local index...".into();
+        self.status = self.config.language.status_searching_local_index().into();
         spawn_worker(move |tx| {
             let result = (|| {
                 let db = Index::open(&db_path)?;
@@ -347,11 +349,17 @@ impl PstRagApp {
         self.select_email(message_id);
         self.chat_open = true;
         if let Some(email) = self.selected_email() {
-            self.question = format!(
-                "Summarize the email \"{}\" from {} and list any concrete action items or decisions.",
-                email.subject, email.sender
-            );
-            self.status = "Prepared prompt for the selected email in the Chat pane".into();
+            self.question = match self.config.language {
+                crate::i18n::Language::English => format!(
+                    "Summarize the email \"{}\" from {} and list any concrete action items or decisions.",
+                    email.subject, email.sender
+                ),
+                crate::i18n::Language::French => format!(
+                    "Résume le courriel « {} » de {} et liste les actions concrètes ou décisions éventuelles.",
+                    email.subject, email.sender
+                ),
+            };
+            self.status = self.config.language.status_prepared_prompt_email().into();
         }
         text_input::focus(chat_question_input_id())
     }
@@ -361,7 +369,7 @@ impl PstRagApp {
             return Task::none();
         }
         if self.question.trim().is_empty() {
-            self.status = "Enter search terms first".into();
+            self.status = self.config.language.status_enter_search_terms_first().into();
             return Task::none();
         }
         let query = self.question.trim().to_owned();
@@ -371,7 +379,7 @@ impl PstRagApp {
         let db_path = self.db_path.clone();
         self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
         self.busy = true;
-        self.status = "Searching locally - no network request...".into();
+        self.status = self.config.language.status_searching_locally().into();
         spawn_worker(move |_tx| {
             let result = Index::open(&db_path)
                 .and_then(|db| db.search(&query, 50))
@@ -387,7 +395,7 @@ impl PstRagApp {
         self.show_sources = false;
         self.expanded_hit = None;
         self.question.clear();
-        self.status = "New conversation - the local index is still available".into();
+        self.status = self.config.language.status_new_conversation().into();
     }
 
     pub(super) fn refresh_sources(&mut self) {
@@ -487,20 +495,12 @@ impl PstRagApp {
             for email in &self.explorer_messages {
                 self.checked_message_ids.insert(email.id);
             }
-            self.status = format!(
-                "Selected {} visible email{}",
-                self.explorer_messages.len(),
-                if self.explorer_messages.len() == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            );
+            self.status = self.config.language.status_selected_visible_count(self.explorer_messages.len());
         } else {
             for email in &self.explorer_messages {
                 self.checked_message_ids.remove(&email.id);
             }
-            self.status = "Deselected visible emails".into();
+            self.status = self.config.language.status_deselected_visible().into();
         }
     }
 
@@ -511,12 +511,7 @@ impl PstRagApp {
                 added += 1;
             }
         }
-        self.status = format!(
-            "Selected {} unlabeled email{} in current view ({} total selected)",
-            added,
-            if added == 1 { "" } else { "s" },
-            self.checked_message_ids.len()
-        );
+        self.status = self.config.language.status_selected_unlabeled(added, self.checked_message_ids.len());
     }
 
     pub(super) fn select_range_to(&mut self, target_id: i64) {
@@ -535,11 +530,7 @@ impl PstRagApp {
                 self.checked_message_ids.insert(email.id);
             }
             self.selected_message_id = Some(target_id);
-            self.status = format!(
-                "Selected range of {} emails ({} total selected)",
-                end - start + 1,
-                self.checked_message_ids.len()
-            );
+            self.status = self.config.language.status_selected_range(end - start + 1, self.checked_message_ids.len());
         } else {
             self.checked_message_ids.insert(target_id);
             self.selected_message_id = Some(target_id);
@@ -559,9 +550,9 @@ impl PstRagApp {
                 self.refresh_sources();
                 self.refresh_explorer();
                 if enabled {
-                    "PST enabled for retrieval".into()
+                    self.config.language.status_pst_enabled().into()
                 } else {
-                    "PST excluded from retrieval".into()
+                    self.config.language.status_pst_excluded().into()
                 }
             }
             Err(error) => format!("Could not update PST selection: {error:#}"),
@@ -576,9 +567,9 @@ impl PstRagApp {
                 self.refresh_sources();
                 self.refresh_explorer();
                 if enabled {
-                    "Folder tree enabled for retrieval".into()
+                    self.config.language.status_folders_enabled().into()
                 } else {
-                    "Folder tree excluded from retrieval".into()
+                    self.config.language.status_folders_excluded().into()
                 }
             }
             Err(error) => format!("Could not update folder tree selection: {error:#}"),
@@ -596,9 +587,9 @@ impl PstRagApp {
                 self.checked_message_ids.clear();
                 self.refresh_sources();
                 self.refresh_explorer();
-                format!("Removed {removed} indexed messages and their embeddings")
+                self.config.language.status_pst_removed(removed)
             }
-            Err(error) => format!("Could not remove indexed PST: {error:#}"),
+            Err(error) => self.config.language.status_pst_remove_err(&format!("{error:#}")),
         };
     }
 }
