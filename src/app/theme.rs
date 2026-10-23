@@ -73,33 +73,55 @@ pub(super) fn build_app_theme() -> Theme {
     )
 }
 
+pub(super) const BUTTON_MAX_WIDTH: f32 = 240.0;
+pub(super) const BUTTON_MAX_HEIGHT: f32 = 36.0;
+
+pub(super) fn constrain_button<'a, M: 'a>(
+    btn: impl Into<Element<'a, M>>,
+) -> Element<'a, M> {
+    container(btn)
+        .max_width(BUTTON_MAX_WIDTH)
+        .max_height(BUTTON_MAX_HEIGHT)
+        .clip(true)
+        .into()
+}
+
 pub(super) fn enabled_button<'a, M: Clone + 'a>(
     label: impl text::IntoFragment<'a>,
     message: Option<M>,
-) -> iced::widget::Button<'a, M> {
-    button(text(label).size(12))
-        .padding([6, 11])
-        .on_press_maybe(message)
+) -> Element<'a, M> {
+    constrain_button(
+        button(text(label).size(12))
+            .padding([6, 11])
+            .clip(true)
+            .on_press_maybe(message),
+    )
 }
 
 pub(super) fn small_button<'a, M: Clone + 'a>(
     label: impl text::IntoFragment<'a>,
     message: Option<M>,
-) -> iced::widget::Button<'a, M> {
-    button(text(label).size(11))
-        .padding([4, 9])
-        .style(button::secondary)
-        .on_press_maybe(message)
+) -> Element<'a, M> {
+    constrain_button(
+        button(text(label).size(11))
+            .padding([4, 9])
+            .style(button::secondary)
+            .clip(true)
+            .on_press_maybe(message),
+    )
 }
 
 pub(super) fn primary_button<'a, M: Clone + 'a>(
     label: impl text::IntoFragment<'a>,
     message: Option<M>,
-) -> iced::widget::Button<'a, M> {
-    button(text(label).size(12))
-        .padding([7, 14])
-        .style(button::primary)
-        .on_press_maybe(message)
+) -> Element<'a, M> {
+    constrain_button(
+        button(text(label).size(12))
+            .padding([7, 14])
+            .style(button::primary)
+            .clip(true)
+            .on_press_maybe(message),
+    )
 }
 
 pub(super) fn prompt_button<'a, M: Clone + 'a>(
@@ -363,6 +385,7 @@ pub(super) fn source_style(_: &Theme) -> container::Style {
 pub(super) fn accent_tile_style(_: &Theme) -> container::Style {
     panel(PRIMARY, PRIMARY, 9.0)
 }
+
 pub(super) fn user_avatar_style(_: &Theme) -> container::Style {
     panel(USER_BUBBLE, USER_BUBBLE, 14.0)
 }
@@ -383,4 +406,20 @@ pub(super) fn composer_style(_: &Theme) -> container::Style {
         blur_radius: 14.0,
     };
     style
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn button_dimension_constraints_are_enforced() {
+        assert_eq!(BUTTON_MAX_WIDTH, 240.0);
+        assert_eq!(BUTTON_MAX_HEIGHT, 36.0);
+
+        let _small: Element<'static, ()> = small_button("Test", Some(()));
+        let _primary: Element<'static, ()> = primary_button("Test", Some(()));
+        let _enabled: Element<'static, ()> = enabled_button("Test", Some(()));
+        let _custom: Element<'static, ()> = constrain_button(button(text("Custom")));
+    }
 }

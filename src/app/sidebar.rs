@@ -508,22 +508,28 @@ impl PstRagApp {
         let lang_selector = row![
             text(tr.language_label()).size(11).color(muted()),
             Space::new(Fill, 0),
-            button(text("Français").size(10))
-                .padding([2, 8])
-                .style(if self.config.language == crate::i18n::Language::French {
-                    button::primary
-                } else {
-                    button::secondary
-                })
-                .on_press(SidebarMessage::LanguageChanged(crate::i18n::Language::French)),
-            button(text("English").size(10))
-                .padding([2, 8])
-                .style(if self.config.language == crate::i18n::Language::English {
-                    button::primary
-                } else {
-                    button::secondary
-                })
-                .on_press(SidebarMessage::LanguageChanged(crate::i18n::Language::English)),
+            constrain_button(
+                button(text("Français").size(10))
+                    .padding([2, 8])
+                    .clip(true)
+                    .style(if self.config.language == crate::i18n::Language::French {
+                        button::primary
+                    } else {
+                        button::secondary
+                    })
+                    .on_press(SidebarMessage::LanguageChanged(crate::i18n::Language::French)),
+            ),
+            constrain_button(
+                button(text("English").size(10))
+                    .padding([2, 8])
+                    .clip(true)
+                    .style(if self.config.language == crate::i18n::Language::English {
+                        button::primary
+                    } else {
+                        button::secondary
+                    })
+                    .on_press(SidebarMessage::LanguageChanged(crate::i18n::Language::English)),
+            ),
         ]
         .spacing(6)
         .align_y(Alignment::Center);

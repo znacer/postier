@@ -156,23 +156,29 @@ impl PstRagApp {
             small_button(tr.btn_clear(), Some(ExplorerMessage::FilterChanged(String::new()))).into()
         };
 
-        let laya_btn = button(text(tr.backend_name(LabelerBackend::Laya)).size(11))
-            .padding([5, 10])
-            .style(if self.config.labeler_backend == LabelerBackend::Laya {
-                button::primary
-            } else {
-                button::secondary
-            })
-            .on_press(ExplorerMessage::SetLabelerBackend(LabelerBackend::Laya));
+        let laya_btn = constrain_button(
+            button(text(tr.backend_name(LabelerBackend::Laya)).size(11))
+                .padding([5, 10])
+                .clip(true)
+                .style(if self.config.labeler_backend == LabelerBackend::Laya {
+                    button::primary
+                } else {
+                    button::secondary
+                })
+                .on_press(ExplorerMessage::SetLabelerBackend(LabelerBackend::Laya)),
+        );
 
-        let llm_btn = button(text(tr.backend_name(LabelerBackend::LlmJudge)).size(11))
-            .padding([5, 10])
-            .style(if self.config.labeler_backend == LabelerBackend::LlmJudge {
-                button::primary
-            } else {
-                button::secondary
-            })
-            .on_press(ExplorerMessage::SetLabelerBackend(LabelerBackend::LlmJudge));
+        let llm_btn = constrain_button(
+            button(text(tr.backend_name(LabelerBackend::LlmJudge)).size(11))
+                .padding([5, 10])
+                .clip(true)
+                .style(if self.config.labeler_backend == LabelerBackend::LlmJudge {
+                    button::primary
+                } else {
+                    button::secondary
+                })
+                .on_press(ExplorerMessage::SetLabelerBackend(LabelerBackend::LlmJudge)),
+        );
 
         let checked_count = self.checked_message_ids.len();
         let (label_action_title, label_action_msg) = if checked_count > 0 {
@@ -269,16 +275,17 @@ impl PstRagApp {
                 tr.add_label_chip(&def.name)
             };
             let label_name = def.name.clone();
-            manual_chips = manual_chips.push(
+            manual_chips = manual_chips.push(constrain_button(
                 button(text(chip_label).size(10))
                     .padding([3, 8])
+                    .clip(true)
                     .style(if all_have_label {
                         button::primary
                     } else {
                         button::secondary
                     })
                     .on_press(ExplorerMessage::ToggleManualLabelOnChecked(label_name)),
-            );
+            ));
         }
 
         container(
