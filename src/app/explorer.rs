@@ -1,8 +1,18 @@
 use dioxus::prelude::*;
 
-use crate::model::{EmailRecord, LabelFilter, LabelerBackend, MailScope, MailSort};
+use crate::{
+    i18n::Language,
+    model::{EmailRecord, LabelFilter, LabelerBackend, MailScope, MailSort},
+};
 
-use super::{DispatchMessage, PstRagApp, email_html::format_email_body_html, theme::*};
+use super::{
+    DispatchMessage, PstRagApp,
+    email_html::{
+        ContactEntry, format_email_body_html, format_email_datetime, parse_contact,
+        parse_email_participants,
+    },
+    theme::*,
+};
 
 #[derive(Debug, Clone)]
 pub(super) enum ExplorerMessage {
@@ -530,22 +540,23 @@ impl PstRagApp {
         } else {
             email.subject.as_str()
         };
-        let sender = if email.sender.trim().is_empty() {
-            tr.unknown_sender()
+        let sender_contact = if email.sender.trim().is_empty() {
+            None
         } else {
-            email.sender.as_str()
+            Some(parse_contact(&email.sender))
         };
+        let sender = sender_contact
+            .as_ref()
+            .map(ContactEntry::display_primary)
+            .unwrap_or_else(|| tr.unknown_sender());
         let folder = if email.folder.trim().is_empty() {
             tr.root_folder()
         } else {
             email.folder.as_str()
         };
-        let date_short = email
-            .sent_at
-            .as_deref()
-            .map(short_date)
-            .unwrap_or_else(|| tr.unknown_date())
-            .to_owned();
+        let date_short = format_email_datetime(email.sent_at.as_deref(), tr)
+            .map(|dt| dt.table_short)
+            .unwrap_or_else(|| tr.unknown_date().to_owned());
 
         let mut label_badges = Vec::new();
         let no_labels = email.labels.is_empty();
@@ -669,6 +680,12 @@ impl PstRagApp {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(&email.source_key);
+        let folder_display = if email.folder.trim().is_empty() {
+            tr.root_folder()
+        } else {
+            email.folder.as_str()
+        };
+        let archive_folder_meta = format!("{source_name} / {folder_display}");
 
         let labels_hdr = tr.labels_heading();
         let none_assigned_lbl = tr.none_assigned();
@@ -725,17 +742,42 @@ impl PstRagApp {
             Some(ExplorerMessage::AskAboutEmail(email.id)),
         );
 
-        let from_text = tr.from_prefix(&email.sender);
-        let to_text = tr.to_prefix(&email.recipients);
-        let date_meta = format!(
-            "{} · {} / {}",
-            email
-                .sent_at
-                .as_deref()
-                .unwrap_or_else(|| tr.unknown_date_full()),
-            source_name,
-            email.folder
-        );
+        let participants = parse_email_participants(&email.sender, &email.recipients, &email.body);
+        let avatar_initials = participants
+            .from
+            .as_ref()
+            .map(ContactEntry::initials)
+            .unwrap_or_else(|| "?".to_string());
+
+        let (from_lbl, to_lbl, cc_lbl, unknown_rcpt_lbl) = match tr {
+            Language::French => ("De", "À", "Cc", "(Destinataire inconnu)"),
+            Language::English => ("From", "To", "Cc", "(Unknown recipient)"),
+        };
+        let unknown_sender_lbl = tr.unknown_sender();
+
+        let from_pill = match &participants.from {
+            Some(c) => render_contact_pill(c, true),
+            None => rsx! {
+                span { style: "font-size: 11.5px; color: {muted_color}; font-style: italic;", "{unknown_sender_lbl}" }
+            },
+        };
+
+        let to_pills: Vec<Element> = participants
+            .to
+            .iter()
+            .map(|c| render_contact_pill(c, false))
+            .collect();
+        let has_to = !to_pills.is_empty();
+
+        let cc_pills: Vec<Element> = participants
+            .cc
+            .iter()
+            .map(|c| render_contact_pill(c, false))
+            .collect();
+        let has_cc = !cc_pills.is_empty();
+
+        let formatted_dt = format_email_datetime(email.sent_at.as_deref(), tr);
+        let unknown_date_lbl = tr.unknown_date_full();
 
         let attachment_chips: Vec<String> = email
             .attachment_names
@@ -778,7 +820,7 @@ impl PstRagApp {
                     class: "selectable-text",
                     style: "width: 100%; flex-shrink: 0; overflow-y: auto; {header_height_style} {rh_style}",
                     div {
-                        style: "padding: 12px 16px; width: 100%; display: flex; flex-direction: column; gap: 8px;",
+                        style: "padding: 12px 16px; width: 100%; display: flex; flex-direction: column; gap: 9px;",
                         div {
                             style: "display: flex; flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap;",
                             span {
@@ -790,10 +832,89 @@ impl PstRagApp {
                             {btn_ask}
                         }
                         div {
-                            style: "display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 16px;",
-                            span { style: "font-size: 12px; font-weight: 500; color: {bright};", "{from_text}" }
-                            span { style: "font-size: 11.5px; color: {muted_color}; flex: 1;", "{to_text}" }
-                            span { style: "font-size: 11px; color: {muted_color}; font-variant-numeric: tabular-nums;", "{date_meta}" }
+                            class: "email-header-envelope",
+                            div {
+                                class: "email-sender-avatar",
+                                "{avatar_initials}"
+                            }
+                            div {
+                                class: "email-envelope-fields",
+                                div {
+                                    class: "email-field-row",
+                                    span { class: "email-field-label", "{from_lbl}" }
+                                    div {
+                                        class: "email-field-values",
+                                        {from_pill}
+                                    }
+                                }
+                                div {
+                                    class: "email-field-row",
+                                    span { class: "email-field-label", "{to_lbl}" }
+                                    div {
+                                        class: "email-field-values",
+                                        if has_to {
+                                            for tp in to_pills {
+                                                {tp}
+                                            }
+                                        } else {
+                                            span {
+                                                style: "font-size: 11.5px; color: {muted_color}; font-style: italic;",
+                                                "{unknown_rcpt_lbl}"
+                                            }
+                                        }
+                                    }
+                                }
+                                if has_cc {
+                                    div {
+                                        class: "email-field-row",
+                                        span { class: "email-field-label", "{cc_lbl}" }
+                                        div {
+                                            class: "email-field-values",
+                                            for cp in cc_pills {
+                                                {cp}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            div {
+                                class: "email-datetime-card",
+                                if let Some(dt) = formatted_dt {
+                                    div {
+                                        class: "email-datetime-primary",
+                                        svg {
+                                            width: "13",
+                                            height: "13",
+                                            view_box: "0 0 24 24",
+                                            fill: "none",
+                                            stroke: "{muted_color}",
+                                            stroke_width: "2",
+                                            stroke_linecap: "round",
+                                            stroke_linejoin: "round",
+                                            rect { x: "3", y: "4", width: "18", height: "18", rx: "2", ry: "2" }
+                                            line { x1: "16", y1: "2", x2: "16", y2: "6" }
+                                            line { x1: "8", y1: "2", x2: "8", y2: "6" }
+                                            line { x1: "3", y1: "10", x2: "21", y2: "10" }
+                                        }
+                                        span { "{dt.date_part}" }
+                                        if !dt.time_part.is_empty() {
+                                            span {
+                                                class: "email-time-badge",
+                                                "{dt.time_part}"
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    div {
+                                        class: "email-datetime-primary",
+                                        span { style: "color: {muted_color};", "{unknown_date_lbl}" }
+                                    }
+                                }
+                                span {
+                                    class: "email-folder-pill",
+                                    "📁 {archive_folder_meta}"
+                                }
+                            }
                         }
                         if !attachment_chips.is_empty() {
                             div {
@@ -852,8 +973,47 @@ impl PstRagApp {
     }
 }
 
-fn short_date(iso: &str) -> &str {
-    iso.get(0..16).unwrap_or(iso)
+fn render_contact_pill(contact: &ContactEntry, is_sender: bool) -> Element {
+    let pill_class = if is_sender {
+        "email-contact-pill sender"
+    } else {
+        "email-contact-pill"
+    };
+    let inner = match (contact.name.as_deref(), contact.email.as_deref()) {
+        (Some(name), Some(addr)) => {
+            let name_s = name.to_owned();
+            let addr_bracket = format!("<{addr}>");
+            rsx! {
+                span { class: "email-contact-name", "{name_s}" }
+                span { class: "email-contact-addr", "{addr_bracket}" }
+            }
+        }
+        (Some(name), None) => {
+            let name_s = name.to_owned();
+            rsx! {
+                span { class: "email-contact-name", "{name_s}" }
+            }
+        }
+        (None, Some(addr)) => {
+            let addr_s = addr.to_owned();
+            rsx! {
+                span { class: "email-contact-addr", "{addr_s}" }
+            }
+        }
+        (None, None) => {
+            let raw_s = contact.raw.clone();
+            rsx! {
+                span { class: "email-contact-name", "{raw_s}" }
+            }
+        }
+    };
+
+    rsx! {
+        span {
+            class: "{pill_class}",
+            {inner}
+        }
+    }
 }
 
 fn truncate_str(value: &str, max_chars: usize) -> String {

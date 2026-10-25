@@ -1,8 +1,10 @@
 use crate::{
     app::email_html::{
-        format_email_body_html, format_plain_text_email_html, html_to_plain_text, is_html_email,
+        format_email_body_html, format_email_datetime, format_plain_text_email_html,
+        html_to_plain_text, is_html_email, parse_contact, parse_email_participants,
         sanitize_html_email,
     },
+    i18n::Language,
     llm::clean_email_body,
 };
 
@@ -143,4 +145,74 @@ fn converts_html_email_to_plain_text_for_llm_and_excerpts() {
 
     let formatted = format_email_body_html(raw_html);
     assert!(formatted.contains("<p>Hello &amp; welcome,</p>"));
+}
+
+#[test]
+fn parses_email_participants_from_to_and_cc_fields() {
+    let sender = parse_contact("\"Alice Martin\" <alice.martin@example.com>");
+    assert_eq!(sender.name.as_deref(), Some("Alice Martin"));
+    assert_eq!(sender.email.as_deref(), Some("alice.martin@example.com"));
+    assert_eq!(sender.display_primary(), "Alice Martin");
+    assert_eq!(sender.initials(), "AM");
+
+    let bare = parse_contact("ops-team@example.com");
+    assert_eq!(bare.name, None);
+    assert_eq!(bare.email.as_deref(), Some("ops-team@example.com"));
+    assert_eq!(bare.display_primary(), "ops-team@example.com");
+    assert_eq!(bare.initials(), "OT");
+
+    let participants = parse_email_participants(
+        "Alice Martin <alice@example.com>",
+        "Bob Dupont <bob@example.com>; Clara <clara@example.com>\nCc: David Laurent <david@example.com>, Eve <eve@example.com>",
+        "Hi team",
+    );
+    let from = participants.from.expect("sender should be parsed");
+    assert_eq!(from.name.as_deref(), Some("Alice Martin"));
+    assert_eq!(from.email.as_deref(), Some("alice@example.com"));
+    assert_eq!(participants.to.len(), 2);
+    assert_eq!(participants.to[0].display_primary(), "Bob Dupont");
+    assert_eq!(participants.to[1].display_primary(), "Clara");
+    assert_eq!(participants.cc.len(), 2);
+    assert_eq!(participants.cc[0].display_primary(), "David Laurent");
+    assert_eq!(participants.cc[1].email.as_deref(), Some("eve@example.com"));
+
+    // Fallback extraction of Cc from inline headers when not stored in `to`
+    let fallback_participants = parse_email_participants(
+        "Alice <alice@example.com>",
+        "Bob <bob@example.com>",
+        "From: Alice <alice@example.com>\nTo: Bob <bob@example.com>\nCc: Frank Moreau <frank@example.com>\nSubject: Update\n\nBody text",
+    );
+    assert_eq!(fallback_participants.cc.len(), 1);
+    assert_eq!(
+        fallback_participants.cc[0].display_primary(),
+        "Frank Moreau"
+    );
+    assert_eq!(
+        fallback_participants.cc[0].email.as_deref(),
+        Some("frank@example.com")
+    );
+}
+
+#[test]
+fn formats_email_dates_and_times_in_french_and_english() {
+    let rfc3339 = "2025-03-10T14:32:00Z";
+
+    let fr_fn = format_email_datetime;
+    let fr = fr_fn(Some(rfc3339), Language::French).expect("should format FR");
+    assert_eq!(fr.date_part, "Lun. 10 mars 2025");
+    assert_eq!(fr.time_part, "14:32");
+    assert_eq!(fr.table_short, "10 mars 2025 · 14:32");
+    assert_eq!(fr.full, "Lun. 10 mars 2025 à 14:32");
+
+    let en = fr_fn(Some(rfc3339), Language::English).expect("should format EN");
+    assert_eq!(en.date_part, "Mon, Mar 10, 2025");
+    assert_eq!(en.time_part, "14:32");
+    assert_eq!(en.table_short, "Mar 10, 2025 · 14:32");
+    assert_eq!(en.full, "Mon, Mar 10, 2025 at 14:32");
+
+    // SQL / ISO without timezone
+    let sql_ts = "2025-12-24 09:05:45";
+    let fr_sql = fr_fn(Some(sql_ts), Language::French).expect("should format SQL");
+    assert_eq!(fr_sql.date_part, "Mer. 24 déc. 2025");
+    assert_eq!(fr_sql.time_part, "09:05");
 }

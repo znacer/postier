@@ -106,7 +106,7 @@ const TABLE_RESERVED_HEIGHT: f32 = 330.0;
 const HEADER_MIN_HEIGHT: f32 = 44.0;
 /// Tallest the mail header may grow, even in automatic sizing (e.g. mails with
 /// long To/Cc lists). Anything beyond this scrolls inside the header.
-const HEADER_MAX_HEIGHT: f32 = 160.0;
+const HEADER_MAX_HEIGHT: f32 = 210.0;
 
 #[derive(Debug, Clone)]
 enum WorkerEvent {

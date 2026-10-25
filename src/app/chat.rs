@@ -3,7 +3,10 @@ use dioxus::prelude::*;
 use crate::model::SearchHit;
 
 use super::{
-    ChatMessage, ChatRole, DispatchMessage, PstRagApp, markdown::render_markdown_blocks, theme::*,
+    ChatMessage, ChatRole, DispatchMessage, PstRagApp,
+    email_html::{format_email_datetime, parse_contact},
+    markdown::render_markdown_blocks,
+    theme::*,
 };
 
 #[derive(Debug, Clone)]
@@ -366,13 +369,15 @@ impl PstRagApp {
             .and_then(|name| name.to_str())
             .unwrap_or(&hit.source_key);
         let idx_str = format!("{:02}", index + 1);
-        let sender_date = format!(
-            "{} · {}",
-            hit.sender,
-            hit.sent_at
-                .as_deref()
-                .unwrap_or_else(|| tr.unknown_date_full())
-        );
+        let sender_display = if hit.sender.trim().is_empty() {
+            tr.unknown_sender().to_owned()
+        } else {
+            parse_contact(&hit.sender).display_primary().to_owned()
+        };
+        let formatted_date = format_email_datetime(hit.sent_at.as_deref(), tr)
+            .map(|dt| dt.full)
+            .unwrap_or_else(|| tr.unknown_date_full().to_owned());
+        let sender_date = format!("{sender_display} · {formatted_date}");
         let open_mail_btn = small_button(
             tr.btn_open_mail(),
             Some(ChatPaneMessage::SelectEmail(hit.id)),

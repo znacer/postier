@@ -542,6 +542,145 @@ hr {
     color: var(--text-accent);
 }
 
+/* Email Reader Header & Envelope */
+.email-header-envelope {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 9px 12px;
+    background-color: rgba(15, 23, 42, 0.5);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+}
+
+.email-sender-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.28) 0%, rgba(29, 78, 216, 0.44) 100%);
+    border: 1px solid rgba(96, 165, 250, 0.42);
+    color: #93c5fd;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-shadow: var(--shadow-sm);
+}
+
+.email-envelope-fields {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.email-field-row {
+    display: flex;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+
+.email-field-label {
+    min-width: 40px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.email-field-values {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.email-contact-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    font-size: 11.5px;
+    line-height: 1.35;
+    max-width: 100%;
+}
+
+.email-contact-pill.sender {
+    background-color: rgba(37, 99, 235, 0.14);
+    border-color: rgba(96, 165, 250, 0.35);
+}
+
+.email-contact-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.email-contact-addr {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-accent);
+    opacity: 0.92;
+}
+
+.email-datetime-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    flex-shrink: 0;
+    text-align: right;
+}
+
+.email-datetime-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.email-time-badge {
+    padding: 1px 6px;
+    background-color: rgba(59, 130, 246, 0.16);
+    border-radius: var(--radius-xs);
+    color: var(--text-accent);
+    font-weight: 600;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.email-folder-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
 /* Rich HTML Email Reader Formatting */
 .email-html-body {
     font-family: var(--font-sans);
@@ -1127,7 +1266,7 @@ pub(super) fn user_bubble_style() -> String {
     "background: linear-gradient(180deg, #1d4ed8 0%, #1e40af 100%); border: 1px solid rgba(96, 165, 250, 0.35); border-radius: 12px 12px 2px 12px; box-shadow: var(--shadow-sm);".into()
 }
 pub(super) fn assistant_bubble_style() -> String {
-    "background-color: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 12px 12px 12px 2px; box-shadow: var(--shadow-sm);".into()
+    "background-color: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md) var(--radius-md) var(--radius-md) 2px; box-shadow: var(--shadow-sm);".into()
 }
 pub(super) fn composer_style() -> String {
     "background-color: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--shadow-md);".into()

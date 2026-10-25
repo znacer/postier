@@ -1,4 +1,440 @@
-//! HTML email sanitization, plain-text-to-HTML formatting, and HTML-to-text extraction.
+//! HTML email sanitization, plain-text-to-HTML formatting, HTML-to-text extraction,
+//! participant (`From`, `To`, `Cc`) parsing, and localized date/time formatting.
+
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Timelike};
+
+use crate::i18n::Language;
+
+/// A parsed email participant (sender or recipient).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContactEntry {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub raw: String,
+}
+
+impl ContactEntry {
+    /// Returns the human-friendly primary label (display name if available, otherwise email or raw string).
+    pub fn display_primary(&self) -> &str {
+        self.name
+            .as_deref()
+            .or(self.email.as_deref())
+            .unwrap_or(&self.raw)
+    }
+
+    /// Returns 1–2 uppercase initials for avatar badges.
+    pub fn initials(&self) -> String {
+        let source = self
+            .name
+            .as_deref()
+            .or_else(|| {
+                self.email
+                    .as_deref()
+                    .map(|e| e.split('@').next().unwrap_or(e))
+            })
+            .unwrap_or(&self.raw);
+
+        let parts: Vec<&str> = source
+            .split(|c: char| c.is_whitespace() || matches!(c, '.' | '_' | '-' | ','))
+            .filter(|s| s.chars().any(char::is_alphanumeric))
+            .collect();
+
+        match parts.as_slice() {
+            [first, second, ..] => {
+                let mut out = String::new();
+                if let Some(c1) = first.chars().find(|c| c.is_alphanumeric()) {
+                    out.extend(c1.to_uppercase());
+                }
+                if let Some(c2) = second.chars().find(|c| c.is_alphanumeric()) {
+                    out.extend(c2.to_uppercase());
+                }
+                out
+            }
+            [only] => only
+                .chars()
+                .filter(|c| c.is_alphanumeric())
+                .take(2)
+                .flat_map(char::to_uppercase)
+                .collect(),
+            [] => "?".to_string(),
+        }
+    }
+}
+
+/// Structured envelope participants (`From`, `To`, `Cc`) for an email.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ParsedParticipants {
+    pub from: Option<ContactEntry>,
+    pub to: Vec<ContactEntry>,
+    pub cc: Vec<ContactEntry>,
+}
+
+/// Parses a single contact string such as `"Alice Martin <alice@example.com>"` or `"alice@example.com"`.
+pub fn parse_contact(raw: &str) -> ContactEntry {
+    let trimmed = raw
+        .trim()
+        .trim_matches(|c: char| c == ',' || c == ';' || c.is_whitespace());
+    if trimmed.is_empty() {
+        return ContactEntry {
+            name: None,
+            email: None,
+            raw: String::new(),
+        };
+    }
+
+    // Case 1: `Display Name <email@domain>` or `<email@domain>`
+    if let Some(lt_idx) = trimmed.rfind('<')
+        && let Some(gt_rel) = trimmed[lt_idx + 1..].find('>')
+    {
+        let inside = trimmed[lt_idx + 1..lt_idx + 1 + gt_rel].trim();
+        let before = trimmed[..lt_idx]
+            .trim()
+            .trim_matches(|c: char| c == '"' || c == '\'')
+            .trim();
+        let email = (!inside.is_empty()).then(|| inside.to_string());
+        let name =
+            (!before.is_empty() && Some(before) != email.as_deref()).then(|| before.to_string());
+        return ContactEntry {
+            name,
+            email,
+            raw: trimmed.to_string(),
+        };
+    }
+
+    // Case 2: `Display Name (email@domain)`
+    if let Some(lp_idx) = trimmed.rfind('(')
+        && let Some(rp_rel) = trimmed[lp_idx + 1..].find(')')
+    {
+        let inside = trimmed[lp_idx + 1..lp_idx + 1 + rp_rel].trim();
+        if inside.contains('@') && !inside.contains(' ') {
+            let before = trimmed[..lp_idx]
+                .trim()
+                .trim_matches(|c: char| c == '"' || c == '\'')
+                .trim();
+            return ContactEntry {
+                name: (!before.is_empty()).then(|| before.to_string()),
+                email: Some(inside.to_string()),
+                raw: trimmed.to_string(),
+            };
+        }
+    }
+
+    // Case 3: bare email address `user@domain`
+    let unquoted = trimmed.trim_matches(|c: char| c == '"' || c == '\'').trim();
+    if unquoted.contains('@') && !unquoted.contains(char::is_whitespace) {
+        return ContactEntry {
+            name: None,
+            email: Some(unquoted.to_string()),
+            raw: unquoted.to_string(),
+        };
+    }
+
+    ContactEntry {
+        name: Some(unquoted.to_string()),
+        email: None,
+        raw: trimmed.to_string(),
+    }
+}
+
+/// Splits a comma- or semicolon-delimited contact list while respecting quotes and `<...>`.
+pub fn parse_contact_list(raw: &str) -> Vec<ContactEntry> {
+    let mut entries = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut angle_depth = 0usize;
+
+    for ch in raw.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            '<' if !in_quotes => {
+                angle_depth = angle_depth.saturating_add(1);
+                current.push(ch);
+            }
+            '>' if !in_quotes => {
+                angle_depth = angle_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' | ';' if !in_quotes && angle_depth == 0 => {
+                let candidate = current.trim();
+                if !candidate.is_empty() {
+                    let parsed = parse_contact(candidate);
+                    if !parsed.raw.is_empty() {
+                        entries.push(parsed);
+                    }
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    let tail = current.trim();
+    if !tail.is_empty() {
+        let parsed = parse_contact(tail);
+        if !parsed.raw.is_empty() {
+            entries.push(parsed);
+        }
+    }
+    entries
+}
+
+/// Parses `From`, `To`, and `Cc` participants from `sender`, `recipients`, and optional top-of-body headers.
+pub fn parse_email_participants(sender: &str, recipients: &str, body: &str) -> ParsedParticipants {
+    let from = {
+        let s = sender.trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(parse_contact(s))
+        }
+    };
+
+    let mut to_segments = Vec::new();
+    let mut cc_segments = Vec::new();
+
+    for line in recipients.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Check if line contains an inline `| Cc:` or `; Cc:` separator
+        if let Some((to_part, cc_part)) = split_inline_cc(trimmed) {
+            if !to_part.is_empty() {
+                to_segments.push(strip_to_prefix(to_part));
+            }
+            if !cc_part.is_empty() {
+                cc_segments.push(cc_part);
+            }
+        } else if let Some(cc_rest) = strip_cc_prefix(trimmed) {
+            cc_segments.push(cc_rest);
+        } else {
+            to_segments.push(strip_to_prefix(trimmed));
+        }
+    }
+
+    let to: Vec<ContactEntry> = to_segments
+        .into_iter()
+        .flat_map(parse_contact_list)
+        .collect();
+    let mut cc: Vec<ContactEntry> = cc_segments
+        .into_iter()
+        .flat_map(parse_contact_list)
+        .collect();
+
+    // If `cc` was not present in `recipients`, check if the leading header block of `body` has `Cc:`
+    if cc.is_empty() && !body.trim().is_empty() && !is_html_email(body) {
+        for line in body.lines().take(10) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                break;
+            }
+            if let Some(cc_rest) = strip_cc_prefix(trimmed) {
+                cc.extend(parse_contact_list(cc_rest));
+                break;
+            }
+            // Only scan while lines look like mail headers (`Key: Value`)
+            if parse_reply_header_line(trimmed).is_none() && !is_reply_banner(trimmed) {
+                break;
+            }
+        }
+    }
+
+    ParsedParticipants { from, to, cc }
+}
+
+fn strip_to_prefix(s: &str) -> &str {
+    let trimmed = s.trim();
+    for prefix in ["to:", "To:", "TO:", "à :", "À :", "à:", "À:"] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            return rest.trim();
+        }
+    }
+    trimmed
+}
+
+fn strip_cc_prefix(s: &str) -> Option<&str> {
+    let trimmed = s.trim();
+    for prefix in ["cc:", "Cc:", "CC:", "cc :", "Cc :", "CC :"] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            let clean = rest.trim();
+            if !clean.is_empty() {
+                return Some(clean);
+            }
+        }
+    }
+    None
+}
+
+fn split_inline_cc(s: &str) -> Option<(&str, &str)> {
+    for sep in [" | Cc:", " | cc:", " | CC:", "; Cc:", "; cc:", "; CC:"] {
+        if let Some(idx) = s.find(sep) {
+            let to_part = s[..idx].trim();
+            let cc_part = s[idx + sep.len()..].trim();
+            return Some((to_part, cc_part));
+        }
+    }
+    None
+}
+
+/// Localized, human-readable date and time representations for an email timestamp.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FormattedEmailDate {
+    /// Full localized date + time (e.g. `"Lun. 10 mars 2025 à 14:32"` or `"Mon, Mar 10, 2025 at 14:32"`).
+    pub full: String,
+    /// Localized date portion (e.g. `"Lun. 10 mars 2025"` or `"Mon, Mar 10, 2025"`).
+    pub date_part: String,
+    /// Localized time portion (e.g. `"14:32"`), or empty if only a calendar date was present.
+    pub time_part: String,
+    /// Compact localized representation for table rows (e.g. `"10 mars 2025 · 14:32"`).
+    pub table_short: String,
+}
+
+struct ParsedTimestamp {
+    date: NaiveDate,
+    hour_minute: Option<(u32, u32)>,
+    tz_offset_secs: Option<i32>,
+}
+
+/// Parses an ISO-8601 / RFC-3339 / RFC-2822 / SQL timestamp string and formats it
+/// into localized date and time strings.
+pub fn format_email_datetime(raw: Option<&str>, lang: Language) -> Option<FormattedEmailDate> {
+    let s = raw?.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    if let Some(parsed) = parse_any_datetime(s) {
+        let year = parsed.date.year();
+        let month_idx = (parsed.date.month0() as usize).min(11);
+        let day = parsed.date.day();
+        let wd_idx = parsed.date.weekday().num_days_from_monday() as usize;
+
+        const FR_WEEKDAYS: [&str; 7] = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."];
+        const EN_WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+        const FR_MONTHS: [&str; 12] = [
+            "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.",
+            "nov.", "déc.",
+        ];
+        const EN_MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+
+        let date_part = match lang {
+            Language::French => {
+                format!(
+                    "{} {} {} {}",
+                    FR_WEEKDAYS[wd_idx], day, FR_MONTHS[month_idx], year
+                )
+            }
+            Language::English => {
+                format!(
+                    "{}, {} {}, {}",
+                    EN_WEEKDAYS[wd_idx], EN_MONTHS[month_idx], day, year
+                )
+            }
+        };
+
+        let short_date_only = match lang {
+            Language::French => format!("{day:02} {} {year}", FR_MONTHS[month_idx]),
+            Language::English => format!("{} {day:02}, {year}", EN_MONTHS[month_idx]),
+        };
+
+        if let Some((hour, minute)) = parsed.hour_minute {
+            let tz_suffix = match parsed.tz_offset_secs {
+                Some(offset) if offset != 0 => {
+                    let sign = if offset >= 0 { '+' } else { '-' };
+                    let abs_mins = offset.unsigned_abs() / 60;
+                    let oh = abs_mins / 60;
+                    let om = abs_mins % 60;
+                    if om == 0 {
+                        format!(" UTC{sign}{oh}")
+                    } else {
+                        format!(" UTC{sign}{oh:02}:{om:02}")
+                    }
+                }
+                _ => String::new(),
+            };
+            let hh_mm = format!("{hour:02}:{minute:02}");
+            let time_part = format!("{hh_mm}{tz_suffix}");
+            let full = match lang {
+                Language::French => format!("{date_part} à {time_part}"),
+                Language::English => format!("{date_part} at {time_part}"),
+            };
+            let table_short = format!("{short_date_only} · {hh_mm}");
+            return Some(FormattedEmailDate {
+                full,
+                date_part,
+                time_part,
+                table_short,
+            });
+        }
+
+        return Some(FormattedEmailDate {
+            full: date_part.clone(),
+            date_part,
+            time_part: String::new(),
+            table_short: short_date_only,
+        });
+    }
+
+    // Fallback for non-standard date strings
+    let cleaned = s.replace('T', " ");
+    Some(FormattedEmailDate {
+        full: cleaned.clone(),
+        date_part: cleaned.clone(),
+        time_part: String::new(),
+        table_short: cleaned,
+    })
+}
+
+fn parse_any_datetime(s: &str) -> Option<ParsedTimestamp> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(ParsedTimestamp {
+            date: dt.date_naive(),
+            hour_minute: Some((dt.hour(), dt.minute())),
+            tz_offset_secs: Some(dt.offset().local_minus_utc()),
+        });
+    }
+    if let Ok(dt) = DateTime::parse_from_rfc2822(s) {
+        return Some(ParsedTimestamp {
+            date: dt.date_naive(),
+            hour_minute: Some((dt.hour(), dt.minute())),
+            tz_offset_secs: Some(dt.offset().local_minus_utc()),
+        });
+    }
+    for fmt in [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+    ] {
+        if let Ok(ndt) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(ParsedTimestamp {
+                date: ndt.date(),
+                hour_minute: Some((ndt.hour(), ndt.minute())),
+                tz_offset_secs: None,
+            });
+        }
+    }
+    for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y"] {
+        if let Ok(nd) = NaiveDate::parse_from_str(s, fmt) {
+            return Some(ParsedTimestamp {
+                date: nd,
+                hour_minute: None,
+                tz_offset_secs: None,
+            });
+        }
+    }
+    None
+}
 
 /// Returns `true` if `raw` appears to contain HTML markup rather than plain text.
 pub fn is_html_email(raw: &str) -> bool {

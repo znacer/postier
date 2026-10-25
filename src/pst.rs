@@ -111,19 +111,22 @@ fn read_message(
     let message = store.open_message(&entry_id, None)?;
     let props = message.properties();
     let subject = text_prop(props.get(0x0037)).unwrap_or_default();
-    let sender = text_prop(props.get(0x5D01))
-        .or_else(|| text_prop(props.get(0x0C1A)))
-        .unwrap_or_default();
+    let sender_name = text_prop(props.get(0x0C1A));
+    let sender_email = text_prop(props.get(0x5D01))
+        .or_else(|| text_prop(props.get(0x0C1F)).filter(|s| s.contains('@')));
+    let sender = format_name_and_email(sender_name.as_deref(), sender_email.as_deref());
     let message_id =
         text_prop(props.get(0x1035)).unwrap_or_else(|| format!("pst-node-{}", u32::from(row.id())));
     let sent_at = time_prop(props.get(0x0039)).or_else(|| time_prop(props.get(0x0E06)));
     let body = text_prop(props.get(0x1013))
         .or_else(|| text_prop(props.get(0x1000)))
         .unwrap_or_default();
+    let display_to = text_prop(props.get(0x0E04));
+    let display_cc = text_prop(props.get(0x0E03));
     let recipients = message
         .recipient_table()
-        .map(|t| recipient_names(t.as_ref()))
-        .unwrap_or_default();
+        .map(|t| extract_recipients(t.as_ref(), display_to.as_deref(), display_cc.as_deref()))
+        .unwrap_or_else(|| combine_to_and_cc(display_to.as_deref(), display_cc.as_deref()));
     Ok(Email {
         source_key: source.into(),
         message_id,
@@ -138,6 +141,30 @@ fn read_message(
     })
 }
 
+fn format_name_and_email(name: Option<&str>, email: Option<&str>) -> String {
+    match (name.map(str::trim), email.map(str::trim)) {
+        (Some(n), Some(e))
+            if !n.is_empty() && !e.is_empty() && !n.eq_ignore_ascii_case(e) && !n.contains(e) =>
+        {
+            format!("{n} <{e}>")
+        }
+        (None, Some(e)) | (Some(""), Some(e)) => e.to_string(),
+        (Some(n), _) => n.to_string(),
+        (None, None) => String::new(),
+    }
+}
+
+fn combine_to_and_cc(to: Option<&str>, cc: Option<&str>) -> String {
+    let to_clean = to.map(str::trim).filter(|s| !s.is_empty());
+    let cc_clean = cc.map(str::trim).filter(|s| !s.is_empty());
+    match (to_clean, cc_clean) {
+        (Some(t), Some(c)) => format!("{t}\nCc: {c}"),
+        (Some(t), None) => t.to_string(),
+        (None, Some(c)) => format!("Cc: {c}"),
+        (None, None) => String::new(),
+    }
+}
+
 fn text_prop(value: Option<&PropertyValue>) -> Option<String> {
     match value? {
         PropertyValue::String8(v) => Some(v.to_string()),
@@ -147,6 +174,14 @@ fn text_prop(value: Option<&PropertyValue>) -> Option<String> {
     }
     .map(|s| s.trim_matches('\0').to_string())
     .filter(|s| !s.is_empty())
+}
+
+fn int_prop(value: Option<&PropertyValue>) -> Option<i32> {
+    match value? {
+        PropertyValue::Integer16(v) => Some(i32::from(*v)),
+        PropertyValue::Integer32(v) => Some(*v),
+        _ => None,
+    }
 }
 
 fn time_prop(value: Option<&PropertyValue>) -> Option<String> {
@@ -159,26 +194,66 @@ fn time_prop(value: Option<&PropertyValue>) -> Option<String> {
     chrono::DateTime::from_timestamp(unix_seconds, 0).map(|d| d.to_rfc3339())
 }
 
-fn recipient_names(table: &dyn TableContext) -> String {
+fn extract_recipients(
+    table: &dyn TableContext,
+    fallback_to: Option<&str>,
+    fallback_cc: Option<&str>,
+) -> String {
     let context = table.context();
-    table
-        .rows_matrix()
-        .filter_map(|row| {
-            context
-                .columns()
-                .iter()
-                .zip(row.columns(context).ok()?)
-                .find_map(|(col, raw)| {
-                    if col.prop_id() != 0x3001 {
-                        return None;
+    let mut to_list = Vec::new();
+    let mut cc_list = Vec::new();
+
+    for row in table.rows_matrix() {
+        let Ok(cols) = row.columns(context) else {
+            continue;
+        };
+        let mut display_name: Option<String> = None;
+        let mut smtp_addr: Option<String> = None;
+        let mut email_addr: Option<String> = None;
+        let mut recipient_type: i32 = 1; // 1 = MAPI_TO, 2 = MAPI_CC, 3 = MAPI_BCC
+
+        for (col, raw) in context.columns().iter().zip(cols) {
+            let Some(raw_val) = raw else {
+                continue;
+            };
+            let Ok(prop_val) = table.read_column(&raw_val, col.prop_type()) else {
+                continue;
+            };
+            match col.prop_id() {
+                0x3001 => display_name = text_prop(Some(&prop_val)),
+                0x39FE => smtp_addr = text_prop(Some(&prop_val)),
+                0x3003 => email_addr = text_prop(Some(&prop_val)).filter(|s| s.contains('@')),
+                0x0C15 => {
+                    if let Some(rt) = int_prop(Some(&prop_val)) {
+                        recipient_type = rt;
                     }
-                    text_prop(Some(
-                        &table.read_column(raw.as_ref()?, col.prop_type()).ok()?,
-                    ))
-                })
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
+                }
+                _ => {}
+            }
+        }
+
+        let best_email = smtp_addr.or(email_addr);
+        let formatted = format_name_and_email(display_name.as_deref(), best_email.as_deref());
+        if formatted.is_empty() {
+            continue;
+        }
+        match recipient_type {
+            2 => cc_list.push(formatted),
+            _ => to_list.push(formatted),
+        }
+    }
+
+    let to_str = if !to_list.is_empty() {
+        Some(to_list.join(", "))
+    } else {
+        fallback_to.map(str::to_owned)
+    };
+    let cc_str = if !cc_list.is_empty() {
+        Some(cc_list.join(", "))
+    } else {
+        fallback_cc.map(str::to_owned)
+    };
+    combine_to_and_cc(to_str.as_deref(), cc_str.as_deref())
 }
 
 pub fn import(path: &Path) -> Result<Vec<Email>> {
