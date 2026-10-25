@@ -47,24 +47,31 @@ Because the desktop UI is powered by `dioxus` (`0.7`, `desktop` feature) and `wr
 ## 2. Project Architecture
 
 ```text
+assets/
+└── dx-components-theme.css # Base theme variables for Dioxus Components
 src/
-├── main.rs            # Application entry point
-├── model.rs           # Shared domain models (Email, EmailRecord, SearchHit, LabelDefinition, etc.)
-├── pst.rs             # Outlook PST archive & JSONL fixture reader (MAPI sender, To/Cc recipients, body)
-├── db.rs              # SQLite + FTS5/BM25 index, vector embeddings store, and label persistence
-├── laya.rs            # Pure-Rust GGUF v3 reader & ModernBERT + Laya Decision Head inference engine
-├── llm.rs             # OpenAI-compatible RAG client (Rig), LLM-as-a-Judge labeler, and body cleaner
-├── i18n.rs            # French and English UI translations and system prompts
-├── app.rs             # Dioxus 0.7 desktop root component, state management, resize & worker tasks
+├── main.rs                 # Application entry point
+├── model.rs                # Shared domain models (Email, EmailRecord, SearchHit, LabelDefinition, etc.)
+├── pst.rs                  # Outlook PST archive & JSONL fixture reader (MAPI sender, To/Cc recipients, body)
+├── db.rs                   # SQLite + FTS5/BM25 index, vector embeddings store, and label persistence
+├── laya.rs                 # Pure-Rust GGUF v3 reader & ModernBERT + Laya Decision Head inference engine
+├── llm.rs                  # OpenAI-compatible RAG client (Rig), LLM-as-a-Judge labeler, and body cleaner
+├── i18n.rs                 # French and English UI translations and system prompts
+├── components/             # Styled Dioxus UI component library (dioxus-primitives + dioxus-icons)
+│   ├── mod.rs              # Exports Button, Badge, Avatar, Checkbox, Collapsible, Input, Item,
+│   │                       # Label, ScrollArea, Separator, Sidebar, Switch, ToggleGroup, Toolbar, etc.
+│   └── <component>/        # Component implementation (component.rs) and scoped CSS module (style.css)
+├── app.rs                  # Dioxus 0.7 desktop root component, state management, resize & worker tasks
 ├── app/
-│   ├── actions.rs     # State transitions, async workers, file pickers, and DB queries
-│   ├── theme.rs       # Global CSS design system (APP_CSS), colors, splitters, and reusable UI widgets
-│   ├── sidebar.rs     # Left collapsible sidebar (mailboxes, folder tree, labels, Laya/AI/storage settings)
-│   ├── explorer.rs    # Center mail table, toolbar, structured envelope header, and reading pane
-│   ├── email_html.rs  # HTML email sanitizer, plain-text-to-HTML formatter, participant & date parsers
-│   ├── chat.rs        # Right RAG chat pane, message bubbles, and cited source cards
-│   └── markdown.rs    # Lightweight Markdown parser for assistant responses
-└── tests/             # Unit and integration tests by module
+│   ├── actions.rs          # State transitions, async workers, file pickers, and DB queries
+│   ├── theme.rs            # Global CSS design system (DX_COMPONENTS_THEME_CSS + APP_CSS), palette overrides,
+│   │                       # splitters, and reusable component wrappers
+│   ├── sidebar.rs          # Left collapsible sidebar (Sidebar*, Collapsible, ToggleGroup, Checkbox, Switch, Input)
+│   ├── explorer.rs         # Center mail table, Toolbar, structured envelope header (Avatar, Badge), and reader
+│   ├── email_html.rs       # HTML email sanitizer, plain-text-to-HTML formatter, participant & date parsers
+│   ├── chat.rs             # Right RAG chat pane, Avatar bubbles, and Collapsible ItemGroup evidence cards
+│   └── markdown.rs         # Lightweight Markdown parser and renderer for assistant responses
+└── tests/                  # Unit and integration tests by module
 ```
 
 ---
@@ -103,8 +110,9 @@ dx bundle --platform desktop --release
    - All user-facing strings belong in `src/i18n.rs` on the `Language` enum.
    - When adding a new UI label, button, or status message, provide both `Language::French` and `Language::English` translations and update `src/tests/i18n.rs`.
 
-3. **UI & Styling (`Dioxus 0.7`)**:
-   - Prefer shared CSS classes and CSS custom properties (`--bg-surface`, `--bg-elevated`, `--text-primary`, `--border-default`, etc.) defined in `src/app/theme.rs` (`APP_CSS`).
+3. **UI Components & Styling (`Dioxus 0.7` + `src/components/`)**:
+   - Build UI views using the styled components in `src/components/` (`Button`, `Badge`, `Avatar`, `Checkbox`, `Collapsible`, `Input`, `Item`, `Label`, `ScrollArea`, `Separator`, `Sidebar*`, `Switch`, `ToggleGroup`, `Toolbar`, etc.) rather than raw unstyled HTML primitives where a component exists.
+   - Global theme tokens and dark-palette overrides for `--primary-color-*`, `--secondary-color-*`, and `--bg-*` are defined in `src/app/theme.rs` (`DX_COMPONENTS_THEME_CSS` and `APP_CSS`).
    - Keep long-running operations (PST indexing, Laya inference, LLM queries) off the UI thread by dispatching `AppTask::Worker` tasks and reporting progress via `WorkerEvent::Progress`.
 
 4. **Preserve Documentation**:
@@ -121,12 +129,15 @@ Before opening a pull request, run the verification checks locally:
 dx check
 dx fmt --check
 
-# 2. Build the desktop target with dx
+# 2. Run the test suite
+cargo test
+
+# 3. Build the desktop target with dx
 dx build --platform desktop
 ```
 
 ### Adding Tests
-- Place unit tests in the corresponding file under `src/tests/` (e.g., `src/tests/email_html.rs`, `src/tests/db.rs`, `src/tests/llm.rs`, `src/tests/i18n.rs`).
+- Place unit tests in the corresponding file under `src/tests/` (e.g., `src/tests/email_html.rs`, `src/tests/db.rs`, `src/tests/llm.rs`, `src/tests/i18n.rs`) or component/view tests in `src/app/theme.rs`.
 - Use `.jsonl` fixtures or in-memory/temporary SQLite databases rather than committing real or personal `.pst` archives.
 
 ---
@@ -135,5 +146,5 @@ dx build --platform desktop
 
 1. Create a descriptive branch from `main` (or the active feature branch).
 2. Keep commits focused and atomic.
-3. Ensure `dx check`, `dx fmt --check`, and the test suite pass without errors.
+3. Ensure `dx check`, `dx fmt --check`, and `cargo test` pass without errors.
 4. Describe what changed, why it changed, and how it was tested in your PR description.

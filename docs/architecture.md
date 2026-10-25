@@ -2,6 +2,16 @@
 
 `MailSource -> normalized Email -> SQLite messages + FTS5 (always) -> optional remote embeddings -> BM25 or hybrid candidates -> bounded context -> Rig agent -> private LLM`
 
+## UI Layer (`Dioxus 0.7 Desktop` + `src/components/`)
+
+The desktop interface is organized as a 3-pane workspace rendered via Dioxus 0.7 Desktop and styled primitives from `src/components/` (`dioxus-primitives` + `dioxus-icons` with CSS modules and theme variables in `assets/dx-components-theme.css` / `src/app/theme.rs`):
+
+- **Left Sidebar (`src/app/sidebar.rs`)**: Structured with `SidebarHeader`, `SidebarContent`, `SidebarGroup`, `SidebarGroupContent`, `SidebarMenu`, `SidebarMenuItem`, `SidebarMenuBadge`, `SidebarMenuSub`, and `SidebarMenuSubItem` inside a `ScrollArea`. Collapsible sections (`Mailboxes`, `Labels`, `Laya Model`, `AI Models`, `Storage`) use `Collapsible`, `CollapsibleTrigger`, and `CollapsibleContent`. Form controls and filters use `ToggleGroup` / `ToggleItem`, `Checkbox`, `Switch`, `Input`, `Label`, `Badge`, `Separator`, and `Button`.
+- **Center Explorer & Reading Pane (`src/app/explorer.rs`)**: Uses `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `ToggleGroup`, `Input`, and `Button` for quick-filtering and batch/focused labeling controls. The message table and reading pane use `Checkbox`, `Avatar` / `AvatarFallback`, `Badge`, `Separator`, and `ScrollArea` separated by draggable horizontal splitters.
+- **Right RAG Chat Pane (`src/app/chat.rs`, `src/app/markdown.rs`)**: Uses `ScrollArea`, `Avatar` / `AvatarFallback`, `Input`, `Checkbox`, `Label`, `Separator`, and `Collapsible` + `ItemGroup` (`Item`, `ItemHeader`, `ItemMedia`, `ItemContent`, `ItemTitle`, `ItemDescription`, `ItemActions`) for cited email evidence cards.
+
+## Retrieval, Storage & Context Engineering
+
 BM25 retrieval stays in the bundled SQLite index and is always available. When the user enables remote embedding indexing, bounded email documents are sent in batches to the configured OpenAI-compatible embeddings endpoint and vectors are stored separately by message and model. Questions then use reciprocal-rank fusion over BM25 and cosine-similarity results; disabling the switch uses BM25 alone. The explicitly local “Search only” action never generates a remote query embedding.
 
 Indexed sources are tracked by their archive path. Archive and folder enablement are non-destructive query filters applied consistently to FTS and vector candidates. Removing a source deletes only its indexed messages; SQLite cascades the deletion to their vectors and the FTS delete trigger removes their terms. The source PST remains read-only and untouched.
