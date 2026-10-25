@@ -1,9 +1,28 @@
 use std::collections::{BTreeMap, HashSet};
 
 use dioxus::prelude::*;
+use dioxus_primitives::checkbox::CheckboxState;
 
 use super::{DispatchMessage, PstRagApp, SidebarSection, theme::*};
-use crate::model::{IndexedFolder, LabelFilter, MailScope};
+use crate::{
+    components::{
+        badge::{Badge, BadgeVariant},
+        button::{Button, ButtonSize, ButtonVariant},
+        checkbox::Checkbox,
+        collapsible::{Collapsible, CollapsibleContent},
+        input::Input,
+        label::Label,
+        scroll_area::ScrollArea,
+        separator::Separator,
+        sidebar::{
+            SidebarContent, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarMenu,
+            SidebarMenuBadge, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubItem,
+        },
+        switch::Switch,
+        toggle_group::{ToggleGroup, ToggleItem},
+    },
+    model::{IndexedFolder, LabelFilter, MailScope},
+};
 
 #[derive(Debug, Clone)]
 pub(super) enum SidebarMessage {
@@ -136,8 +155,8 @@ impl PstRagApp {
             return rsx! {
                 aside {
                     style: "width: 42px; height: 100%; flex-shrink: 0; {sb_style}",
-                    button {
-                        class: "btn-text",
+                    Button {
+                        variant: ButtonVariant::Ghost,
                         title: "{open_label}",
                         style: "width: 100%; height: 100%; padding: 14px 4px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 10px; border-radius: 0;",
                         onclick: move |_| SidebarMessage::ToggleSidebar.dispatch(),
@@ -233,8 +252,12 @@ impl PstRagApp {
                 } else {
                     "nav-item"
                 };
-                let indent_px = ((tree_row.depth + 1).min(6) as u16) * 12;
-                let row_checked = source.enabled && tree_row.enabled;
+                let indent_px = (tree_row.depth.min(5) as u16) * 10;
+                let row_checked = if source.enabled && tree_row.enabled {
+                    CheckboxState::Checked
+                } else {
+                    CheckboxState::Unchecked
+                };
                 let folder_name = tree_row.name.to_owned();
                 let folder_count = tree_row.message_count;
                 let has_children = tree_row.has_children;
@@ -243,23 +266,24 @@ impl PstRagApp {
                 let chevron_rot = if tree_row.collapsed { "-90deg" } else { "0deg" };
 
                 folder_elements.push(rsx! {
-                    div {
+                    SidebarMenuSubItem {
                         style: "display: flex; flex-direction: row; align-items: center; gap: 6px; padding-left: {indent_px}px;",
-                        input {
-                            r#type: "checkbox",
+                        Checkbox {
                             checked: row_checked,
-                            onchange: move |evt| {
+                            on_checked_change: move |state: CheckboxState| {
                                 SidebarMessage::FolderTreeEnabledChanged(
                                     sk_check.clone(),
                                     folder_paths.clone(),
-                                    evt.checked(),
+                                    matches!(state, CheckboxState::Checked),
                                 )
                                 .dispatch();
                             }
                         }
-                        button {
+                        Button {
+                            variant: ButtonVariant::Ghost,
+                            size: ButtonSize::Xs,
                             class: "{folder_nav_class}",
-                            style: "flex: 1; min-width: 0; padding: 4px 8px; font-size: 11.5px;",
+                            style: "flex: 1; min-width: 0; padding: 4px 8px; font-size: 11.5px; justify-content: space-between;",
                             onclick: move |_| {
                                 SidebarMessage::SelectMailScope(MailScope::Folder {
                                     source_key: sk_folder.clone(),
@@ -277,9 +301,10 @@ impl PstRagApp {
                             }
                         }
                         if has_children {
-                            button {
-                                class: "btn-text",
-                                style: "padding: 3px; width: 22px; height: 22px; flex-shrink: 0;",
+                            Button {
+                                variant: ButtonVariant::Ghost,
+                                size: ButtonSize::IconXs,
+                                style: "padding: 2px; width: 20px; height: 20px; flex-shrink: 0;",
                                 onclick: move |_| {
                                     SidebarMessage::ToggleFolderTreeNode(
                                         sk_toggle.clone(),
@@ -317,8 +342,9 @@ impl PstRagApp {
                         div {
                             style: "display: flex; flex-direction: row; gap: 6px;",
                             {cancel_btn}
-                            button {
-                                class: "btn-danger",
+                            Button {
+                                variant: ButtonVariant::Destructive,
+                                size: ButtonSize::Xs,
                                 style: "font-size: 11px; padding: 5px 10px;",
                                 onclick: move |_| SidebarMessage::ConfirmRemoveSource.dispatch(),
                                 "{confirm_lbl}"
@@ -333,8 +359,9 @@ impl PstRagApp {
                 rsx! {
                     div {
                         style: "padding-left: 20px; margin-top: 2px;",
-                        button {
-                            class: "btn-text",
+                        Button {
+                            variant: ButtonVariant::Ghost,
+                            size: ButtonSize::Xs,
                             disabled: is_busy,
                             style: "font-size: 11px; padding: 3px 8px; color: {muted_color};",
                             onclick: move |_| SidebarMessage::RemoveSourceRequested(sk_rem.clone()).dispatch(),
@@ -344,43 +371,57 @@ impl PstRagApp {
                 }
             };
 
+            let source_checked = if source_enabled {
+                CheckboxState::Checked
+            } else {
+                CheckboxState::Unchecked
+            };
+
             source_elements.push(rsx! {
-                div {
+                SidebarMenuItem {
                     style: "padding: 4px 0px; display: flex; flex-direction: column; gap: 3px; border-bottom: 1px solid var(--border-subtle);",
                     div {
                         style: "display: flex; flex-direction: row; align-items: center; gap: 6px;",
-                        input {
-                            r#type: "checkbox",
-                            checked: source_enabled,
-                            onchange: move |evt| {
+                        Checkbox {
+                            checked: source_checked,
+                            on_checked_change: move |state: CheckboxState| {
                                 SidebarMessage::SourceEnabledChanged(
                                     source_key.clone(),
-                                    evt.checked(),
+                                    matches!(state, CheckboxState::Checked),
                                 )
                                 .dispatch();
                             }
                         }
-                        button {
-                            class: "{source_nav_class}",
-                            style: "flex: 1; min-width: 0; padding: 5px 8px;",
-                            onclick: move |_| {
-                                SidebarMessage::SelectMailScope(MailScope::Source(
-                                    source_key_select.clone(),
-                                ))
-                                .dispatch();
-                            },
-                            span {
-                                style: "font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
-                                "{source_name}"
+                        div {
+                            style: "position: relative; flex: 1; min-width: 0;",
+                            Button {
+                                variant: ButtonVariant::Ghost,
+                                size: ButtonSize::Sm,
+                                class: "{source_nav_class}",
+                                style: "width: 100%; justify-content: flex-start; padding-right: 36px;",
+                                onclick: move |_| {
+                                    SidebarMessage::SelectMailScope(MailScope::Source(
+                                        source_key_select.clone(),
+                                    ))
+                                    .dispatch();
+                                },
+                                span {
+                                    style: "font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                                    "{source_name}"
+                                }
                             }
-                            span {
-                                class: "pill-count",
+                            SidebarMenuBadge {
                                 "{source_count}"
                             }
                         }
                     }
-                    for fe in folder_elements {
-                        {fe}
+                    if !folder_elements.is_empty() {
+                        SidebarMenuSub {
+                            style: "margin: 0 0 0 10px; padding: 2px 0 2px 8px;",
+                            for fe in folder_elements {
+                                {fe}
+                            }
+                        }
                     }
                     {remove_section}
                 }
@@ -392,13 +433,22 @@ impl PstRagApp {
         let mailboxes_card = card(rsx! {
             div {
                 style: "display: flex; flex-direction: column; gap: 8px;",
-                button {
-                    class: "{all_nav_class}",
-                    onclick: move |_| SidebarMessage::SelectMailScope(MailScope::AllMessages).dispatch(),
-                    span { style: "font-weight: 600;", "{all_messages_label}" }
-                    span { class: "pill-count", "{total_count}" }
+                SidebarMenu {
+                    SidebarMenuItem {
+                        Button {
+                            variant: ButtonVariant::Ghost,
+                            size: ButtonSize::Sm,
+                            class: "{all_nav_class}",
+                            style: "width: 100%; justify-content: flex-start; padding-right: 36px;",
+                            onclick: move |_| SidebarMessage::SelectMailScope(MailScope::AllMessages).dispatch(),
+                            span { style: "font-weight: 600;", "{all_messages_label}" }
+                        }
+                        SidebarMenuBadge {
+                            "{total_count}"
+                        }
+                    }
                 }
-                hr {}
+                Separator {}
                 div {
                     style: "padding: 8px; border-radius: var(--radius-sm); background-color: var(--bg-input); border: 1px dashed var(--border-strong); display: flex; flex-direction: column; gap: 8px;",
                     span {
@@ -417,17 +467,29 @@ impl PstRagApp {
                         style: "padding: 4px 2px;",
                         "{no_pst_msg}"
                     }
-                }
-                for se in source_elements {
-                    {se}
+                } else {
+                    SidebarMenu {
+                        for se in source_elements {
+                            {se}
+                        }
+                    }
                 }
             }
         });
 
-        let is_any_filter = matches!(self.label_filter, LabelFilter::Any);
-        let is_unlabeled_filter = matches!(self.label_filter, LabelFilter::Unlabeled);
         let all_lbl_text = tr.btn_all();
         let unlabeled_lbl_text = tr.unlabeled_count(self.unlabeled_count);
+
+        let mut filter_pressed = HashSet::new();
+        match self.label_filter {
+            LabelFilter::Any => {
+                filter_pressed.insert(0usize);
+            }
+            LabelFilter::Unlabeled => {
+                filter_pressed.insert(1usize);
+            }
+            LabelFilter::Labeled(_) => {}
+        }
 
         let mut label_rows = Vec::new();
         for (def, count) in &self.labels_with_counts {
@@ -442,11 +504,13 @@ impl PstRagApp {
             let badge = label_badge(&def.name, &def.color, Some(count.to_string()));
             let del_title = tr.btn_delete();
             label_rows.push(rsx! {
-                div {
+                SidebarMenuItem {
                     style: "display: flex; flex-direction: row; align-items: center; gap: 4px;",
-                    button {
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::Sm,
                         class: "{nav_class}",
-                        style: "flex: 1; min-width: 0; padding: 4px 6px;",
+                        style: "flex: 1; min-width: 0; padding: 4px 6px; justify-content: flex-start;",
                         onclick: move |_| {
                             SidebarMessage::SelectLabelFilter(LabelFilter::Labeled(
                                 label_name.clone(),
@@ -455,8 +519,9 @@ impl PstRagApp {
                         },
                         {badge}
                     }
-                    button {
-                        class: "btn-text",
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::Xs,
                         title: "{del_title}",
                         style: "padding: 4px 6px; font-size: 11px; color: {muted_color};",
                         onclick: move |_| SidebarMessage::RemoveLabelDefinition(label_del.clone()).dispatch(),
@@ -480,34 +545,50 @@ impl PstRagApp {
         let labels_card = card(rsx! {
             div {
                 style: "display: flex; flex-direction: column; gap: 8px;",
-                div {
-                    class: "segmented-control",
-                    style: "width: 100%;",
-                    button {
-                        class: if is_any_filter { "active" } else { "" },
-                        style: "flex: 1;",
-                        onclick: move |_| SidebarMessage::SelectLabelFilter(LabelFilter::Any).dispatch(),
+                ToggleGroup {
+                    horizontal: true,
+                    allow_multiple_pressed: false,
+                    pressed: filter_pressed,
+                    on_pressed_change: move |pressed: HashSet<usize>| {
+                        if pressed.contains(&0) {
+                            SidebarMessage::SelectLabelFilter(LabelFilter::Any).dispatch();
+                        } else if pressed.contains(&1) {
+                            SidebarMessage::SelectLabelFilter(LabelFilter::Unlabeled).dispatch();
+                        }
+                    },
+                    style: "width: 100%; display: flex;",
+                    ToggleItem {
+                        index: 0usize,
+                        style: "flex: 1; padding: 5px 8px; font-size: 11px;",
                         "{all_lbl_text}"
                     }
-                    button {
-                        class: if is_unlabeled_filter { "active" } else { "" },
-                        style: "flex: 1;",
-                        onclick: move |_| SidebarMessage::SelectLabelFilter(LabelFilter::Unlabeled).dispatch(),
+                    ToggleItem {
+                        index: 1usize,
+                        style: "flex: 1; padding: 5px 8px; font-size: 11px;",
                         "{unlabeled_lbl_text}"
                     }
                 }
-                for lr in label_rows {
-                    {lr}
+                if !label_rows.is_empty() {
+                    SidebarMenu {
+                        for lr in label_rows {
+                            {lr}
+                        }
+                    }
                 }
-                hr {}
-                span { class: "form-label", "{add_or_update_text}" }
-                input {
+                Separator {}
+                Label {
+                    html_for: "new-label-name-input",
+                    style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
+                    "{add_or_update_text}"
+                }
+                Input {
+                    id: "new-label-name-input",
                     r#type: "text",
                     placeholder: "{name_placeholder}",
                     value: "{cur_label_name}",
-                    style: "width: 100%;",
-                    oninput: move |evt| SidebarMessage::NewLabelNameChanged(evt.value()).dispatch(),
-                    onkeydown: move |evt| {
+                    style: "width: 100%; font-size: 12px;",
+                    oninput: move |evt: FormEvent| SidebarMessage::NewLabelNameChanged(evt.value()).dispatch(),
+                    onkeydown: move |evt: KeyboardEvent| {
                         if evt.key() != Key::Escape {
                             evt.stop_propagation();
                         }
@@ -516,13 +597,13 @@ impl PstRagApp {
                         }
                     }
                 }
-                input {
+                Input {
                     r#type: "text",
                     placeholder: "{desc_placeholder}",
                     value: "{cur_label_desc}",
-                    style: "width: 100%;",
-                    oninput: move |evt| SidebarMessage::NewLabelDescriptionChanged(evt.value()).dispatch(),
-                    onkeydown: move |evt| {
+                    style: "width: 100%; font-size: 12px;",
+                    oninput: move |evt: FormEvent| SidebarMessage::NewLabelDescriptionChanged(evt.value()).dispatch(),
+                    onkeydown: move |evt: KeyboardEvent| {
                         if evt.key() != Key::Escape {
                             evt.stop_propagation();
                         }
@@ -558,16 +639,19 @@ impl PstRagApp {
                 div {
                     style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between;",
                     span { style: "font-size: 12px; font-weight: 600; color: {bright};", "ggml-org/Laya-GGUF" }
-                    span { class: "pill-count", if external_gguf.is_some() { "GGUF" } else { "Built-in" } }
+                    Badge {
+                        variant: BadgeVariant::Secondary,
+                        if external_gguf.is_some() { "GGUF" } else { "Built-in" }
+                    }
                 }
                 span { class: "form-hint", style: "word-break: break-all;", "{laya_status}" }
-                input {
+                Input {
                     r#type: "text",
                     placeholder: "{laya_placeholder}",
                     value: "{laya_path_val}",
-                    style: "width: 100%;",
-                    oninput: move |evt| SidebarMessage::LayaGgufPathChanged(evt.value()).dispatch(),
-                    onkeydown: move |evt| {
+                    style: "width: 100%; font-size: 12px;",
+                    oninput: move |evt: FormEvent| SidebarMessage::LayaGgufPathChanged(evt.value()).dispatch(),
+                    onkeydown: move |evt: KeyboardEvent| {
                         if evt.key() != Key::Escape {
                             evt.stop_propagation();
                         }
@@ -576,7 +660,6 @@ impl PstRagApp {
                 div {
                     style: "display: flex; flex-direction: row; gap: 6px; flex-wrap: wrap;",
                     {choose_gguf_btn}
-                    {download_q8_btn}
                 }
                 span { class: "form-hint", "{laya_exp}" }
             }
@@ -602,14 +685,19 @@ impl PstRagApp {
                 style: "display: flex; flex-direction: column; gap: 8px;",
                 div {
                     style: "display: flex; flex-direction: column; gap: 3px;",
-                    span { class: "form-label", "{endpoint_lbl}" }
-                    input {
+                    Label {
+                        html_for: "llm-endpoint-input",
+                        style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
+                        "{endpoint_lbl}"
+                    }
+                    Input {
+                        id: "llm-endpoint-input",
                         r#type: "text",
                         placeholder: "https://...",
                         value: "{endpoint_val}",
-                        style: "width: 100%;",
-                        oninput: move |evt| SidebarMessage::EndpointChanged(evt.value()).dispatch(),
-                        onkeydown: move |evt| {
+                        style: "width: 100%; font-size: 12px;",
+                        oninput: move |evt: FormEvent| SidebarMessage::EndpointChanged(evt.value()).dispatch(),
+                        onkeydown: move |evt: KeyboardEvent| {
                             if evt.key() != Key::Escape {
                                 evt.stop_propagation();
                             }
@@ -618,14 +706,19 @@ impl PstRagApp {
                 }
                 div {
                     style: "display: flex; flex-direction: column; gap: 3px;",
-                    span { class: "form-label", "{model_lbl}" }
-                    input {
+                    Label {
+                        html_for: "llm-model-input",
+                        style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
+                        "{model_lbl}"
+                    }
+                    Input {
+                        id: "llm-model-input",
                         r#type: "text",
                         placeholder: "{model_ph}",
                         value: "{model_val}",
-                        style: "width: 100%;",
-                        oninput: move |evt| SidebarMessage::ModelChanged(evt.value()).dispatch(),
-                        onkeydown: move |evt| {
+                        style: "width: 100%; font-size: 12px;",
+                        oninput: move |evt: FormEvent| SidebarMessage::ModelChanged(evt.value()).dispatch(),
+                        onkeydown: move |evt: KeyboardEvent| {
                             if evt.key() != Key::Escape {
                                 evt.stop_propagation();
                             }
@@ -634,40 +727,53 @@ impl PstRagApp {
                 }
                 div {
                     style: "display: flex; flex-direction: column; gap: 3px;",
-                    span { class: "form-label", "{api_key_lbl}" }
-                    input {
+                    Label {
+                        html_for: "llm-token-input",
+                        style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
+                        "{api_key_lbl}"
+                    }
+                    Input {
+                        id: "llm-token-input",
                         r#type: "password",
                         placeholder: "{token_ph}",
                         value: "{token_val}",
-                        style: "width: 100%;",
-                        oninput: move |evt| SidebarMessage::TokenChanged(evt.value()).dispatch(),
-                        onkeydown: move |evt| {
+                        style: "width: 100%; font-size: 12px;",
+                        oninput: move |evt: FormEvent| SidebarMessage::TokenChanged(evt.value()).dispatch(),
+                        onkeydown: move |evt: KeyboardEvent| {
                             if evt.key() != Key::Escape {
                                 evt.stop_propagation();
                             }
                         }
                     }
                 }
-                hr {}
-                label {
-                    style: "display: flex; flex-direction: row; align-items: center; gap: 8px; font-size: 11.5px; cursor: pointer; padding: 2px 0;",
-                    input {
-                        r#type: "checkbox",
-                        checked: remote_emb_val,
-                        onchange: move |evt| SidebarMessage::RemoteEmbeddingsChanged(evt.checked()).dispatch()
+                Separator {}
+                div {
+                    style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0;",
+                    Label {
+                        html_for: "remote-emb-switch",
+                        style: "font-size: 11.5px; cursor: pointer;",
+                        "{remote_emb_lbl}"
                     }
-                    span { "{remote_emb_lbl}" }
+                    Switch {
+                        checked: remote_emb_val,
+                        on_checked_change: move |checked: bool| SidebarMessage::RemoteEmbeddingsChanged(checked).dispatch(),
+                    }
                 }
                 div {
                     style: "display: flex; flex-direction: column; gap: 3px;",
-                    span { class: "form-label", "{emb_model_lbl}" }
-                    input {
+                    Label {
+                        html_for: "llm-emb-model-input",
+                        style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
+                        "{emb_model_lbl}"
+                    }
+                    Input {
+                        id: "llm-emb-model-input",
                         r#type: "text",
                         placeholder: "{emb_model_ph}",
                         value: "{emb_model_val}",
-                        style: "width: 100%;",
-                        oninput: move |evt| SidebarMessage::EmbeddingModelChanged(evt.value()).dispatch(),
-                        onkeydown: move |evt| {
+                        style: "width: 100%; font-size: 12px;",
+                        oninput: move |evt: FormEvent| SidebarMessage::EmbeddingModelChanged(evt.value()).dispatch(),
+                        onkeydown: move |evt: KeyboardEvent| {
                             if evt.key() != Key::Escape {
                                 evt.stop_propagation();
                             }
@@ -699,7 +805,8 @@ impl PstRagApp {
 
         let lang_lbl = tr.language_label();
         let is_fr = self.config.language == crate::i18n::Language::French;
-        let is_en = self.config.language == crate::i18n::Language::English;
+        let mut lang_pressed = HashSet::new();
+        lang_pressed.insert(if is_fr { 0usize } else { 1usize });
 
         let mut sections = Vec::new();
         for (section, label, body) in [
@@ -717,11 +824,20 @@ impl PstRagApp {
             let header_el =
                 collapsible_section_label(label, collapsed, SidebarMessage::ToggleSection(section));
             sections.push(rsx! {
-                div {
-                    style: "display: flex; flex-direction: column; gap: 6px;",
-                    {header_el}
-                    if !collapsed {
-                        {body}
+                SidebarGroup {
+                    style: "padding: 0;",
+                    Collapsible {
+                        open: !collapsed,
+                        on_open_change: move |_| SidebarMessage::ToggleSection(section).dispatch(),
+                        div {
+                            style: "display: flex; flex-direction: column; gap: 6px;",
+                            {header_el}
+                            CollapsibleContent {
+                                SidebarGroupContent {
+                                    {body}
+                                }
+                            }
+                        }
                     }
                 }
             });
@@ -729,9 +845,9 @@ impl PstRagApp {
 
         rsx! {
             aside {
-                style: "width: 285px; height: 100%; flex-shrink: 0; overflow-y: auto; {sb_style}",
-                div {
-                    style: "padding: 14px; display: flex; flex-direction: column; gap: 12px;",
+                style: "width: 285px; height: 100%; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; {sb_style}",
+                SidebarHeader {
+                    style: "padding: 14px 14px 8px 14px; gap: 10px;",
                     div {
                         style: "display: flex; flex-direction: row; align-items: center; gap: 10px;",
                         div {
@@ -748,23 +864,38 @@ impl PstRagApp {
                     div {
                         style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px;",
                         span { style: "font-size: 11.5px; color: {muted_color}; font-weight: 500;", "{lang_lbl}" }
-                        div {
-                            class: "segmented-control",
-                            button {
-                                class: if is_fr { "active" } else { "" },
-                                onclick: move |_| SidebarMessage::LanguageChanged(crate::i18n::Language::French).dispatch(),
+                        ToggleGroup {
+                            horizontal: true,
+                            allow_multiple_pressed: false,
+                            pressed: lang_pressed,
+                            on_pressed_change: move |pressed: HashSet<usize>| {
+                                if pressed.contains(&0) {
+                                    SidebarMessage::LanguageChanged(crate::i18n::Language::French).dispatch();
+                                } else if pressed.contains(&1) {
+                                    SidebarMessage::LanguageChanged(crate::i18n::Language::English).dispatch();
+                                }
+                            },
+                            ToggleItem {
+                                index: 0usize,
+                                style: "padding: 4px 10px; font-size: 11px;",
                                 "Français"
                             }
-                            button {
-                                class: if is_en { "active" } else { "" },
-                                onclick: move |_| SidebarMessage::LanguageChanged(crate::i18n::Language::English).dispatch(),
+                            ToggleItem {
+                                index: 1usize,
+                                style: "padding: 4px 10px; font-size: 11px;",
                                 "English"
                             }
                         }
                     }
-                    hr {}
-                    for sec in sections {
-                        {sec}
+                }
+                Separator {}
+                ScrollArea {
+                    style: "flex: 1; min-height: 0; width: 100%;",
+                    SidebarContent {
+                        style: "padding: 10px 14px 14px 14px; gap: 12px;",
+                        for sec in sections {
+                            {sec}
+                        }
                     }
                 }
             }

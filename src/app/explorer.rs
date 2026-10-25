@@ -1,6 +1,20 @@
+use std::collections::HashSet;
+
 use dioxus::prelude::*;
+use dioxus_primitives::checkbox::CheckboxState;
 
 use crate::{
+    components::{
+        avatar::{Avatar, AvatarFallback, AvatarImageSize},
+        badge::{Badge, BadgeVariant},
+        button::{Button, ButtonSize, ButtonVariant},
+        checkbox::Checkbox,
+        input::Input,
+        scroll_area::ScrollArea,
+        separator::Separator,
+        toggle_group::{ToggleGroup, ToggleItem},
+        toolbar::{Toolbar, ToolbarGroup, ToolbarSeparator},
+    },
     i18n::Language,
     model::{EmailRecord, LabelFilter, LabelerBackend, MailScope, MailSort},
 };
@@ -78,8 +92,9 @@ impl PstRagApp {
                     "{status_text}"
                 }
                 if has_cancel {
-                    button {
-                        class: "btn-danger",
+                    Button {
+                        variant: ButtonVariant::Destructive,
+                        size: ButtonSize::Xs,
                         style: "font-size: 11px; padding: 3px 10px; border-radius: var(--radius-full);",
                         onclick: move |_| ExplorerMessage::CancelWorker.dispatch(),
                         "{stop_lbl}"
@@ -188,9 +203,10 @@ impl PstRagApp {
         let clear_lbl = tr.btn_clear();
 
         let is_laya = self.config.labeler_backend == LabelerBackend::Laya;
-        let is_llm = self.config.labeler_backend == LabelerBackend::LlmJudge;
         let laya_name = tr.backend_name(LabelerBackend::Laya);
         let llm_name = tr.backend_name(LabelerBackend::LlmJudge);
+        let mut backend_pressed = HashSet::new();
+        backend_pressed.insert(if is_laya { 0usize } else { 1usize });
 
         let checked_count = self.checked_message_ids.len();
         let (label_action_title, label_action_msg) = if checked_count > 0 {
@@ -267,62 +283,78 @@ impl PstRagApp {
                             stroke_width: "2",
                             stroke_linecap: "round",
                             stroke_linejoin: "round",
-                            style: "position: absolute; left: 10px; pointer-events: none;",
+                            style: "position: absolute; left: 10px; z-index: 2; pointer-events: none;",
                             circle { cx: "11", cy: "11", r: "8" }
                             line { x1: "21", y1: "21", x2: "16.65", y2: "16.65" }
                         }
-                        input {
+                        Input {
                             id: "{filter_id}",
                             r#type: "text",
                             placeholder: "{filter_ph}",
                             value: "{filter_val}",
                             style: "width: 265px; padding: 6px 28px 6px 30px; font-size: 12px;",
-                            oninput: move |evt| ExplorerMessage::FilterChanged(evt.value()).dispatch(),
-                            onkeydown: move |evt| {
+                            oninput: move |evt: FormEvent| ExplorerMessage::FilterChanged(evt.value()).dispatch(),
+                            onkeydown: move |evt: KeyboardEvent| {
                                 if evt.key() != Key::Escape {
                                     evt.stop_propagation();
                                 }
                             }
                         }
                         if has_filter {
-                            button {
-                                class: "btn-text",
+                            Button {
+                                variant: ButtonVariant::Ghost,
+                                size: ButtonSize::IconXs,
                                 title: "{clear_lbl}",
                                 style: "position: absolute; right: 4px; padding: 2px 6px; font-size: 11px; color: {muted_color};",
                                 onclick: move |_| ExplorerMessage::FilterChanged(String::new()).dispatch(),
                                 "×"
                             }
                         } else {
-                            span {
-                                style: "position: absolute; right: 8px; padding: 1px 5px; font-size: 10px; font-family: var(--font-mono); color: {muted_color}; border: 1px solid var(--border-default); border-radius: 4px; pointer-events: none;",
+                            Badge {
+                                variant: BadgeVariant::Outline,
+                                style: "position: absolute; right: 8px; padding: 1px 5px; height: 18px; min-width: 18px; font-size: 10px; font-family: var(--font-mono); color: {muted_color}; pointer-events: none;",
                                 "/"
                             }
                         }
                     }
                     {chat_toggle_btn}
                 }
-                hr {}
-                div {
-                    style: "display: flex; flex-direction: row; align-items: center; gap: 10px; flex-wrap: wrap;",
-                    span { style: "font-size: 11.5px; color: {muted_color}; font-weight: 500;", "{engine_lbl}" }
-                    div {
-                        class: "segmented-control",
-                        button {
-                            class: if is_laya { "active" } else { "" },
-                            onclick: move |_| ExplorerMessage::SetLabelerBackend(LabelerBackend::Laya).dispatch(),
-                            "{laya_name}"
-                        }
-                        button {
-                            class: if is_llm { "active" } else { "" },
-                            onclick: move |_| ExplorerMessage::SetLabelerBackend(LabelerBackend::LlmJudge).dispatch(),
-                            "{llm_name}"
+                Separator {}
+                Toolbar {
+                    style: "width: 100%; padding: 0; box-shadow: none; justify-content: flex-start; gap: 10px;",
+                    ToolbarGroup {
+                        style: "align-items: center; gap: 8px;",
+                        span { style: "font-size: 11.5px; color: {muted_color}; font-weight: 500;", "{engine_lbl}" }
+                        ToggleGroup {
+                            horizontal: true,
+                            allow_multiple_pressed: false,
+                            pressed: backend_pressed,
+                            on_pressed_change: move |pressed: HashSet<usize>| {
+                                if pressed.contains(&0) {
+                                    ExplorerMessage::SetLabelerBackend(LabelerBackend::Laya).dispatch();
+                                } else if pressed.contains(&1) {
+                                    ExplorerMessage::SetLabelerBackend(LabelerBackend::LlmJudge).dispatch();
+                                }
+                            },
+                            ToggleItem {
+                                index: 0usize,
+                                style: "padding: 4px 10px; font-size: 11px;",
+                                "{laya_name}"
+                            }
+                            ToggleItem {
+                                index: 1usize,
+                                style: "padding: 4px 10px; font-size: 11px;",
+                                "{llm_name}"
+                            }
                         }
                     }
-                    div { style: "width: 1px; height: 18px; background-color: var(--border-default);" }
-                    {label_action_btn}
-                    {label_view_btn}
-                    {select_unlabeled_btn}
-                    div { style: "flex: 1;" }
+                    ToolbarSeparator { horizontal: false }
+                    ToolbarGroup {
+                        style: "align-items: center; gap: 8px; flex-wrap: wrap;",
+                        {label_action_btn}
+                        {label_view_btn}
+                        {select_unlabeled_btn}
+                    }
                 }
             }
         }
@@ -350,15 +382,16 @@ impl PstRagApp {
             } else {
                 tr.add_label_chip(&def.name)
             };
-            let chip_class = if all_have_label {
-                "btn-primary"
+            let chip_variant = if all_have_label {
+                ButtonVariant::Primary
             } else {
-                "btn-secondary"
+                ButtonVariant::Outline
             };
             let label_name = def.name.clone();
             manual_chips.push(constrain_button(rsx! {
-                button {
-                    class: "{chip_class}",
+                Button {
+                    variant: chip_variant,
+                    size: ButtonSize::Xs,
                     style: "font-size: 10.5px; padding: 3px 9px; border-radius: var(--radius-full);",
                     onclick: move |_| ExplorerMessage::ToggleManualLabelOnChecked(label_name.clone()).dispatch(),
                     "{chip_label}"
@@ -391,7 +424,10 @@ impl PstRagApp {
                 }
                 {laya_batch_btn}
                 {llm_batch_btn}
-                div { style: "width: 1px; height: 18px; background-color: rgba(255, 255, 255, 0.16);" }
+                Separator {
+                    horizontal: false,
+                    style: "height: 18px;",
+                }
                 div {
                     style: "flex: 1; display: flex; flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap;",
                     span { style: "font-size: 11px; color: {muted_color}; font-weight: 500;", "{batch_lbl}" }
@@ -423,11 +459,16 @@ impl PstRagApp {
             tr.table_header_from()
         };
 
-        let all_visible_checked = !self.explorer_messages.is_empty()
+        let all_visible_checked = if !self.explorer_messages.is_empty()
             && self
                 .explorer_messages
                 .iter()
-                .all(|m| self.checked_message_ids.contains(&m.id));
+                .all(|m| self.checked_message_ids.contains(&m.id))
+        {
+            CheckboxState::Checked
+        } else {
+            CheckboxState::Unchecked
+        };
         let next_date_sort = if self.mail_sort == MailSort::DateDesc {
             MailSort::DateAsc
         } else {
@@ -444,14 +485,16 @@ impl PstRagApp {
         let header = rsx! {
             div {
                 class: "mail-table-header",
-                input {
-                    r#type: "checkbox",
+                Checkbox {
                     checked: all_visible_checked,
-                    onchange: move |evt| ExplorerMessage::ToggleCheckAllVisible(evt.checked()).dispatch()
+                    on_checked_change: move |state: CheckboxState| {
+                        ExplorerMessage::ToggleCheckAllVisible(matches!(state, CheckboxState::Checked)).dispatch();
+                    }
                 }
                 {unlabeled_btn}
-                button {
-                    class: "btn-text",
+                Button {
+                    variant: ButtonVariant::Ghost,
+                    size: ButtonSize::Xs,
                     style: "flex: 4; padding: 2px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: {muted_color}; justify-content: flex-start;",
                     onclick: move |_| ExplorerMessage::SetMailSort(MailSort::SubjectAsc).dispatch(),
                     "{sort_subj_label}"
@@ -460,8 +503,9 @@ impl PstRagApp {
                     style: "flex: 3;",
                     "{labels_hdr}"
                 }
-                button {
-                    class: "btn-text",
+                Button {
+                    variant: ButtonVariant::Ghost,
+                    size: ButtonSize::Xs,
                     style: "flex: 3; padding: 2px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: {muted_color}; justify-content: flex-start;",
                     onclick: move |_| ExplorerMessage::SetMailSort(MailSort::SenderAsc).dispatch(),
                     "{sort_from_label}"
@@ -470,8 +514,9 @@ impl PstRagApp {
                     style: "flex: 2;",
                     "{folder_hdr}"
                 }
-                button {
-                    class: "btn-text",
+                Button {
+                    variant: ButtonVariant::Ghost,
+                    size: ButtonSize::Xs,
                     style: "flex: 2; padding: 2px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: {muted_color}; justify-content: flex-start;",
                     onclick: move |_| ExplorerMessage::SetMailSort(next_date_sort).dispatch(),
                     "{sort_date_label}"
@@ -499,8 +544,8 @@ impl PstRagApp {
             section {
                 style: "width: 100%; height: {table_height}px; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; {rb_style}",
                 {header}
-                div {
-                    style: "flex: 1; width: 100%; overflow-y: auto; display: flex; flex-direction: column;",
+                ScrollArea {
+                    style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column;",
                     if is_empty {
                         div {
                             style: "width: 100%; height: 100%; padding: 32px 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;",
@@ -589,28 +634,36 @@ impl PstRagApp {
             (false, true) => "mail-row checked",
             (false, false) => "mail-row",
         };
+        let check_state = if is_checked {
+            CheckboxState::Checked
+        } else {
+            CheckboxState::Unchecked
+        };
 
         rsx! {
             div {
                 key: "{email_id}",
                 class: "{row_class}",
-                input {
-                    r#type: "checkbox",
-                    checked: is_checked,
-                    onchange: move |evt| ExplorerMessage::ToggleCheckEmail(email_id, evt.checked()).dispatch()
+                Checkbox {
+                    checked: check_state,
+                    on_checked_change: move |state: CheckboxState| {
+                        ExplorerMessage::ToggleCheckEmail(email_id, matches!(state, CheckboxState::Checked)).dispatch();
+                    }
                 }
-                button {
-                    class: "btn-text range-btn",
+                Button {
+                    variant: ButtonVariant::Ghost,
+                    size: ButtonSize::Xs,
+                    class: "range-btn",
                     style: "color: {muted_color}; flex-shrink: 0;",
                     onclick: move |_| ExplorerMessage::SelectRangeTo(email_id).dispatch(),
                     "{range_lbl}"
                 }
-                button {
-                    class: "btn-text",
-                    style: "flex: 1; min-width: 0; padding: 0; display: flex; flex-direction: row; align-items: center; gap: 10px;",
+                Button {
+                    variant: ButtonVariant::Ghost,
+                    style: "flex: 1; min-width: 0; height: auto; padding: 0; display: flex; flex-direction: row; align-items: center; gap: 10px;",
                     onclick: move |_| ExplorerMessage::SelectEmail(email_id).dispatch(),
                     span {
-                        style: "flex: 4; font-size: 12.5px; font-weight: {subj_weight}; color: {subj_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                        style: "flex: 4; text-align: left; font-size: 12.5px; font-weight: {subj_weight}; color: {subj_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                         "{subj_trunc}"
                     }
                     div {
@@ -624,15 +677,15 @@ impl PstRagApp {
                         }
                     }
                     span {
-                        style: "flex: 3; font-size: 11.5px; color: {sender_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                        style: "flex: 3; text-align: left; font-size: 11.5px; color: {sender_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                         "{sender_trunc}"
                     }
                     span {
-                        style: "flex: 2; font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                        style: "flex: 2; text-align: left; font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                         "{folder_trunc}"
                     }
                     span {
-                        style: "flex: 2; font-size: 11px; color: {muted_color}; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                        style: "flex: 2; text-align: left; font-size: 11px; color: {muted_color}; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                         "{date_short}"
                     }
                 }
@@ -712,16 +765,17 @@ impl PstRagApp {
             } else {
                 tr.add_label_chip(&def.name)
             };
-            let btn_class = if active {
-                "btn-primary"
+            let btn_variant = if active {
+                ButtonVariant::Primary
             } else {
-                "btn-secondary"
+                ButtonVariant::Outline
             };
             let msg_id = email.id;
             let label_name = def.name.clone();
             quick_toggle_buttons.push(rsx! {
-                button {
-                    class: "{btn_class}",
+                Button {
+                    variant: btn_variant,
+                    size: ButtonSize::Xs,
                     style: "font-size: 10.5px; padding: 3px 9px; border-radius: var(--radius-full);",
                     onclick: move |_| ExplorerMessage::ToggleManualLabel(msg_id, label_name.clone()).dispatch(),
                     "{btn_label}"
@@ -833,9 +887,14 @@ impl PstRagApp {
                         }
                         div {
                             class: "email-header-envelope",
-                            div {
-                                class: "email-sender-avatar",
-                                "{avatar_initials}"
+                            Avatar {
+                                size: AvatarImageSize::Small,
+                                style: "width: 36px; height: 36px;",
+                                AvatarFallback {
+                                    class: "email-sender-avatar",
+                                    style: "font-size: 12px;",
+                                    "{avatar_initials}"
+                                }
                             }
                             div {
                                 class: "email-envelope-fields",
@@ -920,14 +979,14 @@ impl PstRagApp {
                             div {
                                 style: "display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 6px;",
                                 for att in attachment_chips {
-                                    span {
-                                        style: "display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 11px; color: {bright}; background-color: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-xs);",
+                                    Badge {
+                                        variant: BadgeVariant::Secondary,
                                         "📎 {att}"
                                     }
                                 }
                             }
                         }
-                        hr {}
+                        Separator {}
                         div {
                             style: "display: flex; flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap;",
                             div {
@@ -952,9 +1011,9 @@ impl PstRagApp {
                     }
                 }
                 {header_splitter}
-                div {
+                ScrollArea {
                     class: "selectable-text",
-                    style: "flex: 1; min-height: 0; width: 100%; overflow-y: auto; {rb_style}",
+                    style: "flex: 1; min-height: 0; width: 100%; {rb_style}",
                     if is_body_empty {
                         div {
                             style: "padding: 18px 22px; width: 100%; font-size: 13px; font-style: italic; color: {muted_color};",

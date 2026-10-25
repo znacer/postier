@@ -4,6 +4,8 @@ use dioxus::prelude::*;
 
 pub(crate) use self::parser::{MdBlock, MdSpan, parse_inline, parse_markdown};
 
+use crate::components::separator::Separator;
+
 use super::{
     DispatchMessage,
     theme::{
@@ -217,7 +219,7 @@ pub(super) fn render_markdown_blocks<M: DispatchMessage>(
                 });
             }
             MdBlock::Rule => {
-                rendered_blocks.push(rsx! { hr {} });
+                rendered_blocks.push(rsx! { Separator {} });
             }
         }
     }

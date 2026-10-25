@@ -3,6 +3,11 @@ use std::fmt;
 use dioxus::prelude::*;
 
 use super::DispatchMessage;
+use crate::components::{
+    badge::{Badge, BadgeVariant},
+    button::{Button, ButtonSize, ButtonVariant},
+    collapsible::CollapsibleTrigger,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct Color {
@@ -60,6 +65,7 @@ const fn shade(color: Color, amount: f32) -> Color {
 /// Application palette constants (modern dark web UI surfaces).
 const PRIMARY: Color = Color::from_hex(0x2563EB);
 const SECONDARY: Color = Color::from_hex(0x8A8FAB);
+#[allow(dead_code)]
 const TERTIARY: Color = Color::from_hex(0xB083A7);
 #[allow(dead_code)]
 const ERROR: Color = Color::from_hex(0xEF4444);
@@ -104,8 +110,37 @@ pub(super) fn parse_hex_color(hex: &str) -> Color {
     Color::parse(hex).unwrap_or(POSITIVE)
 }
 
+pub(super) const DX_COMPONENTS_THEME_CSS: &str =
+    include_str!("../../assets/dx-components-theme.css");
+
 pub(super) const APP_CSS: &str = r#"
 :root {
+    --dark: initial;
+    --light: ;
+
+    /* Override dx-components-theme variables to match our slate dark palette */
+    --primary-color: #0b0f17;
+    --primary-color-1: #0b0f17;
+    --primary-color-2: #0f1420;
+    --primary-color-3: #131b2e;
+    --primary-color-4: #172136;
+    --primary-color-5: #1a243b;
+    --primary-color-6: rgba(148, 163, 184, 0.16);
+    --primary-color-7: rgba(148, 163, 184, 0.28);
+
+    --secondary-color: #ffffff;
+    --secondary-color-1: #f8fafc;
+    --secondary-color-2: #3b82f6;
+    --secondary-color-3: #e2e8f0;
+    --secondary-color-4: #cbd5e1;
+    --secondary-color-5: #94a3b8;
+    --secondary-color-6: #64748b;
+
+    --focused-border-color: #3b82f6;
+    --primary-error-color: #dc2626;
+    --secondary-error-color: #ef4444;
+    --contrast-error-color: #fee2e2;
+
     --bg-app: #0b0f17;
     --bg-sidebar: #0f1420;
     --bg-surface: #131b2e;
@@ -171,93 +206,7 @@ html, body, #main {
     -webkit-user-select: text;
 }
 
-/* Modern Buttons */
-button {
-    font-family: var(--font-sans);
-    font-size: 12px;
-    font-weight: 500;
-    line-height: 1.2;
-    cursor: pointer;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-default);
-    background-color: var(--bg-elevated);
-    color: var(--text-primary);
-    transition: all 0.14s cubic-bezier(0.16, 1, 0.3, 1);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 6px 12px;
-    white-space: nowrap;
-    outline: none;
-}
-
-button:hover:not(:disabled) {
-    background-color: #23304d;
-    border-color: var(--border-strong);
-}
-
-button:active:not(:disabled) {
-    transform: translateY(0.5px);
-}
-
-button:focus-visible {
-    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.45);
-}
-
-button:disabled {
-    opacity: 0.42;
-    cursor: not-allowed;
-}
-
-button.btn-primary {
-    background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
-    border-color: rgba(96, 165, 250, 0.45);
-    color: var(--text-on-primary);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.12);
-}
-
-button.btn-primary:hover:not(:disabled) {
-    background: linear-gradient(180deg, #60a5fa 0%, #2563eb 100%);
-    border-color: rgba(147, 197, 253, 0.65);
-}
-
-button.btn-secondary {
-    background-color: var(--bg-surface);
-    border-color: var(--border-default);
-    color: var(--text-primary);
-}
-
-button.btn-secondary:hover:not(:disabled) {
-    background-color: var(--bg-elevated);
-    border-color: var(--border-strong);
-}
-
-button.btn-text, button.btn-ghost {
-    background-color: transparent;
-    border-color: transparent;
-    color: var(--text-secondary);
-    box-shadow: none;
-}
-
-button.btn-text:hover:not(:disabled), button.btn-ghost:hover:not(:disabled) {
-    background-color: var(--bg-hover);
-    color: var(--text-primary);
-    border-color: transparent;
-}
-
-button.btn-danger {
-    background-color: var(--danger-subtle);
-    border-color: rgba(239, 68, 68, 0.35);
-    color: #fca5a5;
-}
-
-button.btn-danger:hover:not(:disabled) {
-    background-color: rgba(239, 68, 68, 0.24);
-    border-color: rgba(239, 68, 68, 0.55);
-}
-
-/* Segmented Control */
+/* Segmented Control & ToggleGroup refinements */
 .segmented-control {
     display: inline-flex;
     align-items: center;
@@ -266,98 +215,6 @@ button.btn-danger:hover:not(:disabled) {
     border-radius: var(--radius-sm);
     border: 1px solid var(--border-subtle);
     gap: 2px;
-}
-
-.segmented-control button {
-    border: none;
-    border-radius: var(--radius-xs);
-    padding: 4px 10px;
-    font-size: 11px;
-    font-weight: 500;
-    background: transparent;
-    color: var(--text-muted);
-    box-shadow: none;
-}
-
-.segmented-control button:hover:not(:disabled) {
-    color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.04);
-}
-
-.segmented-control button.active {
-    background-color: var(--primary);
-    color: var(--text-on-primary);
-    box-shadow: var(--shadow-sm);
-}
-
-/* Inputs */
-input[type="text"], input[type="password"] {
-    font-family: var(--font-sans);
-    font-size: 12px;
-    background-color: var(--bg-input);
-    color: var(--text-primary);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    padding: 7px 10px;
-    outline: none;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-    user-select: text;
-    -webkit-user-select: text;
-}
-
-input[type="text"]::placeholder, input[type="password"]::placeholder {
-    color: rgba(148, 163, 184, 0.55);
-}
-
-input[type="text"]:hover, input[type="password"]:hover {
-    border-color: var(--border-strong);
-}
-
-input[type="text"]:focus, input[type="password"]:focus {
-    border-color: var(--border-focus);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
-}
-
-/* Checkboxes */
-input[type="checkbox"] {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 15px;
-    height: 15px;
-    border: 1.5px solid var(--border-strong);
-    border-radius: 4px;
-    background-color: var(--bg-input);
-    cursor: pointer;
-    margin: 0;
-    flex-shrink: 0;
-    display: inline-grid;
-    place-content: center;
-    transition: all 0.12s ease;
-}
-
-input[type="checkbox"]:hover {
-    border-color: var(--text-accent);
-}
-
-input[type="checkbox"]:checked {
-    background-color: var(--primary);
-    border-color: var(--primary);
-}
-
-input[type="checkbox"]:checked::before {
-    content: "";
-    width: 8px;
-    height: 5px;
-    border-left: 2px solid #ffffff;
-    border-bottom: 2px solid #ffffff;
-    transform: rotate(-45deg) translate(0.5px, -0.5px);
-}
-
-hr {
-    border: none;
-    border-top: 1px solid var(--border-subtle);
-    margin: 2px 0;
-    width: 100%;
 }
 
 /* Navigation & Tree Items */
@@ -375,6 +232,7 @@ hr {
     border: 1px solid transparent;
     background: transparent;
     color: var(--text-secondary);
+    cursor: pointer;
 }
 
 .nav-item:hover:not(:disabled) {
@@ -980,8 +838,9 @@ pub(super) fn enabled_button<M: DispatchMessage>(
     let text_str = label.to_string();
     let is_disabled = message.is_none();
     constrain_button(rsx! {
-        button {
-            class: "btn-primary",
+        Button {
+            variant: ButtonVariant::Primary,
+            size: ButtonSize::Sm,
             style: "font-size: 12px; padding: 6px 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;",
             disabled: is_disabled,
             onclick: move |_| {
@@ -1001,8 +860,9 @@ pub(super) fn small_button<M: DispatchMessage>(
     let text_str = label.to_string();
     let is_disabled = message.is_none();
     constrain_button(rsx! {
-        button {
-            class: "btn-secondary",
+        Button {
+            variant: ButtonVariant::Outline,
+            size: ButtonSize::Xs,
             style: "font-size: 11px; padding: 5px 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;",
             disabled: is_disabled,
             onclick: move |_| {
@@ -1022,8 +882,9 @@ pub(super) fn primary_button<M: DispatchMessage>(
     let text_str = label.to_string();
     let is_disabled = message.is_none();
     constrain_button(rsx! {
-        button {
-            class: "btn-primary",
+        Button {
+            variant: ButtonVariant::Primary,
+            size: ButtonSize::Sm,
             style: "font-size: 12px; padding: 6px 14px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;",
             disabled: is_disabled,
             onclick: move |_| {
@@ -1040,9 +901,9 @@ pub(super) fn prompt_button<M: DispatchMessage>(label: &str, on_press: M) -> Ele
     let label_text = label.to_owned();
     let accent = accent_text();
     rsx! {
-        button {
-            class: "btn-secondary",
-            style: "width: 100%; padding: 10px 12px; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; border-radius: var(--radius-md); white-space: normal;",
+        Button {
+            variant: ButtonVariant::Outline,
+            style: "width: 100%; height: auto; padding: 10px 12px; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; border-radius: var(--radius-md); white-space: normal;",
             onclick: move |_| on_press.clone().dispatch(),
             span { style: "font-size: 12px; flex: 1; text-align: left; line-height: 1.35;", "{label_text}" }
             span {
@@ -1062,26 +923,36 @@ pub(super) fn collapsible_section_label<M: DispatchMessage>(
     let chevron_rotation = if collapsed { "-90deg" } else { "0deg" };
     let muted_color = muted();
     rsx! {
-        button {
-            class: "btn-text",
+        CollapsibleTrigger {
             style: "width: 100%; padding: 6px 4px; display: flex; flex-direction: row; align-items: center; justify-content: space-between; border-radius: var(--radius-xs);",
-            onclick: move |_| on_toggle.clone().dispatch(),
-            span {
-                style: "font-size: 10.5px; color: {muted_color}; flex: 1; text-align: left; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;",
-                "{label_text}"
-            }
-            svg {
-                width: "14",
-                height: "14",
-                view_box: "0 0 24 24",
-                fill: "none",
-                stroke: "{muted_color}",
-                stroke_width: "2",
-                stroke_linecap: "round",
-                stroke_linejoin: "round",
-                style: "transition: transform 0.16s ease; transform: rotate({chevron_rotation}); flex-shrink: 0;",
-                polyline { points: "6 9 12 15 18 9" }
-            }
+            as: move |_attrs: Vec<Attribute>| {
+                let on_toggle = on_toggle.clone();
+                let label_text = label_text.clone();
+                rsx! {
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::Xs,
+                        style: "width: 100%; padding: 6px 4px; display: flex; flex-direction: row; align-items: center; justify-content: space-between; border-radius: var(--radius-xs);",
+                        onclick: move |_| on_toggle.clone().dispatch(),
+                        span {
+                            style: "font-size: 10.5px; color: {muted_color}; flex: 1; text-align: left; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;",
+                            "{label_text}"
+                        }
+                        svg {
+                            width: "14",
+                            height: "14",
+                            view_box: "0 0 24 24",
+                            fill: "none",
+                            stroke: "{muted_color}",
+                            stroke_width: "2",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round",
+                            style: "transition: transform 0.16s ease; transform: rotate({chevron_rotation}); flex-shrink: 0;",
+                            polyline { points: "6 9 12 15 18 9" }
+                        }
+                    }
+                }
+            },
         }
     }
 }
@@ -1113,7 +984,8 @@ pub(super) fn label_badge(name: &str, hex_color: &str, detail: Option<String>) -
     let label_name = name.to_owned();
     let bright = bright_text();
     rsx! {
-        span {
+        Badge {
+            variant: BadgeVariant::Outline,
             style: "display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; font-size: 11px; font-weight: 500; color: {bright}; background-color: {bg}; border: 1px solid {border_col}; border-radius: 9999px; white-space: nowrap;",
             span {
                 style: "width: 6px; height: 6px; border-radius: 50%; background-color: {base}; flex-shrink: 0;"
@@ -1243,6 +1115,7 @@ fn card_style() -> String {
 pub(super) fn status_style() -> String {
     "background-color: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-full);".into()
 }
+#[allow(dead_code)]
 pub(super) fn badge_style() -> String {
     let c = shade(TERTIARY, 0.22);
     panel(c, c, 999.0)
@@ -1285,7 +1158,7 @@ mod tests {
             let small: Element = small_button("Test", Some(()));
             let primary: Element = primary_button("Test", Some(()));
             let enabled: Element = enabled_button("Test", Some(()));
-            let custom: Element = constrain_button(rsx! { button { "Custom" } });
+            let custom: Element = constrain_button(rsx! { Button { "Custom" } });
             rsx! {
                 {small}
                 {primary}

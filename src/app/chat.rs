@@ -1,6 +1,24 @@
 use dioxus::prelude::*;
+use dioxus_primitives::checkbox::CheckboxState;
 
-use crate::model::SearchHit;
+use crate::{
+    components::{
+        avatar::{Avatar, AvatarFallback, AvatarImageSize},
+        badge::{Badge, BadgeVariant},
+        button::{Button, ButtonVariant},
+        checkbox::Checkbox,
+        collapsible::{Collapsible, CollapsibleContent, CollapsibleTrigger},
+        input::Input,
+        item::{
+            Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemHeader, ItemMedia,
+            ItemSize, ItemTitle, ItemVariant,
+        },
+        label::Label,
+        scroll_area::ScrollArea,
+        separator::Separator,
+    },
+    model::SearchHit,
+};
 
 use super::{
     ChatMessage, ChatRole, DispatchMessage, PstRagApp,
@@ -54,8 +72,8 @@ impl PstRagApp {
             return rsx! {
                 aside {
                     style: "width: 42px; height: 100%; flex-shrink: 0; {cp_style}",
-                    button {
-                        class: "btn-text",
+                    Button {
+                        variant: ButtonVariant::Ghost,
                         title: "{open_lbl}",
                         style: "width: 100%; height: 100%; padding: 14px 4px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 10px; border-radius: 0;",
                         onclick: move |_| ChatPaneMessage::ToggleChatPane.dispatch(),
@@ -178,27 +196,30 @@ impl PstRagApp {
             aside {
                 style: "width: {chat_width}px; height: 100%; padding: 14px; display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; overflow: hidden; {cp_style}",
                 {header}
-                hr {}
-                div {
-                    style: "flex: 1; min-height: 0; width: 100%; overflow-y: auto; padding: 6px 2px; display: flex; flex-direction: column; gap: 12px;",
-                    if let Some(welcome) = welcome_section {
-                        {welcome}
+                Separator {}
+                ScrollArea {
+                    style: "flex: 1; min-height: 0; width: 100%;",
+                    div {
+                        style: "padding: 6px 2px; display: flex; flex-direction: column; gap: 12px;",
+                        if let Some(welcome) = welcome_section {
+                            {welcome}
+                        }
+                        for me in message_elements {
+                            {me}
+                        }
+                        {sources_section}
                     }
-                    for me in message_elements {
-                        {me}
-                    }
-                    {sources_section}
                 }
                 div {
                     style: "padding: 12px; display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; {comp_style}",
-                    input {
+                    Input {
                         id: "{q_id}",
                         r#type: "text",
                         placeholder: "{q_ph}",
                         value: "{q_val}",
                         style: "width: 100%; padding: 9px 12px; font-size: 13px;",
-                        oninput: move |evt| ChatPaneMessage::QuestionChanged(evt.value()).dispatch(),
-                        onkeydown: move |evt| {
+                        oninput: move |evt: FormEvent| ChatPaneMessage::QuestionChanged(evt.value()).dispatch(),
+                        onkeydown: move |evt: KeyboardEvent| {
                             if evt.key() != Key::Escape {
                                 evt.stop_propagation();
                             }
@@ -228,7 +249,6 @@ impl PstRagApp {
         let tr = self.config.language;
         let accent = accent_text();
         let muted_color = muted();
-        let b_style = badge_style();
         let label = if self.show_sources {
             tr.btn_hide_evidence()
         } else {
@@ -237,33 +257,45 @@ impl PstRagApp {
         let ev_heading = tr.evidence_heading();
         let hits_len = self.hits.len();
         let show_sources = self.show_sources;
-        let hit_elements: Vec<Element> = if show_sources {
-            self.hits
-                .iter()
-                .enumerate()
-                .map(|(idx, hit)| self.hit_view(idx, hit))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let hit_elements: Vec<Element> = self
+            .hits
+            .iter()
+            .enumerate()
+            .map(|(idx, hit)| self.hit_view(idx, hit))
+            .collect();
 
         rsx! {
-            div {
-                style: "width: 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 4px;",
-                button {
-                    class: "btn-secondary",
-                    style: "width: 100%; padding: 8px 12px; display: flex; flex-direction: row; align-items: center; gap: 8px; border-radius: var(--radius-md);",
-                    onclick: move |_| ChatPaneMessage::ToggleSources.dispatch(),
-                    span { style: "font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: {accent};", "{ev_heading}" }
-                    span {
-                        style: "padding: 2px 7px; font-size: 10.5px; font-weight: 600; {b_style}",
-                        "{hits_len}"
+            Collapsible {
+                open: show_sources,
+                on_open_change: move |_| ChatPaneMessage::ToggleSources.dispatch(),
+                div {
+                    style: "width: 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 4px;",
+                    CollapsibleTrigger {
+                        as: move |_attrs: Vec<Attribute>| {
+                            rsx! {
+                                Button {
+                                    variant: ButtonVariant::Outline,
+                                    style: "width: 100%; height: auto; padding: 8px 12px; display: flex; flex-direction: row; align-items: center; gap: 8px; border-radius: var(--radius-md);",
+                                    onclick: move |_| ChatPaneMessage::ToggleSources.dispatch(),
+                                    span { style: "font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: {accent};", "{ev_heading}" }
+                                    Badge {
+                                        variant: BadgeVariant::Secondary,
+                                        "{hits_len}"
+                                    }
+                                    div { style: "flex: 1;" }
+                                    span { style: "font-size: 11px; color: {muted_color};", "{label}" }
+                                }
+                            }
+                        },
                     }
-                    div { style: "flex: 1;" }
-                    span { style: "font-size: 11px; color: {muted_color};", "{label}" }
-                }
-                for he in hit_elements {
-                    {he}
+                    CollapsibleContent {
+                        ItemGroup {
+                            style: "gap: 8px;",
+                            for he in hit_elements {
+                                {he}
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -279,9 +311,13 @@ impl PstRagApp {
         };
         let av_letter = if is_user { "Y" } else { "AI" };
         let avatar = rsx! {
-            div {
-                style: "width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; {av_style}",
-                span { style: "font-size: 10px; font-weight: 700;", "{av_letter}" }
+            Avatar {
+                size: AvatarImageSize::Small,
+                style: "width: 28px; height: 28px; flex-shrink: 0;",
+                AvatarFallback {
+                    style: "font-size: 10px; font-weight: 700; {av_style}",
+                    "{av_letter}"
+                }
             }
         };
 
@@ -296,6 +332,11 @@ impl PstRagApp {
         let has_context = !message.context_preview.is_empty();
         let show_ctx_lbl = tr.show_context_checkbox();
         let show_ctx = message.show_context;
+        let show_ctx_state = if show_ctx {
+            CheckboxState::Checked
+        } else {
+            CheckboxState::Unchecked
+        };
         let ctx_preview = message.context_preview.clone();
         let muted_color = muted();
         let cb_style = code_block_style();
@@ -304,6 +345,7 @@ impl PstRagApp {
         } else {
             assistant_bubble_style()
         };
+        let ctx_checkbox_id = format!("chat-ctx-check-{index}");
 
         let bubble = rsx! {
             div {
@@ -314,15 +356,21 @@ impl PstRagApp {
                 }
                 {md_blocks}
                 if has_context {
-                    hr {}
-                    label {
-                        style: "display: flex; flex-direction: row; align-items: center; gap: 8px; font-size: 11px; cursor: pointer; padding-top: 2px;",
-                        input {
-                            r#type: "checkbox",
-                            checked: show_ctx,
-                            onchange: move |evt| ChatPaneMessage::ToggleContext(index, evt.checked()).dispatch()
+                    Separator {}
+                    div {
+                        style: "display: flex; flex-direction: row; align-items: center; gap: 8px; padding-top: 2px;",
+                        Checkbox {
+                            id: "{ctx_checkbox_id}",
+                            checked: show_ctx_state,
+                            on_checked_change: move |state: CheckboxState| {
+                                ChatPaneMessage::ToggleContext(index, matches!(state, CheckboxState::Checked)).dispatch();
+                            }
                         }
-                        span { "{show_ctx_lbl}" }
+                        Label {
+                            html_for: "{ctx_checkbox_id}",
+                            style: "font-size: 11px; cursor: pointer;",
+                            "{show_ctx_lbl}"
+                        }
                     }
                     if show_ctx {
                         div {
@@ -432,7 +480,7 @@ impl PstRagApp {
                 if let Some(lbl) = lbl_text {
                     span { style: "font-size: 11px; color: {accent};", "{lbl}" }
                 }
-                hr {}
+                Separator {}
                 span {
                     class: "selectable-text",
                     style: "font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;",
@@ -446,33 +494,42 @@ impl PstRagApp {
         let src_style = source_style();
 
         rsx! {
-            div {
-                style: "width: 100%; padding: 12px; display: flex; flex-direction: column; gap: 8px; {src_style}",
-                div {
+            Item {
+                variant: ItemVariant::Outline,
+                size: ItemSize::Sm,
+                style: "width: 100%; padding: 12px; display: flex; flex-direction: column; align-items: stretch; gap: 8px; {src_style}",
+                ItemHeader {
                     style: "display: flex; flex-direction: row; align-items: center; gap: 8px;",
-                    span {
-                        class: "pill-count",
-                        "{idx_str}"
+                    ItemMedia {
+                        Badge {
+                            variant: BadgeVariant::Secondary,
+                            "{idx_str}"
+                        }
                     }
-                    div {
-                        style: "flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;",
-                        span {
-                            style: "font-size: 12.5px; font-weight: 600; color: {bright}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                    ItemContent {
+                        style: "flex: 1; min-width: 0; gap: 2px;",
+                        ItemTitle {
+                            style: "width: 100%; font-size: 12.5px; font-weight: 600; color: {bright}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                             "{subject}"
                         }
-                        span {
-                            style: "font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                        ItemDescription {
+                            style: "font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; -webkit-line-clamp: 1;",
                             "{sender_date}"
                         }
                     }
-                    {open_mail_btn}
+                    ItemActions {
+                        {open_mail_btn}
+                    }
                 }
                 span {
                     class: "selectable-text",
                     style: "font-size: 11.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;",
                     "{short_excerpt}"
                 }
-                {details_btn}
+                div {
+                    style: "display: flex; flex-direction: row;",
+                    {details_btn}
+                }
                 if let Some(details) = expanded_details {
                     {details}
                 }
