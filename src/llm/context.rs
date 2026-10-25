@@ -70,7 +70,8 @@ pub struct ChatTurn {
 }
 
 pub fn clean_email_body(raw: &str) -> String {
-    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let plain_source = crate::app::email_html::html_to_plain_text(raw);
+    let normalized = plain_source.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = normalized.lines().map(|l| l.trim_end()).collect();
     if lines.is_empty() {
         return String::new();

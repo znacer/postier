@@ -49,18 +49,28 @@ impl PstRagApp {
         if !self.chat_open {
             let open_lbl = tr.btn_open();
             return rsx! {
-                div {
-                    style: "width: 36px; height: 100%; flex-shrink: 0; {cp_style}",
+                aside {
+                    style: "width: 42px; height: 100%; flex-shrink: 0; {cp_style}",
                     button {
                         class: "btn-text",
-                        style: "width: 100%; height: 100%; padding: 16px 4px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 2px;",
+                        title: "{open_lbl}",
+                        style: "width: 100%; height: 100%; padding: 14px 4px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 10px; border-radius: 0;",
                         onclick: move |_| ChatPaneMessage::ToggleChatPane.dispatch(),
-                        span { style: "font-size: 10px; color: {accent};", "{open_lbl}" }
-                        div { style: "height: 8px;" }
-                        span { style: "font-size: 10px; color: {muted_color};", "C" }
-                        span { style: "font-size: 10px; color: {muted_color};", "H" }
-                        span { style: "font-size: 10px; color: {muted_color};", "A" }
-                        span { style: "font-size: 10px; color: {muted_color};", "T" }
+                        svg {
+                            width: "16",
+                            height: "16",
+                            view_box: "0 0 24 24",
+                            fill: "none",
+                            stroke: "{accent}",
+                            stroke_width: "2",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round",
+                            path { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" }
+                        }
+                        span {
+                            style: "writing-mode: vertical-rl; text-orientation: mixed; font-size: 10px; font-weight: 600; letter-spacing: 0.12em; color: {muted_color}; text-transform: uppercase;",
+                            "CHAT"
+                        }
                     }
                 }
             };
@@ -72,12 +82,12 @@ impl PstRagApp {
         let hide_btn = small_button(tr.btn_hide(), Some(ChatPaneMessage::ToggleChatPane));
 
         let header = rsx! {
-            div {
-                style: "display: flex; flex-direction: row; align-items: center; gap: 5px; flex-shrink: 0;",
+            header {
+                style: "display: flex; flex-direction: row; align-items: center; gap: 8px; flex-shrink: 0;",
                 div {
-                    style: "flex: 1; display: flex; flex-direction: column; gap: 2px;",
-                    span { style: "font-size: 17px; color: {bright}; font-weight: 600;", "{chat_title}" }
-                    span { style: "font-size: 11px; color: {muted_color};", "{chat_sub}" }
+                    style: "flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;",
+                    span { style: "font-size: 15px; color: {bright}; font-weight: 700; letter-spacing: -0.01em;", "{chat_title}" }
+                    span { style: "font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", "{chat_sub}" }
                 }
                 {new_btn}
                 {hide_btn}
@@ -101,11 +111,28 @@ impl PstRagApp {
             );
             Some(rsx! {
                 div {
-                    style: "padding: 20px 6px; display: flex; flex-direction: column; gap: 10px;",
-                    span { style: "font-size: 16px; color: {bright}; font-weight: 600;", "{w_title}" }
-                    span { style: "font-size: 11px; color: {muted_color};", "{w_desc}" }
+                    style: "padding: 20px 8px; display: flex; flex-direction: column; gap: 12px;",
                     div {
-                        style: "width: 100%; display: flex; flex-direction: column; gap: 6px;",
+                        style: "width: 36px; height: 36px; border-radius: 10px; background-color: rgba(59, 130, 246, 0.14); border: 1px solid rgba(96, 165, 250, 0.3); display: flex; align-items: center; justify-content: center;",
+                        svg {
+                            width: "18",
+                            height: "18",
+                            view_box: "0 0 24 24",
+                            fill: "none",
+                            stroke: "{accent}",
+                            stroke_width: "2",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round",
+                            path { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" }
+                        }
+                    }
+                    div {
+                        style: "display: flex; flex-direction: column; gap: 4px;",
+                        span { style: "font-size: 15px; color: {bright}; font-weight: 700;", "{w_title}" }
+                        span { style: "font-size: 12px; color: {muted_color}; line-height: 1.45;", "{w_desc}" }
+                    }
+                    div {
+                        style: "width: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 4px;",
                         {p1}
                         {p2}
                         {p3}
@@ -136,7 +163,7 @@ impl PstRagApp {
         } else {
             tr.chat_helper_ready()
         };
-        let search_only_btn = enabled_button(
+        let search_only_btn = small_button(
             tr.btn_search_only(),
             enabled.then_some(ChatPaneMessage::SearchLocally),
         );
@@ -145,7 +172,7 @@ impl PstRagApp {
         let chat_width = self.chat_width;
 
         rsx! {
-            div {
+            aside {
                 style: "width: {chat_width}px; height: 100%; padding: 14px; display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; overflow: hidden; {cp_style}",
                 {header}
                 hr {}
@@ -160,13 +187,13 @@ impl PstRagApp {
                     {sources_section}
                 }
                 div {
-                    style: "padding: 10px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; {comp_style}",
+                    style: "padding: 12px; display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; {comp_style}",
                     input {
                         id: "{q_id}",
                         r#type: "text",
                         placeholder: "{q_ph}",
                         value: "{q_val}",
-                        style: "width: 100%; padding: 10px; font-size: 13px;",
+                        style: "width: 100%; padding: 9px 12px; font-size: 13px;",
                         oninput: move |evt| ChatPaneMessage::QuestionChanged(evt.value()).dispatch(),
                         onkeydown: move |evt| {
                             if evt.key() != Key::Escape {
@@ -178,9 +205,9 @@ impl PstRagApp {
                         }
                     }
                     div {
-                        style: "display: flex; flex-direction: row; align-items: center; gap: 6px;",
+                        style: "display: flex; flex-direction: row; align-items: center; gap: 8px;",
                         span {
-                            style: "flex: 1; font-size: 10px; color: {muted_color};",
+                            style: "flex: 1; font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                             "{helper}"
                         }
                         {search_only_btn}
@@ -222,15 +249,15 @@ impl PstRagApp {
                 style: "width: 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 4px;",
                 button {
                     class: "btn-secondary",
-                    style: "width: 100%; padding: 8px 10px; display: flex; flex-direction: row; align-items: center; gap: 8px;",
+                    style: "width: 100%; padding: 8px 12px; display: flex; flex-direction: row; align-items: center; gap: 8px; border-radius: var(--radius-md);",
                     onclick: move |_| ChatPaneMessage::ToggleSources.dispatch(),
-                    span { style: "font-size: 10px; color: {accent};", "{ev_heading}" }
+                    span { style: "font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: {accent};", "{ev_heading}" }
                     span {
-                        style: "padding: 2px 6px; font-size: 10px; {b_style}",
+                        style: "padding: 2px 7px; font-size: 10.5px; font-weight: 600; {b_style}",
                         "{hits_len}"
                     }
                     div { style: "flex: 1;" }
-                    span { style: "font-size: 10px; color: {muted_color};", "{label}" }
+                    span { style: "font-size: 11px; color: {muted_color};", "{label}" }
                 }
                 for he in hit_elements {
                     {he}
@@ -247,11 +274,11 @@ impl PstRagApp {
         } else {
             assistant_avatar_style()
         };
-        let av_letter = if is_user { "Y" } else { "D" };
+        let av_letter = if is_user { "Y" } else { "AI" };
         let avatar = rsx! {
             div {
-                style: "width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; {av_style}",
-                span { style: "font-size: 10px; font-weight: 600;", "{av_letter}" }
+                style: "width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; {av_style}",
+                span { style: "font-size: 10px; font-weight: 700;", "{av_letter}" }
             }
         };
 
@@ -277,16 +304,16 @@ impl PstRagApp {
 
         let bubble = rsx! {
             div {
-                style: "flex: 1; min-width: 0; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; {bub_style}",
+                style: "flex: 1; min-width: 0; padding: 11px 14px; display: flex; flex-direction: column; gap: 6px; {bub_style}",
                 span {
-                    style: "font-size: 9px; color: {badge_color}; font-weight: 600;",
+                    style: "font-size: 10px; color: {badge_color}; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;",
                     "{badge_text}"
                 }
                 {md_blocks}
                 if has_context {
                     hr {}
                     label {
-                        style: "display: flex; flex-direction: row; align-items: center; gap: 6px; font-size: 11px; cursor: pointer;",
+                        style: "display: flex; flex-direction: row; align-items: center; gap: 8px; font-size: 11px; cursor: pointer; padding-top: 2px;",
                         input {
                             r#type: "checkbox",
                             checked: show_ctx,
@@ -297,7 +324,7 @@ impl PstRagApp {
                     if show_ctx {
                         div {
                             class: "selectable-text",
-                            style: "width: 100%; padding: 6px 8px; font-size: 10px; color: {muted_color}; white-space: pre-wrap; word-break: break-word; {cb_style}",
+                            style: "width: 100%; padding: 8px 10px; font-size: 10.5px; font-family: var(--font-mono); color: {muted_color}; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; {cb_style}",
                             "{ctx_preview}"
                         }
                     }
@@ -340,7 +367,7 @@ impl PstRagApp {
             .unwrap_or(&hit.source_key);
         let idx_str = format!("{:02}", index + 1);
         let sender_date = format!(
-            "{} - {}",
+            "{} · {}",
             hit.sender,
             hit.sent_at
                 .as_deref()
@@ -363,11 +390,11 @@ impl PstRagApp {
 
         let expanded_details = if is_expanded {
             let mut meta_text = format!(
-                "PST: {} - Folder: {} - Score: {:.3} - ID: {}",
+                "PST: {} · Folder: {} · Score: {:.3} · ID: {}",
                 source_name, hit.folder, hit.score, hit.id
             );
             if !hit.conversation_id.trim().is_empty() {
-                meta_text.push_str(&format!(" - Thread: {}", hit.conversation_id.trim()));
+                meta_text.push_str(&format!(" · Thread: {}", hit.conversation_id.trim()));
             }
             let att_text = if !hit.attachment_names.trim().is_empty() {
                 Some(tr.attachments_prefix(hit.attachment_names.trim()))
@@ -393,17 +420,17 @@ impl PstRagApp {
             };
             let long_excerpt = hit.excerpt(900);
             Some(rsx! {
-                span { style: "font-size: 10px; color: {muted_color};", "{meta_text}" }
+                span { style: "font-size: 10.5px; color: {muted_color}; font-family: var(--font-mono);", "{meta_text}" }
                 if let Some(att) = att_text {
-                    span { style: "font-size: 10px; color: {accent};", "{att}" }
+                    span { style: "font-size: 11px; color: {accent};", "{att}" }
                 }
                 if let Some(lbl) = lbl_text {
-                    span { style: "font-size: 10px; color: {accent};", "{lbl}" }
+                    span { style: "font-size: 11px; color: {accent};", "{lbl}" }
                 }
                 hr {}
                 span {
                     class: "selectable-text",
-                    style: "font-size: 11px; white-space: pre-wrap; word-break: break-word;",
+                    style: "font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;",
                     "{long_excerpt}"
                 }
             })
@@ -415,18 +442,21 @@ impl PstRagApp {
 
         rsx! {
             div {
-                style: "width: 100%; padding: 10px; display: flex; flex-direction: column; gap: 6px; {src_style}",
+                style: "width: 100%; padding: 12px; display: flex; flex-direction: column; gap: 8px; {src_style}",
                 div {
                     style: "display: flex; flex-direction: row; align-items: center; gap: 8px;",
-                    span { style: "font-size: 11px; color: {accent};", "{idx_str}" }
+                    span {
+                        class: "pill-count",
+                        "{idx_str}"
+                    }
                     div {
                         style: "flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;",
                         span {
-                            style: "font-size: 13px; color: {bright}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                            style: "font-size: 12.5px; font-weight: 600; color: {bright}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                             "{subject}"
                         }
                         span {
-                            style: "font-size: 10px; color: {muted_color};",
+                            style: "font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                             "{sender_date}"
                         }
                     }
@@ -434,7 +464,7 @@ impl PstRagApp {
                 }
                 span {
                     class: "selectable-text",
-                    style: "font-size: 11px; white-space: pre-wrap; word-break: break-word;",
+                    style: "font-size: 11.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;",
                     "{short_excerpt}"
                 }
                 {details_btn}

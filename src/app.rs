@@ -1,5 +1,6 @@
 mod actions;
 mod chat;
+pub(crate) mod email_html;
 mod explorer;
 pub(crate) mod markdown;
 pub(crate) mod sidebar;
@@ -95,7 +96,7 @@ enum ResizeEvent {
 }
 
 const SIDEBAR_WIDTH: f32 = 285.0;
-const SIDEBAR_COLLAPSED_WIDTH: f32 = 36.0;
+const SIDEBAR_COLLAPSED_WIDTH: f32 = 42.0;
 const CHAT_MIN_WIDTH: f32 = 310.0;
 const EXPLORER_MIN_WIDTH: f32 = 420.0;
 const TABLE_MIN_HEIGHT: f32 = 100.0;
@@ -383,7 +384,7 @@ pub fn run() {
         .with_always_on_top(false);
     let config = Config::new()
         .with_window(window)
-        .with_background_color((22, 22, 22, 255));
+        .with_background_color((11, 15, 23, 255));
 
     LaunchBuilder::desktop().with_cfg(config).launch(app_root);
 }

@@ -117,8 +117,8 @@ fn read_message(
     let message_id =
         text_prop(props.get(0x1035)).unwrap_or_else(|| format!("pst-node-{}", u32::from(row.id())));
     let sent_at = time_prop(props.get(0x0039)).or_else(|| time_prop(props.get(0x0E06)));
-    let body = text_prop(props.get(0x1000))
-        .or_else(|| text_prop(props.get(0x1013)))
+    let body = text_prop(props.get(0x1013))
+        .or_else(|| text_prop(props.get(0x1000)))
         .unwrap_or_default();
     let recipients = message
         .recipient_table()
@@ -142,7 +142,7 @@ fn text_prop(value: Option<&PropertyValue>) -> Option<String> {
     match value? {
         PropertyValue::String8(v) => Some(v.to_string()),
         PropertyValue::Unicode(v) => Some(v.to_string()),
-        PropertyValue::Binary(v) => String::from_utf8(v.buffer().to_vec()).ok(),
+        PropertyValue::Binary(v) => Some(String::from_utf8_lossy(v.buffer()).into_owned()),
         _ => None,
     }
     .map(|s| s.trim_matches('\0').to_string())
