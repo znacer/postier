@@ -5,6 +5,26 @@ pub(crate) mod markdown;
 pub(crate) mod sidebar;
 mod theme;
 
+use std::{
+    cell::Cell,
+    collections::HashSet,
+    fs,
+    future::Future,
+    path::PathBuf,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+use dioxus::{
+    desktop::{
+        Config, LogicalSize, WindowBuilder, WindowEvent, tao, use_window, use_wry_event_handler,
+    },
+    prelude::*,
+};
+
 use crate::{
     db::Index,
     llm::LlmConfig,
@@ -16,25 +36,33 @@ use crate::{
 use actions::load_config;
 use chat::{ChatPaneMessage, chat_question_input_id};
 use explorer::{ExplorerMessage, explorer_filter_input_id, reader_header_id};
-use iced::{
-    Element, Fill, Point, Rectangle, Size, Subscription, Task, Theme, event,
-    keyboard::{self, Key, key::Named},
-    mouse,
-    widget::{container, row, text_input},
-    window,
-};
 use markdown::{MdBlock, parse_markdown};
 use sidebar::SidebarMessage;
-use std::{
-    collections::HashSet,
-    fs,
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
-use theme::{SplitAxis, build_app_theme, page_style, splitter};
+use theme::{APP_CSS, SplitAxis, page_style, splitter};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Point {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Point {
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Size {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Size {
+    pub const fn new(width: f32, height: f32) -> Self {
+        Self { width, height }
+    }
+}
 
 /// Draggable pane boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +88,7 @@ struct ActiveResize {
 #[derive(Debug, Clone)]
 enum ResizeEvent {
     Start(Splitter),
-    HeaderMeasured(Option<Rectangle>),
+    HeaderMeasured(Option<f32>),
     Moved(Point),
     Released,
     WindowResized(Size),
@@ -179,8 +207,36 @@ enum KeyShortcut {
     ClearFilterOrSelection,
 }
 
+type WorkerFn =
+    Box<dyn FnOnce(&tokio::sync::mpsc::UnboundedSender<WorkerEvent>) -> WorkerResult + Send>;
+
+enum AppTask {
+    None,
+    FocusInput(&'static str),
+    MeasureHeaderAndStartResize,
+    Async(Pin<Box<dyn Future<Output = Message> + 'static>>),
+    Worker(WorkerFn),
+}
+
+impl AppTask {
+    pub(super) fn none() -> Self {
+        Self::None
+    }
+
+    pub(super) fn perform<F, T>(fut: F, map: fn(T) -> Message) -> Self
+    where
+        F: Future<Output = T> + 'static,
+        T: 'static,
+    {
+        Self::Async(Box::pin(async move { map(fut.await) }))
+    }
+
+    pub(super) fn focus(id: &'static str) -> Self {
+        Self::FocusInput(id)
+    }
+}
+
 pub struct PstRagApp {
-    theme: Theme,
     storage_location_path: PathBuf,
     storage_dir: PathBuf,
     db_path: PathBuf,
@@ -235,16 +291,177 @@ enum Message {
     Resize(ResizeEvent),
 }
 
-pub fn run() -> iced::Result {
-    iced::application(
-        PstRagApp::title,
-        PstRagApp::update,
-        PstRagApp::view,
-    )
-    .subscription(PstRagApp::subscription)
-    .theme(PstRagApp::theme)
-    .window_size((1440.0, 860.0))
-    .run_with(|| (PstRagApp::new(), Task::none()))
+trait DispatchMessage: Clone + 'static {
+    fn dispatch(self);
+}
+
+impl DispatchMessage for () {
+    fn dispatch(self) {}
+}
+
+impl DispatchMessage for Message {
+    fn dispatch(self) {
+        dispatch_message(self);
+    }
+}
+
+impl DispatchMessage for SidebarMessage {
+    fn dispatch(self) {
+        dispatch_message(Message::Sidebar(self));
+    }
+}
+
+impl DispatchMessage for ExplorerMessage {
+    fn dispatch(self) {
+        dispatch_message(Message::Explorer(self));
+    }
+}
+
+impl DispatchMessage for ChatPaneMessage {
+    fn dispatch(self) {
+        dispatch_message(Message::Chat(self));
+    }
+}
+
+thread_local! {
+    static APP_SIGNAL: Cell<Option<Signal<PstRagApp>>> = const { Cell::new(None) };
+}
+
+fn dispatch_message(message: Message) {
+    let Some(mut signal) = APP_SIGNAL.with(Cell::get) else {
+        return;
+    };
+    let task = signal.write().update(message);
+    execute_task(task);
+}
+
+fn execute_task(task: AppTask) {
+    match task {
+        AppTask::None => {}
+        AppTask::FocusInput(id) => {
+            let _ = document::eval(&format!("document.getElementById('{id}')?.focus();"));
+        }
+        AppTask::MeasureHeaderAndStartResize => {
+            let header_id = reader_header_id();
+            spawn(async move {
+                let js = format!(
+                    "let el = document.getElementById('{header_id}'); return el ? el.getBoundingClientRect().height : null;"
+                );
+                let measured = match document::eval(&js).await {
+                    Ok(val) => val.as_f64().map(|v| v as f32),
+                    Err(_) => None,
+                };
+                dispatch_message(Message::Resize(ResizeEvent::HeaderMeasured(measured)));
+            });
+        }
+        AppTask::Async(fut) => {
+            spawn(async move {
+                let msg = fut.await;
+                dispatch_message(msg);
+            });
+        }
+        AppTask::Worker(work) => {
+            spawn(async move {
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WorkerEvent>();
+                std::thread::spawn(move || {
+                    let result = work(&tx);
+                    let _ = tx.send(WorkerEvent::Finished(result));
+                });
+                while let Some(event) = rx.recv().await {
+                    dispatch_message(Message::Worker(event));
+                }
+            });
+        }
+    }
+}
+
+pub fn run() {
+    let initial_title = crate::i18n::Language::default().app_title().to_owned();
+    let window = WindowBuilder::new()
+        .with_title(initial_title)
+        .with_inner_size(LogicalSize::new(1440.0, 860.0))
+        .with_always_on_top(false);
+    let config = Config::new()
+        .with_window(window)
+        .with_background_color((22, 22, 22, 255));
+
+    LaunchBuilder::desktop().with_cfg(config).launch(app_root);
+}
+
+fn app_root() -> Element {
+    let app_signal = use_signal(PstRagApp::new);
+    APP_SIGNAL.with(|cell| cell.set(Some(app_signal)));
+
+    let window_ctx = use_window();
+    let current_title = app_signal.read().title();
+    window_ctx.set_title(&current_title);
+
+    use_wry_event_handler(move |event, _| {
+        if let tao::event::Event::WindowEvent {
+            event: WindowEvent::Resized(physical_size),
+            ..
+        } = event
+        {
+            let scale = use_window().scale_factor();
+            let logical = physical_size.to_logical::<f64>(scale);
+            dispatch_message(Message::Resize(ResizeEvent::WindowResized(Size::new(
+                logical.width as f32,
+                logical.height as f32,
+            ))));
+        }
+    });
+
+    let is_dragging = app_signal.read().resizing.is_some();
+    let view = app_signal.read().view();
+    let bg_style = page_style();
+
+    rsx! {
+        style { "{APP_CSS}" }
+        div {
+            tabindex: "0",
+            style: "width: 100vw; height: 100vh; overflow: hidden; outline: none; {bg_style}",
+            onkeydown: move |evt| {
+                let mods = evt.modifiers();
+                if mods.meta() || mods.ctrl() || mods.alt() {
+                    return;
+                }
+                let shortcut = match evt.key() {
+                    Key::ArrowUp => Some(KeyShortcut::SelectPrevEmail),
+                    Key::ArrowDown => Some(KeyShortcut::SelectNextEmail),
+                    Key::Escape => Some(KeyShortcut::ClearFilterOrSelection),
+                    Key::Character(ref ch) => match ch.as_str() {
+                        "k" => Some(KeyShortcut::SelectPrevEmail),
+                        "j" => Some(KeyShortcut::SelectNextEmail),
+                        " " | "x" => Some(KeyShortcut::ToggleCheckSelected),
+                        "/" => {
+                            evt.prevent_default();
+                            Some(KeyShortcut::FocusQuickFilter)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(sc) = shortcut {
+                    dispatch_message(Message::KeyPressed(sc));
+                }
+            },
+            onmousemove: move |evt| {
+                if is_dragging {
+                    let coords = evt.client_coordinates();
+                    dispatch_message(Message::Resize(ResizeEvent::Moved(Point::new(
+                        coords.x as f32,
+                        coords.y as f32,
+                    ))));
+                }
+            },
+            onmouseup: move |_| {
+                if is_dragging {
+                    dispatch_message(Message::Resize(ResizeEvent::Released));
+                }
+            },
+            {view}
+        }
+    }
 }
 
 impl PstRagApp {
@@ -269,7 +486,6 @@ impl PstRagApp {
             .map(|db| (db.count().unwrap_or(0), db.sources().unwrap_or_default()))
             .unwrap_or_default();
         let mut app = Self {
-            theme: build_app_theme(),
             storage_location_path,
             storage_dir,
             db_path,
@@ -312,33 +528,29 @@ impl PstRagApp {
         app
     }
 
-    fn theme(&self) -> Theme {
-        self.theme.clone()
-    }
-
-    fn update(&mut self, message: Message) -> Task<Message> {
+    fn update(&mut self, message: Message) -> AppTask {
         match message {
             Message::Sidebar(msg) => self.update_sidebar(msg),
             Message::Explorer(msg) => self.update_explorer(msg),
             Message::Chat(msg) => self.update_chat(msg),
             Message::ArchiveChosen(Some(path)) => {
                 self.archive = Some(path);
-                Task::none()
+                AppTask::none()
             }
-            Message::ArchiveChosen(None) => Task::none(),
+            Message::ArchiveChosen(None) => AppTask::none(),
             Message::StorageDirChosen(Some(path)) => {
                 self.apply_storage_dir(path);
-                Task::none()
+                AppTask::none()
             }
-            Message::StorageDirChosen(None) => Task::none(),
+            Message::StorageDirChosen(None) => AppTask::none(),
             Message::LayaGgufChosen(Some(path)) => {
                 self.apply_laya_gguf(path);
-                Task::none()
+                AppTask::none()
             }
-            Message::LayaGgufChosen(None) => Task::none(),
+            Message::LayaGgufChosen(None) => AppTask::none(),
             Message::Worker(event) => {
                 self.handle_worker_event(event);
-                Task::none()
+                AppTask::none()
             }
             Message::KeyPressed(shortcut) => self.handle_key_shortcut(shortcut),
             Message::Resize(event) => self.handle_resize_event(event),
@@ -362,7 +574,7 @@ impl PstRagApp {
         (self.window_size.height - TABLE_RESERVED_HEIGHT).max(TABLE_MIN_HEIGHT)
     }
 
-    fn handle_resize_event(&mut self, event: ResizeEvent) -> Task<Message> {
+    fn handle_resize_event(&mut self, event: ResizeEvent) -> AppTask {
         match event {
             ResizeEvent::Start(splitter) => {
                 let start_value = match splitter {
@@ -377,18 +589,17 @@ impl PstRagApp {
                 });
                 // An auto-sized header has no known height yet: measure it.
                 if start_value.is_none() {
-                    return container::visible_bounds(reader_header_id())
-                        .map(|bounds| Message::Resize(ResizeEvent::HeaderMeasured(bounds)));
+                    return AppTask::MeasureHeaderAndStartResize;
                 }
             }
-            ResizeEvent::HeaderMeasured(bounds) => {
-                if let Some(bounds) = bounds {
-                    self.reader_header_natural = bounds.height;
+            ResizeEvent::HeaderMeasured(height) => {
+                if let Some(height) = height {
+                    self.reader_header_natural = height;
                     if let Some(active) = self.resizing.as_mut()
                         && active.splitter == Splitter::HeaderHeight
                         && active.start_value.is_none()
                     {
-                        active.start_value = Some(bounds.height);
+                        active.start_value = Some(height);
                     }
                 } else {
                     // Nothing to measure (no mail shown): abandon the drag.
@@ -397,11 +608,11 @@ impl PstRagApp {
             }
             ResizeEvent::Moved(position) => {
                 let Some(active) = self.resizing.as_mut() else {
-                    return Task::none();
+                    return AppTask::none();
                 };
                 let anchor = *active.anchor.get_or_insert(position);
                 let Some(start_value) = active.start_value else {
-                    return Task::none();
+                    return AppTask::none();
                 };
                 let dy = position.y - anchor.y;
                 match active.splitter {
@@ -433,109 +644,109 @@ impl PstRagApp {
                     .clamp(TABLE_MIN_HEIGHT, self.max_table_height());
             }
         }
-        Task::none()
+        AppTask::none()
     }
 
-    fn update_sidebar(&mut self, message: SidebarMessage) -> Task<Message> {
+    fn update_sidebar(&mut self, message: SidebarMessage) -> AppTask {
         match message {
             SidebarMessage::ToggleSidebar => {
                 self.sidebar_open = !self.sidebar_open;
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::ToggleSection(section) => {
                 let index = section.index();
                 self.collapsed_sections[index] = !self.collapsed_sections[index];
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::ChooseArchive => self.choose_archive(),
             SidebarMessage::Index => self.index(),
             SidebarMessage::ChooseStorage => self.choose_storage_dir(),
             SidebarMessage::SaveCredentials => {
                 self.save_credentials();
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::SelectMailScope(scope) => {
                 self.mail_scope = scope;
                 self.refresh_explorer_messages();
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::SourceEnabledChanged(source, enabled) => {
                 self.set_source_enabled(&source, enabled);
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::FolderTreeEnabledChanged(source, folders, enabled) => {
                 self.set_folders_enabled(&source, &folders, enabled);
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::ToggleFolderTreeNode(source, folder) => {
                 let key = (source, folder);
                 if !self.collapsed_source_folders.remove(&key) {
                     self.collapsed_source_folders.insert(key);
                 }
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::RemoveSourceRequested(source) => {
                 self.pending_remove_source = Some(source);
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::ConfirmRemoveSource => {
                 self.remove_pending_source();
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::CancelRemoveSource => {
                 self.pending_remove_source = None;
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::SelectLabelFilter(filter) => {
                 self.label_filter = filter;
                 self.refresh_explorer_messages();
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::NewLabelNameChanged(value) => {
                 self.new_label_name = value;
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::NewLabelDescriptionChanged(value) => {
                 self.new_label_description = value;
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::SaveLabelDefinition => {
                 self.save_label_definition();
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::RemoveLabelDefinition(name) => {
                 self.remove_label_definition(&name);
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::LayaGgufPathChanged(path) => {
                 self.config.laya_gguf_path = path;
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::ChooseLayaGguf => self.choose_laya_gguf(),
             SidebarMessage::DownloadLayaGguf => self.download_laya_gguf(),
             SidebarMessage::EndpointChanged(value) => {
                 self.config.endpoint = value;
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::ModelChanged(value) => {
                 self.config.model = value;
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::TokenChanged(value) => {
                 self.config.bearer_token = value;
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::RemoteEmbeddingsChanged(value) => {
                 self.config.use_remote_embeddings = value;
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::EmbeddingModelChanged(value) => {
                 self.config.embedding_model = value;
-                Task::none()
+                AppTask::none()
             }
             SidebarMessage::LanguageChanged(language) => {
                 self.set_language(language);
-                Task::none()
+                AppTask::none()
             }
         }
     }
@@ -548,63 +759,69 @@ impl PstRagApp {
         }
     }
 
-    fn update_explorer(&mut self, message: ExplorerMessage) -> Task<Message> {
+    fn update_explorer(&mut self, message: ExplorerMessage) -> AppTask {
         match message {
             ExplorerMessage::ToggleSidebar => {
                 self.sidebar_open = !self.sidebar_open;
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::ToggleChatPane => {
                 self.chat_open = !self.chat_open;
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::SelectEmail(id) => {
                 self.select_email(id);
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::ToggleCheckEmail(id, checked) => {
                 self.toggle_check_email(id, checked);
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::ToggleCheckAllVisible(checked) => {
                 self.toggle_check_all_visible(checked);
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::SelectUnlabeledVisible => {
                 self.select_unlabeled_visible();
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::SelectRangeTo(id) => {
                 self.select_range_to(id);
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::ClearCheckedEmails => {
                 self.checked_message_ids.clear();
                 self.status = self.config.language.status_cleared_selection().into();
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::SelectLabelFilter(filter) => {
                 self.label_filter = filter;
                 self.refresh_explorer_messages();
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::FilterChanged(query) => {
                 self.filter_query = query;
                 self.refresh_explorer_messages();
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::SetMailSort(sort) => {
                 self.mail_sort = sort;
                 self.refresh_explorer_messages();
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::SetLabelerBackend(backend) => {
                 self.config.labeler_backend = backend;
                 self.status = match self.config.language {
-                    crate::i18n::Language::English => format!("Active mail labeler switched to {}", self.config.language.backend_name(backend)),
-                    crate::i18n::Language::French => format!("Moteur d'étiquetage actif basculé sur {}", self.config.language.backend_name(backend)),
+                    crate::i18n::Language::English => format!(
+                        "Active mail labeler switched to {}",
+                        self.config.language.backend_name(backend)
+                    ),
+                    crate::i18n::Language::French => format!(
+                        "Moteur d'étiquetage actif basculé sur {}",
+                        self.config.language.backend_name(backend)
+                    ),
                 };
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::LabelFocusedEmail => {
                 self.label_selected_message(self.config.labeler_backend)
@@ -614,11 +831,11 @@ impl PstRagApp {
             ExplorerMessage::LabelVisibleMessages => self.label_visible_messages(),
             ExplorerMessage::ToggleManualLabel(message_id, label) => {
                 self.toggle_manual_label(message_id, &label);
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::ToggleManualLabelOnChecked(label) => {
                 self.toggle_manual_label_on_checked(&label);
-                Task::none()
+                AppTask::none()
             }
             ExplorerMessage::AskAboutEmail(message_id) => self.ask_about_email(message_id),
             ExplorerMessage::ReaderResizeStart => {
@@ -633,74 +850,76 @@ impl PstRagApp {
                 }
                 self.status = match self.config.language {
                     crate::i18n::Language::English => "Cancelling background task...".into(),
-                    crate::i18n::Language::French => "Annulation de la tâche en arrière-plan...".into(),
+                    crate::i18n::Language::French => {
+                        "Annulation de la tâche en arrière-plan...".into()
+                    }
                 };
-                Task::none()
+                AppTask::none()
             }
         }
     }
 
-    fn update_chat(&mut self, message: ChatPaneMessage) -> Task<Message> {
+    fn update_chat(&mut self, message: ChatPaneMessage) -> AppTask {
         match message {
             ChatPaneMessage::ToggleChatPane => {
                 self.chat_open = !self.chat_open;
-                Task::none()
+                AppTask::none()
             }
             ChatPaneMessage::NewChat => {
                 self.new_chat();
-                Task::none()
+                AppTask::none()
             }
             ChatPaneMessage::QuestionChanged(value) => {
                 self.question = value;
-                Task::none()
+                AppTask::none()
             }
             ChatPaneMessage::Ask => self.ask(),
             ChatPaneMessage::SearchLocally => self.search_locally(),
             ChatPaneMessage::UsePrompt(prompt) => {
                 self.question = prompt.into();
                 self.chat_open = true;
-                text_input::focus(chat_question_input_id())
+                AppTask::focus(chat_question_input_id())
             }
             ChatPaneMessage::ToggleContext(index, value) => {
                 if let Some(message) = self.messages.get_mut(index) {
                     message.show_context = value;
                 }
-                Task::none()
+                AppTask::none()
             }
             ChatPaneMessage::ToggleSources => {
                 self.show_sources = !self.show_sources;
-                Task::none()
+                AppTask::none()
             }
             ChatPaneMessage::ToggleHit(index) => {
                 self.expanded_hit = (self.expanded_hit != Some(index)).then_some(index);
-                Task::none()
+                AppTask::none()
             }
             ChatPaneMessage::SelectEmail(id) => {
                 self.select_email(id);
-                Task::none()
+                AppTask::none()
             }
             ChatPaneMessage::MarkdownLinkClicked(url) => {
                 self.status = format!("Link: {url}");
-                Task::none()
+                AppTask::none()
             }
         }
     }
 
-    fn handle_key_shortcut(&mut self, shortcut: KeyShortcut) -> Task<Message> {
+    fn handle_key_shortcut(&mut self, shortcut: KeyShortcut) -> AppTask {
         match shortcut {
             KeyShortcut::SelectPrevEmail => {
                 self.select_adjacent_email(-1);
-                Task::none()
+                AppTask::none()
             }
             KeyShortcut::SelectNextEmail => {
                 self.select_adjacent_email(1);
-                Task::none()
+                AppTask::none()
             }
             KeyShortcut::ToggleCheckSelected => {
                 self.toggle_check_selected_email();
-                Task::none()
+                AppTask::none()
             }
-            KeyShortcut::FocusQuickFilter => text_input::focus(explorer_filter_input_id()),
+            KeyShortcut::FocusQuickFilter => AppTask::focus(explorer_filter_input_id()),
             KeyShortcut::ClearFilterOrSelection => {
                 if !self.filter_query.is_empty() {
                     self.filter_query.clear();
@@ -709,41 +928,9 @@ impl PstRagApp {
                     self.checked_message_ids.clear();
                     self.status = self.config.language.status_cleared_selection().into();
                 }
-                Task::none()
+                AppTask::none()
             }
         }
-    }
-
-    fn subscription(&self) -> Subscription<Message> {
-        let keys = keyboard::on_key_press(|key, modifiers| {
-            if modifiers.command() || modifiers.control() || modifiers.alt() {
-                return None;
-            }
-            match key.as_ref() {
-                Key::Named(Named::ArrowUp) | Key::Character("k") => {
-                    Some(Message::KeyPressed(KeyShortcut::SelectPrevEmail))
-                }
-                Key::Named(Named::ArrowDown) | Key::Character("j") => {
-                    Some(Message::KeyPressed(KeyShortcut::SelectNextEmail))
-                }
-                Key::Named(Named::Space) | Key::Character("x") => {
-                    Some(Message::KeyPressed(KeyShortcut::ToggleCheckSelected))
-                }
-                Key::Character("/") => Some(Message::KeyPressed(KeyShortcut::FocusQuickFilter)),
-                Key::Named(Named::Escape) => {
-                    Some(Message::KeyPressed(KeyShortcut::ClearFilterOrSelection))
-                }
-                _ => None,
-            }
-        });
-        // Cursor movement is only listened to while a boundary is being dragged,
-        // so ordinary mouse motion doesn't trigger updates.
-        let window_events = if self.resizing.is_some() {
-            event::listen_with(drag_event)
-        } else {
-            event::listen_with(window_size_event)
-        };
-        Subscription::batch([keys, window_events])
     }
 
     fn handle_worker_event(&mut self, event: WorkerEvent) {
@@ -853,47 +1040,31 @@ impl PstRagApp {
         }
     }
 
-    fn view(&self) -> Element<'_, Message> {
-        let mut panes = row![
-            self.sidebar().map(Message::Sidebar),
-            self.explorer().map(Message::Explorer),
-        ]
-        .height(Fill);
-        if self.chat_open {
-            panes = panes.push(splitter(
+    fn view(&self) -> Element {
+        let sb = self.sidebar();
+        let exp = self.explorer();
+        let chat_open = self.chat_open;
+        let chat_splitter = if chat_open {
+            Some(splitter(
                 SplitAxis::Vertical,
                 self.is_resizing(Splitter::ChatWidth),
                 Message::Resize(ResizeEvent::Start(Splitter::ChatWidth)),
-            ));
-        }
-        panes = panes.push(self.chat_pane().map(Message::Chat));
+            ))
+        } else {
+            None
+        };
+        let cp = self.chat_pane();
 
-        container(panes)
-            .width(Fill)
-            .height(Fill)
-            .style(page_style)
-            .into()
-    }
-}
-
-fn window_size_event(event: iced::Event, _: event::Status, _: window::Id) -> Option<Message> {
-    match event {
-        iced::Event::Window(window::Event::Resized(size))
-        | iced::Event::Window(window::Event::Opened { size, .. }) => {
-            Some(Message::Resize(ResizeEvent::WindowResized(size)))
+        rsx! {
+            div {
+                style: "width: 100%; height: 100%; display: flex; flex-direction: row; overflow: hidden;",
+                {sb}
+                {exp}
+                if let Some(sp) = chat_splitter {
+                    {sp}
+                }
+                {cp}
+            }
         }
-        _ => None,
-    }
-}
-
-fn drag_event(event: iced::Event, status: event::Status, id: window::Id) -> Option<Message> {
-    match event {
-        iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
-            Some(Message::Resize(ResizeEvent::Moved(position)))
-        }
-        iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-            Some(Message::Resize(ResizeEvent::Released))
-        }
-        other => window_size_event(other, status, id),
     }
 }

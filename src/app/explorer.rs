@@ -1,14 +1,8 @@
-use iced::{
-    Alignment, Element, Fill, FillPortion, Length,
-    widget::{
-        Space, button, checkbox, column, container, horizontal_rule, row, scrollable, text,
-        text_input,
-    },
-};
+use dioxus::prelude::*;
 
 use crate::model::{EmailRecord, LabelFilter, LabelerBackend, MailScope, MailSort};
 
-use super::{PstRagApp, theme::*};
+use super::{DispatchMessage, PstRagApp, theme::*};
 
 #[derive(Debug, Clone)]
 pub(super) enum ExplorerMessage {
@@ -36,67 +30,85 @@ pub(super) enum ExplorerMessage {
     CancelWorker,
 }
 
-pub(super) fn explorer_filter_input_id() -> text_input::Id {
-    text_input::Id::new("explorer-quick-filter")
+pub(super) const fn explorer_filter_input_id() -> &'static str {
+    "explorer-quick-filter"
 }
 
-pub(super) fn reader_header_id() -> container::Id {
-    container::Id::new("reader-mail-header")
+pub(super) const fn reader_header_id() -> &'static str {
+    "reader-mail-header"
 }
 
 impl PstRagApp {
-    pub(super) fn explorer(&self) -> Element<'_, ExplorerMessage> {
+    pub(super) fn explorer(&self) -> Element {
         let tr = self.config.language;
+        let muted_color = muted();
         let toolbar = self.explorer_toolbar();
-        let cancel_btn: Element<'_, ExplorerMessage> = if self.busy {
-            small_button(tr.btn_stop_task(), Some(ExplorerMessage::CancelWorker)).into()
-        } else {
-            Space::new(0, 0).into()
+        let has_cancel = self.busy;
+        let cancel_btn = small_button(tr.btn_stop_task(), Some(ExplorerMessage::CancelWorker));
+        let status_text = self.status.clone();
+        let showing_text = tr.status_showing(
+            self.explorer_messages.len(),
+            self.count,
+            self.checked_message_ids.len(),
+            tr.backend_name(self.config.labeler_backend),
+        );
+        let st_style = status_style();
+
+        let status_bar = rsx! {
+            div {
+                style: "width: 100%; padding: 5px 12px; display: flex; flex-direction: row; align-items: center; gap: 12px; flex-shrink: 0; {st_style}",
+                span {
+                    style: "font-size: 11px; color: {muted_color}; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                    "{status_text}"
+                }
+                if has_cancel {
+                    {cancel_btn}
+                }
+                span {
+                    style: "font-size: 11px; color: {muted_color}; white-space: nowrap;",
+                    "{showing_text}"
+                }
+            }
         };
-        let status_bar = container(
-            row![
-                text(&self.status).size(11).color(muted()).width(Fill),
-                cancel_btn,
-                text(tr.status_showing(
-                    self.explorer_messages.len(),
-                    self.count,
-                    self.checked_message_ids.len(),
-                    tr.backend_name(self.config.labeler_backend)
-                ))
-                .size(11)
-                .color(muted())
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center),
-        )
-        .padding([5, 12])
-        .width(Fill)
-        .style(status_style);
+
+        let has_checked = !self.checked_message_ids.is_empty();
+        let selection_bar = if has_checked {
+            Some(self.selection_action_bar())
+        } else {
+            None
+        };
 
         let message_table = self.message_table();
+        let table_splitter = splitter(
+            SplitAxis::Horizontal,
+            self.is_resizing(super::Splitter::TableHeight),
+            ExplorerMessage::ReaderResizeStart,
+        );
         let reading_pane = self.reading_pane();
 
-        let mut col = column![toolbar].spacing(8).padding(10).height(Fill);
-        if !self.checked_message_ids.is_empty() {
-            col = col.push(self.selection_action_bar());
+        rsx! {
+            div {
+                style: "flex: 1; min-width: 0; height: 100%; padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow: hidden;",
+                {toolbar}
+                if let Some(bar) = selection_bar {
+                    {bar}
+                }
+                {status_bar}
+                div {
+                    style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; overflow: hidden;",
+                    {message_table}
+                    {table_splitter}
+                    {reading_pane}
+                }
+            }
         }
-        let split_area = column![
-            message_table,
-            splitter(
-                SplitAxis::Horizontal,
-                self.is_resizing(super::Splitter::TableHeight),
-                ExplorerMessage::ReaderResizeStart,
-            ),
-            reading_pane
-        ]
-        .height(Fill);
-        col = col.push(status_bar).push(split_area);
-
-        container(col).width(Fill).height(Fill).into()
     }
 
-    fn explorer_toolbar(&self) -> Element<'_, ExplorerMessage> {
+    fn explorer_toolbar(&self) -> Element {
         let tr = self.config.language;
+        let bright = bright_text();
+        let muted_color = muted();
+
         let scope_title = match &self.mail_scope {
             MailScope::AllMessages => tr.all_mailboxes().to_owned(),
             MailScope::Source(source) => std::path::Path::new(source)
@@ -116,69 +128,76 @@ impl PstRagApp {
             }
         };
 
-        let label_filter_badge: Element<'_, ExplorerMessage> = match &self.label_filter {
-            LabelFilter::Any => Space::new(0, 0).into(),
-            LabelFilter::Labeled(label) => row![
-                label_badge(label, self.label_color(label), None),
-                small_button(
+        let label_filter_badge = match &self.label_filter {
+            LabelFilter::Any => None,
+            LabelFilter::Labeled(label) => {
+                let badge = label_badge(label, self.label_color(label), None);
+                let all_btn = small_button(
                     tr.all_labels(),
-                    Some(ExplorerMessage::SelectLabelFilter(LabelFilter::Any))
-                )
-            ]
-            .spacing(4)
-            .align_y(Alignment::Center)
-            .into(),
-            LabelFilter::Unlabeled => row![
-                label_badge(tr.unlabeled(), "#7F8C8D", None),
-                small_button(
+                    Some(ExplorerMessage::SelectLabelFilter(LabelFilter::Any)),
+                );
+                Some(rsx! {
+                    div {
+                        style: "display: flex; flex-direction: row; align-items: center; gap: 4px;",
+                        {badge}
+                        {all_btn}
+                    }
+                })
+            }
+            LabelFilter::Unlabeled => {
+                let badge = label_badge(tr.unlabeled(), "#7F8C8D", None);
+                let all_btn = small_button(
                     tr.all_labels(),
-                    Some(ExplorerMessage::SelectLabelFilter(LabelFilter::Any))
-                )
-            ]
-            .spacing(4)
-            .align_y(Alignment::Center)
-            .into(),
+                    Some(ExplorerMessage::SelectLabelFilter(LabelFilter::Any)),
+                );
+                Some(rsx! {
+                    div {
+                        style: "display: flex; flex-direction: row; align-items: center; gap: 4px;",
+                        {badge}
+                        {all_btn}
+                    }
+                })
+            }
         };
 
-        let filter_input = text_input(
-            tr.filter_placeholder(),
-            &self.filter_query,
-        )
-        .id(explorer_filter_input_id())
-        .on_input(ExplorerMessage::FilterChanged)
-        .padding([6, 10])
-        .size(12)
-        .width(250);
+        let filter_id = explorer_filter_input_id();
+        let filter_ph = tr.filter_placeholder();
+        let filter_val = self.filter_query.clone();
+        let has_filter = !self.filter_query.is_empty();
+        let clear_filter_btn = small_button(
+            tr.btn_clear(),
+            Some(ExplorerMessage::FilterChanged(String::new())),
+        );
 
-        let clear_filter: Element<'_, ExplorerMessage> = if self.filter_query.is_empty() {
-            Space::new(0, 0).into()
+        let laya_class = if self.config.labeler_backend == LabelerBackend::Laya {
+            "btn-primary"
         } else {
-            small_button(tr.btn_clear(), Some(ExplorerMessage::FilterChanged(String::new()))).into()
+            "btn-secondary"
         };
+        let laya_name = tr.backend_name(LabelerBackend::Laya);
+        let laya_btn = constrain_button(rsx! {
+            button {
+                class: "{laya_class}",
+                style: "font-size: 11px; padding: 5px 10px;",
+                onclick: move |_| ExplorerMessage::SetLabelerBackend(LabelerBackend::Laya).dispatch(),
+                "{laya_name}"
+            }
+        });
 
-        let laya_btn = constrain_button(
-            button(text(tr.backend_name(LabelerBackend::Laya)).size(11))
-                .padding([5, 10])
-                .clip(true)
-                .style(if self.config.labeler_backend == LabelerBackend::Laya {
-                    button::primary
-                } else {
-                    button::secondary
-                })
-                .on_press(ExplorerMessage::SetLabelerBackend(LabelerBackend::Laya)),
-        );
-
-        let llm_btn = constrain_button(
-            button(text(tr.backend_name(LabelerBackend::LlmJudge)).size(11))
-                .padding([5, 10])
-                .clip(true)
-                .style(if self.config.labeler_backend == LabelerBackend::LlmJudge {
-                    button::primary
-                } else {
-                    button::secondary
-                })
-                .on_press(ExplorerMessage::SetLabelerBackend(LabelerBackend::LlmJudge)),
-        );
+        let llm_class = if self.config.labeler_backend == LabelerBackend::LlmJudge {
+            "btn-primary"
+        } else {
+            "btn-secondary"
+        };
+        let llm_name = tr.backend_name(LabelerBackend::LlmJudge);
+        let llm_btn = constrain_button(rsx! {
+            button {
+                class: "{llm_class}",
+                style: "font-size: 11px; padding: 5px 10px;",
+                onclick: move |_| ExplorerMessage::SetLabelerBackend(LabelerBackend::LlmJudge).dispatch(),
+                "{llm_name}"
+            }
+        });
 
         let checked_count = self.checked_message_ids.len();
         let (label_action_title, label_action_msg) = if checked_count > 0 {
@@ -197,10 +216,13 @@ impl PstRagApp {
         };
         let can_label_view = !self.busy && !self.explorer_messages.is_empty();
 
-        let sidebar_toggle_btn: Element<'_, ExplorerMessage> = if !self.sidebar_open {
-            small_button(tr.btn_show_sidebar(), Some(ExplorerMessage::ToggleSidebar)).into()
+        let show_sb_btn = if !self.sidebar_open {
+            Some(small_button(
+                tr.btn_show_sidebar(),
+                Some(ExplorerMessage::ToggleSidebar),
+            ))
         } else {
-            Space::new(0, 0).into()
+            None
         };
 
         let chat_toggle_label = if self.chat_open {
@@ -208,57 +230,82 @@ impl PstRagApp {
         } else {
             tr.btn_open_chat()
         };
+        let chat_toggle_btn =
+            primary_button(chat_toggle_label, Some(ExplorerMessage::ToggleChatPane));
 
-        let top_row = row![
-            sidebar_toggle_btn,
-            column![
-                text(scope_title).size(15).color(bright_text()),
-                text(tr.in_view_checked(self.explorer_messages.len(), checked_count))
-                    .size(10)
-                    .color(muted())
-            ]
-            .spacing(1),
-            label_filter_badge,
-            Space::new(Fill, 0),
-            filter_input,
-            clear_filter,
-            primary_button(chat_toggle_label, Some(ExplorerMessage::ToggleChatPane)),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center);
+        let in_view_text = tr.in_view_checked(self.explorer_messages.len(), checked_count);
+        let engine_lbl = tr.decision_engine_label();
+        let label_action_btn = enabled_button(label_action_title, label_action_msg);
+        let label_view_btn = enabled_button(
+            tr.btn_label_view(),
+            can_label_view.then_some(ExplorerMessage::LabelVisibleMessages),
+        );
+        let select_unlabeled_btn = small_button(
+            tr.btn_select_unlabeled(),
+            Some(ExplorerMessage::SelectUnlabeledVisible),
+        );
+        let tb_style = toolbar_style();
 
-        let bottom_row = row![
-            text(tr.decision_engine_label()).size(11).color(muted()),
-            row![laya_btn, llm_btn].spacing(4),
-            Space::new(8, 0),
-            enabled_button(label_action_title, label_action_msg),
-            enabled_button(
-                tr.btn_label_view(),
-                can_label_view.then_some(ExplorerMessage::LabelVisibleMessages)
-            ),
-            small_button(
-                tr.btn_select_unlabeled(),
-                Some(ExplorerMessage::SelectUnlabeledVisible)
-            ),
-            Space::new(Fill, 0),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center);
-
-        container(column![top_row, bottom_row].spacing(6))
-            .padding([8, 12])
-            .width(Fill)
-            .style(toolbar_style)
-            .into()
+        rsx! {
+            div {
+                style: "width: 100%; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; {tb_style}",
+                div {
+                    style: "display: flex; flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap;",
+                    if let Some(sb_btn) = show_sb_btn {
+                        {sb_btn}
+                    }
+                    div {
+                        style: "display: flex; flex-direction: column; gap: 1px;",
+                        span { style: "font-size: 15px; color: {bright}; font-weight: 600;", "{scope_title}" }
+                        span { style: "font-size: 10px; color: {muted_color};", "{in_view_text}" }
+                    }
+                    if let Some(badge) = label_filter_badge {
+                        {badge}
+                    }
+                    div { style: "flex: 1;" }
+                    input {
+                        id: "{filter_id}",
+                        r#type: "text",
+                        placeholder: "{filter_ph}",
+                        value: "{filter_val}",
+                        style: "width: 250px; padding: 6px 10px; font-size: 12px;",
+                        oninput: move |evt| ExplorerMessage::FilterChanged(evt.value()).dispatch(),
+                        onkeydown: move |evt| {
+                            if evt.key() != Key::Escape {
+                                evt.stop_propagation();
+                            }
+                        }
+                    }
+                    if has_filter {
+                        {clear_filter_btn}
+                    }
+                    {chat_toggle_btn}
+                }
+                div {
+                    style: "display: flex; flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap;",
+                    span { style: "font-size: 11px; color: {muted_color};", "{engine_lbl}" }
+                    div {
+                        style: "display: flex; flex-direction: row; gap: 4px;",
+                        {laya_btn}
+                        {llm_btn}
+                    }
+                    div { style: "width: 8px;" }
+                    {label_action_btn}
+                    {label_view_btn}
+                    {select_unlabeled_btn}
+                    div { style: "flex: 1;" }
+                }
+            }
+        }
     }
 
-    fn selection_action_bar(&self) -> Element<'_, ExplorerMessage> {
+    fn selection_action_bar(&self) -> Element {
         let tr = self.config.language;
+        let muted_color = muted();
+        let on_prim = on_primary();
         let count = self.checked_message_ids.len();
-        let mut manual_chips = row![text(tr.batch_label_label()).size(10).color(muted())]
-            .spacing(5)
-            .align_y(Alignment::Center);
 
+        let mut manual_chips = Vec::new();
         for (def, _) in &self.labels_with_counts {
             let all_have_label = self
                 .explorer_messages
@@ -274,49 +321,60 @@ impl PstRagApp {
             } else {
                 tr.add_label_chip(&def.name)
             };
+            let chip_class = if all_have_label {
+                "btn-primary"
+            } else {
+                "btn-secondary"
+            };
             let label_name = def.name.clone();
-            manual_chips = manual_chips.push(constrain_button(
-                button(text(chip_label).size(10))
-                    .padding([3, 8])
-                    .clip(true)
-                    .style(if all_have_label {
-                        button::primary
-                    } else {
-                        button::secondary
-                    })
-                    .on_press(ExplorerMessage::ToggleManualLabelOnChecked(label_name)),
-            ));
+            manual_chips.push(constrain_button(rsx! {
+                button {
+                    class: "{chip_class}",
+                    style: "font-size: 10px; padding: 3px 8px;",
+                    onclick: move |_| ExplorerMessage::ToggleManualLabelOnChecked(label_name.clone()).dispatch(),
+                    "{chip_label}"
+                }
+            }));
         }
 
-        container(
-            row![
-                text(tr.mails_selected_count(count))
-                    .size(12)
-                    .color(on_primary()),
-                primary_button(
-                    tr.label_count_with_laya(count),
-                    (!self.busy).then_some(ExplorerMessage::LabelCheckedWith(LabelerBackend::Laya))
-                ),
-                small_button(
-                    tr.label_count_with_llm(count),
-                    (!self.busy)
-                        .then_some(ExplorerMessage::LabelCheckedWith(LabelerBackend::LlmJudge))
-                ),
-                Space::new(8, 0),
-                container(manual_chips.wrap()).width(Fill),
-                small_button(tr.btn_clear_selection(), Some(ExplorerMessage::ClearCheckedEmails)),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        )
-        .padding([7, 12])
-        .width(Fill)
-        .style(selection_bar_style)
-        .into()
+        let batch_lbl = tr.batch_label_label();
+        let selected_count_lbl = tr.mails_selected_count(count);
+        let laya_batch_btn = primary_button(
+            tr.label_count_with_laya(count),
+            (!self.busy).then_some(ExplorerMessage::LabelCheckedWith(LabelerBackend::Laya)),
+        );
+        let llm_batch_btn = small_button(
+            tr.label_count_with_llm(count),
+            (!self.busy).then_some(ExplorerMessage::LabelCheckedWith(LabelerBackend::LlmJudge)),
+        );
+        let clear_sel_btn = small_button(
+            tr.btn_clear_selection(),
+            Some(ExplorerMessage::ClearCheckedEmails),
+        );
+        let sb_style = selection_bar_style();
+
+        rsx! {
+            div {
+                style: "width: 100%; padding: 7px 12px; display: flex; flex-direction: row; align-items: center; gap: 8px; flex-shrink: 0; {sb_style}",
+                span { style: "font-size: 12px; color: {on_prim}; white-space: nowrap;", "{selected_count_lbl}" }
+                {laya_batch_btn}
+                {llm_batch_btn}
+                div { style: "width: 8px;" }
+                div {
+                    style: "flex: 1; display: flex; flex-direction: row; align-items: center; gap: 5px; flex-wrap: wrap;",
+                    span { style: "font-size: 10px; color: {muted_color};", "{batch_lbl}" }
+                    for chip in manual_chips {
+                        {chip}
+                    }
+                }
+                {clear_sel_btn}
+            }
+        }
     }
 
-    fn message_table(&self) -> Element<'_, ExplorerMessage> {
+    fn message_table(&self) -> Element {
         let tr = self.config.language;
+        let muted_color = muted();
         let sort_date_label = match self.mail_sort {
             MailSort::DateDesc => tr.table_header_date_newest(),
             MailSort::DateAsc => tr.table_header_date_oldest(),
@@ -338,75 +396,98 @@ impl PstRagApp {
                 .explorer_messages
                 .iter()
                 .all(|m| self.checked_message_ids.contains(&m.id));
-
-        let header = container(
-            row![
-                checkbox("", all_visible_checked)
-                    .on_toggle(ExplorerMessage::ToggleCheckAllVisible)
-                    .size(14),
-                small_button(tr.unlabeled(), Some(ExplorerMessage::SelectUnlabeledVisible)),
-                button(text(sort_subj_label).size(10).color(muted()))
-                    .padding(0)
-                    .style(button::text)
-                    .width(FillPortion(4))
-                    .on_press(ExplorerMessage::SetMailSort(MailSort::SubjectAsc)),
-                text(tr.table_header_labels()).size(10).color(muted()).width(FillPortion(3)),
-                button(text(sort_from_label).size(10).color(muted()))
-                    .padding(0)
-                    .style(button::text)
-                    .width(FillPortion(3))
-                    .on_press(ExplorerMessage::SetMailSort(MailSort::SenderAsc)),
-                text(tr.table_header_folder()).size(10).color(muted()).width(FillPortion(2)),
-                button(text(sort_date_label).size(10).color(muted()))
-                    .padding(0)
-                    .style(button::text)
-                    .width(FillPortion(2))
-                    .on_press(ExplorerMessage::SetMailSort(
-                        if self.mail_sort == MailSort::DateDesc {
-                            MailSort::DateAsc
-                        } else {
-                            MailSort::DateDesc
-                        }
-                    )),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        )
-        .padding([6, 12])
-        .width(Fill)
-        .style(table_header_style);
-
-        let mut list = column![].spacing(1).width(Fill);
-        if self.explorer_messages.is_empty() {
-            let empty_msg = if self.count == 0 {
-                tr.empty_table_no_indexed()
-            } else {
-                tr.empty_table_no_match()
-            };
-            list = list.push(
-                container(text(empty_msg).size(12).color(muted()))
-                    .padding(24)
-                    .center_x(Fill),
-            );
+        let next_date_sort = if self.mail_sort == MailSort::DateDesc {
+            MailSort::DateAsc
         } else {
-            for email in &self.explorer_messages {
-                list = list.push(self.message_row(email));
+            MailSort::DateDesc
+        };
+
+        let unlabeled_btn = small_button(
+            tr.unlabeled(),
+            Some(ExplorerMessage::SelectUnlabeledVisible),
+        );
+        let labels_hdr = tr.table_header_labels();
+        let folder_hdr = tr.table_header_folder();
+        let th_style = table_header_style();
+
+        let header = rsx! {
+            div {
+                style: "width: 100%; padding: 6px 12px; display: flex; flex-direction: row; align-items: center; gap: 8px; flex-shrink: 0; {th_style}",
+                input {
+                    r#type: "checkbox",
+                    checked: all_visible_checked,
+                    onchange: move |evt| ExplorerMessage::ToggleCheckAllVisible(evt.checked()).dispatch()
+                }
+                {unlabeled_btn}
+                button {
+                    class: "btn-text",
+                    style: "flex: 4; padding: 0; font-size: 10px; color: {muted_color}; justify-content: flex-start;",
+                    onclick: move |_| ExplorerMessage::SetMailSort(MailSort::SubjectAsc).dispatch(),
+                    "{sort_subj_label}"
+                }
+                span {
+                    style: "flex: 3; font-size: 10px; color: {muted_color};",
+                    "{labels_hdr}"
+                }
+                button {
+                    class: "btn-text",
+                    style: "flex: 3; padding: 0; font-size: 10px; color: {muted_color}; justify-content: flex-start;",
+                    onclick: move |_| ExplorerMessage::SetMailSort(MailSort::SenderAsc).dispatch(),
+                    "{sort_from_label}"
+                }
+                span {
+                    style: "flex: 2; font-size: 10px; color: {muted_color};",
+                    "{folder_hdr}"
+                }
+                button {
+                    class: "btn-text",
+                    style: "flex: 2; padding: 0; font-size: 10px; color: {muted_color}; justify-content: flex-start;",
+                    onclick: move |_| ExplorerMessage::SetMailSort(next_date_sort).dispatch(),
+                    "{sort_date_label}"
+                }
+            }
+        };
+
+        let is_empty = self.explorer_messages.is_empty();
+        let empty_msg = if self.count == 0 {
+            tr.empty_table_no_indexed()
+        } else {
+            tr.empty_table_no_match()
+        };
+
+        let rows: Vec<Element> = self
+            .explorer_messages
+            .iter()
+            .map(|email| self.message_row(email))
+            .collect();
+
+        let table_height = self.table_height;
+        let rb_style = reader_body_style();
+
+        rsx! {
+            div {
+                style: "width: 100%; height: {table_height}px; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; {rb_style}",
+                {header}
+                div {
+                    style: "flex: 1; width: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 1px;",
+                    if is_empty {
+                        div {
+                            style: "width: 100%; padding: 24px; display: flex; align-items: center; justify-content: center;",
+                            span { style: "font-size: 12px; color: {muted_color};", "{empty_msg}" }
+                        }
+                    } else {
+                        for r in rows {
+                            {r}
+                        }
+                    }
+                }
             }
         }
-
-        container(
-            column![header, scrollable(list).height(Fill)]
-                .spacing(0)
-                .height(Fill),
-        )
-        .width(Fill)
-        .height(self.table_height)
-        .style(reader_body_style)
-        .into()
     }
 
-    fn message_row<'a>(&'a self, email: &'a EmailRecord) -> Element<'a, ExplorerMessage> {
+    fn message_row(&self, email: &EmailRecord) -> Element {
         let tr = self.config.language;
+        let muted_color = muted();
         let is_selected = self.selected_message_id == Some(email.id);
         let is_checked = self.checked_message_ids.contains(&email.id);
         let email_id = email.id;
@@ -429,127 +510,132 @@ impl PstRagApp {
             .sent_at
             .as_deref()
             .map(short_date)
-            .unwrap_or_else(|| tr.unknown_date());
+            .unwrap_or_else(|| tr.unknown_date())
+            .to_owned();
 
-        let mut label_row = row![].spacing(4).align_y(Alignment::Center);
-        if email.labels.is_empty() {
-            label_row = label_row.push(text(tr.none_label()).size(10).color(muted()));
-        } else {
+        let mut label_badges = Vec::new();
+        let no_labels = email.labels.is_empty();
+        let none_lbl = tr.none_label();
+        if !no_labels {
             for assigned in email.labels.iter().take(2) {
                 let color = self.label_color(&assigned.label);
                 let pct = assigned.confidence.map(|c| format!("{:.0}%", c * 100.0));
-                label_row = label_row.push(label_badge(&assigned.label, color, pct));
+                label_badges.push(label_badge(&assigned.label, color, pct));
             }
         }
 
-        let range_btn: Element<'a, ExplorerMessage> = button(text(tr.btn_range()).size(9).color(muted()))
-            .padding([2, 5])
-            .style(button::text)
-            .on_press(ExplorerMessage::SelectRangeTo(email_id))
-            .into();
+        let range_lbl = tr.btn_range();
+        let subj_trunc = truncate_str(subject, 54);
+        let sender_trunc = truncate_str(sender, 32);
+        let folder_trunc = truncate_str(folder, 20);
+        let subj_color = if is_selected || is_checked {
+            on_primary()
+        } else {
+            bright_text()
+        };
+        let sender_color = if is_selected {
+            on_primary()
+        } else {
+            muted_color
+        };
+        let row_style = mail_row_style(is_selected, is_checked);
 
-        let clickable_columns = button(
-            row![
-                text(truncate_str(subject, 54))
-                    .size(12)
-                    .color(if is_selected || is_checked {
-                        on_primary()
-                    } else {
-                        bright_text()
-                    })
-                    .width(FillPortion(4)),
-                container(label_row).width(FillPortion(3)),
-                text(truncate_str(sender, 32))
-                    .size(11)
-                    .color(if is_selected { on_primary() } else { muted() })
-                    .width(FillPortion(3)),
-                text(truncate_str(folder, 20))
-                    .size(11)
-                    .color(muted())
-                    .width(FillPortion(2)),
-                text(date_short)
-                    .size(11)
-                    .color(muted())
-                    .width(FillPortion(2)),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        )
-        .width(Fill)
-        .padding(0)
-        .style(button::text)
-        .on_press(ExplorerMessage::SelectEmail(email_id));
-
-        container(
-            row![
-                checkbox("", is_checked)
-                    .on_toggle(move |v| ExplorerMessage::ToggleCheckEmail(email_id, v))
-                    .size(14),
-                range_btn,
-                clickable_columns,
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
-        )
-        .width(Fill)
-        .padding([6, 12])
-        .style(mail_row_style(is_selected, is_checked))
-        .into()
+        rsx! {
+            div {
+                key: "{email_id}",
+                style: "width: 100%; padding: 6px 12px; display: flex; flex-direction: row; align-items: center; gap: 6px; flex-shrink: 0; {row_style}",
+                input {
+                    r#type: "checkbox",
+                    checked: is_checked,
+                    onchange: move |evt| ExplorerMessage::ToggleCheckEmail(email_id, evt.checked()).dispatch()
+                }
+                button {
+                    class: "btn-text",
+                    style: "padding: 2px 5px; font-size: 9px; color: {muted_color}; flex-shrink: 0;",
+                    onclick: move |_| ExplorerMessage::SelectRangeTo(email_id).dispatch(),
+                    "{range_lbl}"
+                }
+                button {
+                    class: "btn-text",
+                    style: "flex: 1; min-width: 0; padding: 0; display: flex; flex-direction: row; align-items: center; gap: 8px;",
+                    onclick: move |_| ExplorerMessage::SelectEmail(email_id).dispatch(),
+                    span {
+                        style: "flex: 4; font-size: 12px; color: {subj_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                        "{subj_trunc}"
+                    }
+                    div {
+                        style: "flex: 3; display: flex; flex-direction: row; align-items: center; gap: 4px; overflow: hidden;",
+                        if no_labels {
+                            span { style: "font-size: 10px; color: {muted_color};", "{none_lbl}" }
+                        } else {
+                            for b in label_badges {
+                                {b}
+                            }
+                        }
+                    }
+                    span {
+                        style: "flex: 3; font-size: 11px; color: {sender_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                        "{sender_trunc}"
+                    }
+                    span {
+                        style: "flex: 2; font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                        "{folder_trunc}"
+                    }
+                    span {
+                        style: "flex: 2; font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                        "{date_short}"
+                    }
+                }
+            }
+        }
     }
 
-    fn reading_pane(&self) -> Element<'_, ExplorerMessage> {
+    fn reading_pane(&self) -> Element {
         let tr = self.config.language;
+        let bright = bright_text();
+        let muted_color = muted();
+        let rb_style = reader_body_style();
+
         let Some(email) = self.selected_email() else {
-            return container(
-                column![
-                    text(tr.no_message_selected()).size(16).color(bright_text()),
-                    text(tr.no_message_selected_hint())
-                        .size(12)
-                        .color(muted())
-                ]
-                .spacing(6)
-                .align_x(Alignment::Center),
-            )
-            .width(Fill)
-            .height(Fill)
-            .center_x(Fill)
-            .center_y(Fill)
-            .style(reader_body_style)
-            .into();
+            let no_msg = tr.no_message_selected();
+            let no_msg_hint = tr.no_message_selected_hint();
+            return rsx! {
+                div {
+                    style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; {rb_style}",
+                    span { style: "font-size: 16px; color: {bright};", "{no_msg}" }
+                    span { style: "font-size: 12px; color: {muted_color};", "{no_msg_hint}" }
+                }
+            };
         };
 
         let subject = if email.subject.trim().is_empty() {
-            tr.no_subject()
+            tr.no_subject().to_owned()
         } else {
-            email.subject.as_str()
+            email.subject.clone()
         };
         let source_name = std::path::Path::new(&email.source_key)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(&email.source_key);
 
-        let mut assigned_row = row![text(tr.labels_heading()).size(11).color(muted())]
-            .spacing(6)
-            .align_y(Alignment::Center);
-        if email.labels.is_empty() {
-            assigned_row = assigned_row.push(text(tr.none_assigned()).size(11).color(muted()));
-        } else {
-            for assigned in &email.labels {
-                let detail = match assigned.confidence {
-                    Some(c) => format!("{} {:.0}%", assigned.source, c * 100.0),
-                    None => assigned.source.clone(),
-                };
-                assigned_row = assigned_row.push(label_badge(
-                    &assigned.label,
-                    self.label_color(&assigned.label),
-                    Some(detail),
-                ));
-            }
+        let labels_hdr = tr.labels_heading();
+        let none_assigned_lbl = tr.none_assigned();
+        let is_labels_empty = email.labels.is_empty();
+        let mut assigned_badges = Vec::new();
+        for assigned in &email.labels {
+            let detail = match assigned.confidence {
+                Some(c) => format!("{} {:.0}%", assigned.source, c * 100.0),
+                None => assigned.source.clone(),
+            };
+            assigned_badges.push(label_badge(
+                &assigned.label,
+                self.label_color(&assigned.label),
+                Some(detail),
+            ));
         }
 
-        let mut quick_toggle_row = row![text(tr.toggle_heading()).size(10).color(muted())]
-            .spacing(5)
-            .align_y(Alignment::Center);
+        let toggle_hdr = tr.toggle_heading();
+        let mut quick_toggle_buttons = Vec::new();
         for (def, _) in &self.labels_with_counts {
             let active = email.labels.iter().any(|l| l.label == def.name);
             let btn_label = if active {
@@ -557,120 +643,131 @@ impl PstRagApp {
             } else {
                 tr.add_label_chip(&def.name)
             };
+            let btn_class = if active {
+                "btn-primary"
+            } else {
+                "btn-secondary"
+            };
             let msg_id = email.id;
             let label_name = def.name.clone();
-            quick_toggle_row = quick_toggle_row.push(
-                button(text(btn_label).size(10))
-                    .padding([3, 8])
-                    .style(if active {
-                        button::primary
-                    } else {
-                        button::secondary
-                    })
-                    .on_press(ExplorerMessage::ToggleManualLabel(msg_id, label_name)),
-            );
+            quick_toggle_buttons.push(rsx! {
+                button {
+                    class: "{btn_class}",
+                    style: "font-size: 10px; padding: 3px 8px;",
+                    onclick: move |_| ExplorerMessage::ToggleManualLabel(msg_id, label_name.clone()).dispatch(),
+                    "{btn_label}"
+                }
+            });
         }
 
-        let header_content = column![
-            row![
-                text(subject).size(17).color(bright_text()).width(Fill),
-                small_button(
-                    tr.btn_label_with_laya(),
-                    (!self.busy)
-                        .then_some(ExplorerMessage::LabelSelectedWith(LabelerBackend::Laya))
-                ),
-                small_button(
-                    tr.btn_label_with_llm(),
-                    (!self.busy)
-                        .then_some(ExplorerMessage::LabelSelectedWith(LabelerBackend::LlmJudge))
-                ),
-                small_button(
-                    tr.btn_ask_about_mail(),
-                    Some(ExplorerMessage::AskAboutEmail(email.id))
-                ),
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
-            row![
-                text(tr.from_prefix(&email.sender))
-                    .size(12)
-                    .color(bright_text()),
-                Space::new(16, 0),
-                text(tr.to_prefix(&email.recipients))
-                    .size(11)
-                    .color(muted()),
-                Space::new(Fill, 0),
-                text(format!(
-                    "{} - {} / {}",
-                    email.sent_at.as_deref().unwrap_or_else(|| tr.unknown_date_full()),
-                    source_name,
-                    email.folder
-                ))
-                .size(11)
-                .color(muted()),
-            ]
-            .align_y(Alignment::Center),
-            horizontal_rule(1),
-            row![
-                container(assigned_row.wrap()).width(FillPortion(1)),
-                container(quick_toggle_row.wrap()).width(FillPortion(1)),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center),
-        ]
-        .spacing(6);
+        let btn_laya = small_button(
+            tr.btn_label_with_laya(),
+            (!self.busy).then_some(ExplorerMessage::LabelSelectedWith(LabelerBackend::Laya)),
+        );
+        let btn_llm = small_button(
+            tr.btn_label_with_llm(),
+            (!self.busy).then_some(ExplorerMessage::LabelSelectedWith(LabelerBackend::LlmJudge)),
+        );
+        let btn_ask = small_button(
+            tr.btn_ask_about_mail(),
+            Some(ExplorerMessage::AskAboutEmail(email.id)),
+        );
 
-        // When the user has shrunk the header, or it exceeds the max height,
-        // its contents scroll inside it.
-        let (outer_height, inner_height) = match self.reader_header_height {
-            Some(height) => (Length::Fixed(height.min(super::HEADER_MAX_HEIGHT)), Fill),
-            None => (Length::Shrink, Length::Shrink),
+        let from_text = tr.from_prefix(&email.sender);
+        let to_text = tr.to_prefix(&email.recipients);
+        let date_meta = format!(
+            "{} - {} / {}",
+            email
+                .sent_at
+                .as_deref()
+                .unwrap_or_else(|| tr.unknown_date_full()),
+            source_name,
+            email.folder
+        );
+
+        let rh_id = reader_header_id();
+        let rh_style = reader_header_style();
+        let max_hdr = super::HEADER_MAX_HEIGHT;
+        let header_height_style = match self.reader_header_height {
+            Some(height) => {
+                let h = height.min(max_hdr);
+                format!("height: {h}px; max-height: {max_hdr}px;")
+            }
+            None => format!("height: auto; max-height: {max_hdr}px;"),
         };
-        let header = container(
-            scrollable(container(header_content).padding([10, 14]).width(Fill))
-                .height(inner_height),
-        )
-        .id(reader_header_id())
-        .width(Fill)
-        .height(outer_height)
-        .max_height(super::HEADER_MAX_HEIGHT)
-        .style(reader_header_style);
 
         let body_text = if email.body.trim().is_empty() {
-            tr.empty_body()
+            tr.empty_body().to_owned()
         } else {
-            email.body.as_str()
+            email.body.clone()
         };
 
-        let body = container(
-            scrollable(
-                container(
-                    text(body_text)
-                        .size(13)
-                        .line_height(1.5)
-                        .color(bright_text()),
-                )
-                .padding([12, 16])
-                .width(Fill),
-            )
-            .height(Fill),
-        )
-        .width(Fill)
-        .height(Fill)
-        .style(reader_body_style);
+        let header_splitter = splitter(
+            SplitAxis::Horizontal,
+            self.is_resizing(super::Splitter::HeaderHeight),
+            ExplorerMessage::ReaderHeaderResizeStart,
+        );
 
-        column![
-            header,
-            splitter(
-                SplitAxis::Horizontal,
-                self.is_resizing(super::Splitter::HeaderHeight),
-                ExplorerMessage::ReaderHeaderResizeStart,
-            ),
-            body
-        ]
-        .width(Fill)
-        .height(Fill)
-        .into()
+        rsx! {
+            div {
+                style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; overflow: hidden;",
+                div {
+                    id: "{rh_id}",
+                    class: "selectable-text",
+                    style: "width: 100%; flex-shrink: 0; overflow-y: auto; {header_height_style} {rh_style}",
+                    div {
+                        style: "padding: 10px 14px; width: 100%; display: flex; flex-direction: column; gap: 6px;",
+                        div {
+                            style: "display: flex; flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap;",
+                            span {
+                                style: "flex: 1; font-size: 17px; color: {bright}; font-weight: 600;",
+                                "{subject}"
+                            }
+                            {btn_laya}
+                            {btn_llm}
+                            {btn_ask}
+                        }
+                        div {
+                            style: "display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 16px;",
+                            span { style: "font-size: 12px; color: {bright};", "{from_text}" }
+                            span { style: "font-size: 11px; color: {muted_color}; flex: 1;", "{to_text}" }
+                            span { style: "font-size: 11px; color: {muted_color};", "{date_meta}" }
+                        }
+                        hr {}
+                        div {
+                            style: "display: flex; flex-direction: row; align-items: center; gap: 10px;",
+                            div {
+                                style: "flex: 1; display: flex; flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap;",
+                                span { style: "font-size: 11px; color: {muted_color};", "{labels_hdr}" }
+                                if is_labels_empty {
+                                    span { style: "font-size: 11px; color: {muted_color};", "{none_assigned_lbl}" }
+                                } else {
+                                    for ab in assigned_badges {
+                                        {ab}
+                                    }
+                                }
+                            }
+                            div {
+                                style: "flex: 1; display: flex; flex-direction: row; align-items: center; gap: 5px; flex-wrap: wrap;",
+                                span { style: "font-size: 10px; color: {muted_color};", "{toggle_hdr}" }
+                                for qtb in quick_toggle_buttons {
+                                    {qtb}
+                                }
+                            }
+                        }
+                    }
+                }
+                {header_splitter}
+                div {
+                    class: "selectable-text",
+                    style: "flex: 1; min-height: 0; width: 100%; overflow-y: auto; {rb_style}",
+                    div {
+                        style: "padding: 12px 16px; width: 100%; font-size: 13px; line-height: 1.5; color: {bright}; white-space: pre-wrap; word-break: break-word;",
+                        "{body_text}"
+                    }
+                }
+            }
+        }
     }
 }
 

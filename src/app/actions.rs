@@ -10,12 +10,11 @@ use std::{
 };
 
 use anyhow::Context;
-use iced::{Task, widget::text_input};
 
 use crate::{db::Index, laya, llm, model::EmailRecord, pst};
 
 use super::{
-    ChatMessage, ChatRole, IndexOutcome, Message, PstRagApp, WorkerEvent, WorkerResult,
+    AppTask, ChatMessage, ChatRole, IndexOutcome, Message, PstRagApp, WorkerEvent, WorkerResult,
     chat::chat_question_input_id,
 };
 
@@ -24,37 +23,25 @@ const CUSTOM_LABEL_PALETTE: &[&str] = &[
 ];
 
 pub(super) fn emit_worker_event(
-    tx: &mut iced::futures::channel::mpsc::Sender<WorkerEvent>,
+    tx: &tokio::sync::mpsc::UnboundedSender<WorkerEvent>,
     event: WorkerEvent,
 ) {
-    use iced::futures::SinkExt;
-    let _ = iced::futures::executor::block_on(tx.send(event));
+    let _ = tx.send(event);
 }
 
 pub(super) fn spawn_worker(
-    work: impl FnOnce(&mut iced::futures::channel::mpsc::Sender<WorkerEvent>) -> WorkerResult
-    + Send
-    + 'static,
-) -> Task<Message> {
-    Task::run(
-        iced::stream::channel(128, move |mut output| async move {
-            let _ = tokio::task::spawn_blocking(move || {
-                let result = work(&mut output);
-                emit_worker_event(&mut output, WorkerEvent::Finished(result));
-            })
-            .await;
-        }),
-        Message::Worker,
-    )
+    work: impl FnOnce(&tokio::sync::mpsc::UnboundedSender<WorkerEvent>) -> WorkerResult + Send + 'static,
+) -> AppTask {
+    AppTask::Worker(Box::new(work))
 }
 
 impl PstRagApp {
-    pub(super) fn choose_storage_dir(&self) -> Task<Message> {
+    pub(super) fn choose_storage_dir(&self) -> AppTask {
         if self.busy {
-            return Task::none();
+            return AppTask::none();
         }
         let dir = self.storage_dir.clone();
-        Task::perform(
+        AppTask::perform(
             async move {
                 rfd::AsyncFileDialog::new()
                     .set_directory(&dir)
@@ -80,23 +67,35 @@ impl PstRagApp {
             &self.storage_location_path,
             self.storage_dir.to_string_lossy().as_bytes(),
         ) {
-            Ok(()) => self.config.language.status_storage_changed(&self.storage_dir.display().to_string()),
-            Err(error) => self.config.language.status_storage_saved_err(&error.to_string()),
+            Ok(()) => self
+                .config
+                .language
+                .status_storage_changed(&self.storage_dir.display().to_string()),
+            Err(error) => self
+                .config
+                .language
+                .status_storage_saved_err(&error.to_string()),
         };
     }
 
     pub(super) fn save_credentials(&mut self) {
         self.status = match save_config(&self.storage_dir, &self.config) {
-            Ok(()) => self.config.language.status_settings_saved(&self.storage_dir.display().to_string()),
-            Err(error) => self.config.language.status_settings_save_err(&format!("{error:#}")),
+            Ok(()) => self
+                .config
+                .language
+                .status_settings_saved(&self.storage_dir.display().to_string()),
+            Err(error) => self
+                .config
+                .language
+                .status_settings_save_err(&format!("{error:#}")),
         };
     }
 
-    pub(super) fn choose_archive(&self) -> Task<Message> {
+    pub(super) fn choose_archive(&self) -> AppTask {
         if self.busy {
-            return Task::none();
+            return AppTask::none();
         }
-        Task::perform(
+        AppTask::perform(
             async {
                 rfd::AsyncFileDialog::new()
                     .add_filter("Outlook archive", &["pst"])
@@ -109,12 +108,12 @@ impl PstRagApp {
         )
     }
 
-    pub(super) fn choose_laya_gguf(&self) -> Task<Message> {
+    pub(super) fn choose_laya_gguf(&self) -> AppTask {
         if self.busy {
-            return Task::none();
+            return AppTask::none();
         }
         let dir = self.storage_dir.clone();
-        Task::perform(
+        AppTask::perform(
             async move {
                 rfd::AsyncFileDialog::new()
                     .set_directory(&dir)
@@ -130,12 +129,15 @@ impl PstRagApp {
     pub(super) fn apply_laya_gguf(&mut self, path: PathBuf) {
         self.config.laya_gguf_path = path.to_string_lossy().to_string();
         let _ = save_config(&self.storage_dir, &self.config);
-        self.status = self.config.language.status_selected_laya_gguf(&path.display().to_string());
+        self.status = self
+            .config
+            .language
+            .status_selected_laya_gguf(&path.display().to_string());
     }
 
-    pub(super) fn download_laya_gguf(&mut self) -> Task<Message> {
+    pub(super) fn download_laya_gguf(&mut self) -> AppTask {
         if self.busy {
-            return Task::none();
+            return AppTask::none();
         }
         let target = if self.config.laya_gguf_path.trim().is_empty() {
             laya::default_gguf_path(&self.storage_dir)
@@ -144,7 +146,10 @@ impl PstRagApp {
         };
         self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
         self.busy = true;
-        self.status = self.config.language.status_downloading_laya(&target.display().to_string());
+        self.status = self
+            .config
+            .language
+            .status_downloading_laya(&target.display().to_string());
         spawn_worker(move |_tx| {
             let result = laya::download_laya_gguf(&target)
                 .map(|_| target)
@@ -168,34 +173,42 @@ impl PstRagApp {
         None
     }
 
-    pub(super) fn index(&mut self) -> Task<Message> {
+    pub(super) fn index(&mut self) -> AppTask {
         if self.busy {
-            return Task::none();
+            return AppTask::none();
         }
         let Some(path) = self.archive.clone() else {
             self.status = self.config.language.status_select_archive_first().into();
-            return Task::none();
+            return AppTask::none();
         };
         let db_path = self.db_path.clone();
         let config = self.config.clone();
         if config.use_remote_embeddings && config.embedding_model.trim().is_empty() {
-            self.status = self.config.language.status_enter_embedding_model_first().into();
-            return Task::none();
+            self.status = self
+                .config
+                .language
+                .status_enter_embedding_model_first()
+                .into();
+            return AppTask::none();
         }
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_flag = Some(cancel.clone());
         self.busy = true;
         self.status = match self.config.language {
-            crate::i18n::Language::English => if config.use_remote_embeddings {
-                "Importing archive and indexing BM25 locally...".into()
-            } else {
-                "Indexing BM25 locally...".into()
-            },
-            crate::i18n::Language::French => if config.use_remote_embeddings {
-                "Importation de l'archive et indexation BM25 locale en cours...".into()
-            } else {
-                "Indexation BM25 locale en cours...".into()
-            },
+            crate::i18n::Language::English => {
+                if config.use_remote_embeddings {
+                    "Importing archive and indexing BM25 locally...".into()
+                } else {
+                    "Indexing BM25 locally...".into()
+                }
+            }
+            crate::i18n::Language::French => {
+                if config.use_remote_embeddings {
+                    "Importation de l'archive et indexation BM25 locale en cours...".into()
+                } else {
+                    "Indexation BM25 locale en cours...".into()
+                }
+            }
         };
         spawn_worker(move |tx| {
             let result = (|| {
@@ -251,13 +264,13 @@ impl PstRagApp {
         })
     }
 
-    pub(super) fn ask(&mut self) -> Task<Message> {
+    pub(super) fn ask(&mut self) -> AppTask {
         if self.busy {
-            return Task::none();
+            return AppTask::none();
         }
         if self.question.trim().is_empty() {
             self.status = self.config.language.status_enter_question_first().into();
-            return Task::none();
+            return AppTask::none();
         }
         let question = self.question.trim().to_owned();
         self.chat_open = true;
@@ -345,7 +358,7 @@ impl PstRagApp {
         })
     }
 
-    pub(super) fn ask_about_email(&mut self, message_id: i64) -> Task<Message> {
+    pub(super) fn ask_about_email(&mut self, message_id: i64) -> AppTask {
         self.select_email(message_id);
         self.chat_open = true;
         if let Some(email) = self.selected_email() {
@@ -361,16 +374,20 @@ impl PstRagApp {
             };
             self.status = self.config.language.status_prepared_prompt_email().into();
         }
-        text_input::focus(chat_question_input_id())
+        AppTask::focus(chat_question_input_id())
     }
 
-    pub(super) fn search_locally(&mut self) -> Task<Message> {
+    pub(super) fn search_locally(&mut self) -> AppTask {
         if self.busy {
-            return Task::none();
+            return AppTask::none();
         }
         if self.question.trim().is_empty() {
-            self.status = self.config.language.status_enter_search_terms_first().into();
-            return Task::none();
+            self.status = self
+                .config
+                .language
+                .status_enter_search_terms_first()
+                .into();
+            return AppTask::none();
         }
         let query = self.question.trim().to_owned();
         self.chat_open = true;
@@ -495,7 +512,10 @@ impl PstRagApp {
             for email in &self.explorer_messages {
                 self.checked_message_ids.insert(email.id);
             }
-            self.status = self.config.language.status_selected_visible_count(self.explorer_messages.len());
+            self.status = self
+                .config
+                .language
+                .status_selected_visible_count(self.explorer_messages.len());
         } else {
             for email in &self.explorer_messages {
                 self.checked_message_ids.remove(&email.id);
@@ -511,7 +531,10 @@ impl PstRagApp {
                 added += 1;
             }
         }
-        self.status = self.config.language.status_selected_unlabeled(added, self.checked_message_ids.len());
+        self.status = self
+            .config
+            .language
+            .status_selected_unlabeled(added, self.checked_message_ids.len());
     }
 
     pub(super) fn select_range_to(&mut self, target_id: i64) {
@@ -530,7 +553,10 @@ impl PstRagApp {
                 self.checked_message_ids.insert(email.id);
             }
             self.selected_message_id = Some(target_id);
-            self.status = self.config.language.status_selected_range(end - start + 1, self.checked_message_ids.len());
+            self.status = self
+                .config
+                .language
+                .status_selected_range(end - start + 1, self.checked_message_ids.len());
         } else {
             self.checked_message_ids.insert(target_id);
             self.selected_message_id = Some(target_id);
@@ -589,7 +615,10 @@ impl PstRagApp {
                 self.refresh_explorer();
                 self.config.language.status_pst_removed(removed)
             }
-            Err(error) => self.config.language.status_pst_remove_err(&format!("{error:#}")),
+            Err(error) => self
+                .config
+                .language
+                .status_pst_remove_err(&format!("{error:#}")),
         };
     }
 }

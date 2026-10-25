@@ -3,8 +3,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use iced::Task;
-
 use crate::{
     db::Index,
     laya::LayaModel,
@@ -13,7 +11,7 @@ use crate::{
 };
 
 use super::{
-    super::{LabelOutcome, Message, PstRagApp, WorkerEvent, WorkerResult},
+    super::{AppTask, LabelOutcome, PstRagApp, WorkerEvent, WorkerResult},
     CUSTOM_LABEL_PALETTE, emit_worker_event, spawn_worker,
 };
 
@@ -26,26 +24,20 @@ impl PstRagApp {
             .unwrap_or("#2563eb")
     }
 
-    pub(in crate::app) fn label_selected_message(
-        &mut self,
-        backend: LabelerBackend,
-    ) -> Task<Message> {
+    pub(in crate::app) fn label_selected_message(&mut self, backend: LabelerBackend) -> AppTask {
         if self.busy {
-            return Task::none();
+            return AppTask::none();
         }
         let Some(selected) = self.selected_email().cloned() else {
             self.status = self.config.language.status_labeling_select_first().into();
-            return Task::none();
+            return AppTask::none();
         };
         self.run_labeling_job(vec![selected], backend)
     }
 
-    pub(in crate::app) fn label_checked_messages(
-        &mut self,
-        backend: LabelerBackend,
-    ) -> Task<Message> {
+    pub(in crate::app) fn label_checked_messages(&mut self, backend: LabelerBackend) -> AppTask {
         if self.busy {
-            return Task::none();
+            return AppTask::none();
         }
         if self.checked_message_ids.is_empty() {
             return self.label_selected_message(backend);
@@ -66,36 +58,32 @@ impl PstRagApp {
                 Ok(records) if !records.is_empty() => records,
                 Ok(_) => {
                     self.status = self.config.language.status_labeling_no_matches().into();
-                    return Task::none();
+                    return AppTask::none();
                 }
                 Err(error) => {
                     self.status = self
                         .config
                         .language
                         .status_labeling_load_err(&format!("{error:#}"));
-                    return Task::none();
+                    return AppTask::none();
                 }
             };
         self.run_labeling_job(batch, backend)
     }
 
-    pub(in crate::app) fn label_visible_messages(&mut self) -> Task<Message> {
+    pub(in crate::app) fn label_visible_messages(&mut self) -> AppTask {
         if self.busy {
-            return Task::none();
+            return AppTask::none();
         }
         if self.explorer_messages.is_empty() {
             self.status = self.config.language.status_labeling_no_visible().into();
-            return Task::none();
+            return AppTask::none();
         }
         let batch: Vec<EmailRecord> = self.explorer_messages.iter().take(50).cloned().collect();
         self.run_labeling_job(batch, self.config.labeler_backend)
     }
 
-    fn run_labeling_job(
-        &mut self,
-        emails: Vec<EmailRecord>,
-        backend: LabelerBackend,
-    ) -> Task<Message> {
+    fn run_labeling_job(&mut self, emails: Vec<EmailRecord>, backend: LabelerBackend) -> AppTask {
         let db_path = self.db_path.clone();
         let config = self.config.clone();
         let laya_path = self.active_laya_gguf_path();
@@ -126,11 +114,13 @@ impl PstRagApp {
                             if total > 1 {
                                 emit_worker_event(
                                     tx,
-                                    WorkerEvent::Progress(config.language.status_labeling_progress(
-                                        idx + 1,
-                                        total,
-                                        "Laya",
-                                    )),
+                                    WorkerEvent::Progress(
+                                        config.language.status_labeling_progress(
+                                            idx + 1,
+                                            total,
+                                            "Laya",
+                                        ),
+                                    ),
                                 );
                             }
                             let assigned = model.label_email(email, &definitions)?;
