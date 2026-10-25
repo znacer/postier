@@ -209,7 +209,7 @@ impl Language {
     pub fn confirm_remove_pst(self) -> &'static str {
         match self {
             Self::English => "Remove this PST's messages and embeddings?",
-            Self::French => "Supprimer les messages et plongements de ce PST ?",
+            Self::French => "Supprimer les messages et embeddings de ce PST ?",
         }
     }
 
@@ -294,8 +294,12 @@ impl Language {
 
     pub fn laya_explanation(self) -> &'static str {
         match self {
-            Self::English => "Packaged Laya-GGUF runs in-process offline. Downloading Laya-Q8_0.gguf switches to the full 421M checkpoint.",
-            Self::French => "Laya-GGUF intégré s'exécute hors ligne dans le processus. Télécharger Laya-Q8_0.gguf active le point de contrôle complet de 421M.",
+            Self::English => {
+                "Packaged Laya-GGUF runs in-process offline. Downloading Laya-Q8_0.gguf switches to the full 421M checkpoint."
+            }
+            Self::French => {
+                "Laya-GGUF intégré s'exécute hors ligne dans le processus. Télécharger Laya-Q8_0.gguf active le point de contrôle complet de 421M."
+            }
         }
     }
 
@@ -330,29 +334,29 @@ impl Language {
 
     pub fn token_placeholder(self) -> &'static str {
         match self {
-            Self::English => "Optional bearer token",
-            Self::French => "Jeton porteur optionnel",
+            Self::English => "Token",
+            Self::French => "Token",
         }
     }
 
     pub fn remote_embeddings_checkbox(self) -> &'static str {
         match self {
             Self::English => "Remote embeddings on index",
-            Self::French => "Plongements distants lors de l'indexation",
+            Self::French => "Embeddings distants lors de l'indexation",
         }
     }
 
     pub fn embedding_model_label(self) -> &'static str {
         match self {
             Self::English => "Embedding model",
-            Self::French => "Modèle de plongement",
+            Self::French => "Modèle d'embedding",
         }
     }
 
     pub fn embedding_model_placeholder(self) -> &'static str {
         match self {
             Self::English => "Embedding model name",
-            Self::French => "Nom du modèle de plongement",
+            Self::French => "Nom du modèle d'embedding",
         }
     }
 
@@ -373,7 +377,9 @@ impl Language {
     pub fn storage_notice(self) -> &'static str {
         match self {
             Self::English => "Contains SQLite index, labels, models, and credentials",
-            Self::French => "Contient l'index SQLite, les étiquettes, les modèles et les identifiants",
+            Self::French => {
+                "Contient l'index SQLite, les étiquettes, les modèles et les identifiants"
+            }
         }
     }
 
@@ -388,14 +394,26 @@ impl Language {
     pub fn status_ready(self) -> &'static str {
         match self {
             Self::English => "Ready - Thunderbird mail explorer with Laya and LLM Judge labeling",
-            Self::French => "Prêt - Explorateur de courriels Thunderbird avec étiquetage Laya et Juge LLM",
+            Self::French => {
+                "Prêt - Explorateur de courriels Thunderbird avec étiquetage Laya et Juge LLM"
+            }
         }
     }
 
-    pub fn status_showing(self, shown: usize, total: u64, selected: usize, backend: &str) -> String {
+    pub fn status_showing(
+        self,
+        shown: usize,
+        total: u64,
+        selected: usize,
+        backend: &str,
+    ) -> String {
         match self {
-            Self::English => format!("Showing {shown} of {total} indexed, {selected} selected, Labeler: {backend}"),
-            Self::French => format!("Affichage de {shown} sur {total} indexés, {selected} sélectionné(s), Étiqueteur : {backend}"),
+            Self::English => format!(
+                "Showing {shown} of {total} indexed, {selected} selected, Labeler: {backend}"
+            ),
+            Self::French => format!(
+                "Affichage de {shown} sur {total} indexés, {selected} sélectionné(s), Étiqueteur : {backend}"
+            ),
         }
     }
 
@@ -509,7 +527,11 @@ impl Language {
     pub fn mails_selected_count(self, count: usize) -> String {
         match self {
             Self::English => format!("{count} mail{} selected", if count == 1 { "" } else { "s" }),
-            Self::French => format!("{count} courriel{} sélectionné{}", if count == 1 { "" } else { "s" }, if count == 1 { "" } else { "s" }),
+            Self::French => format!(
+                "{count} courriel{} sélectionné{}",
+                if count == 1 { "" } else { "s" },
+                if count == 1 { "" } else { "s" }
+            ),
         }
     }
 
@@ -656,15 +678,23 @@ impl Language {
 
     pub fn empty_table_no_indexed(self) -> &'static str {
         match self {
-            Self::English => "No emails indexed yet. Choose a .pst archive or .jsonl fixture in the left pane and click 'Index now'.",
-            Self::French => "Aucun courriel encore indexé. Choisissez une archive .pst ou un fichier de test .jsonl dans le panneau de gauche et cliquez sur « Indexer ».",
+            Self::English => {
+                "No emails indexed yet. Choose a .pst archive or .jsonl fixture in the left pane and click 'Index now'."
+            }
+            Self::French => {
+                "Aucun courriel encore indexé. Choisissez une archive .pst ou un fichier de test .jsonl dans le panneau de gauche et cliquez sur « Indexer »."
+            }
         }
     }
 
     pub fn empty_table_no_match(self) -> &'static str {
         match self {
-            Self::English => "No messages match the current folder, label, or quick-filter selection.",
-            Self::French => "Aucun message ne correspond au dossier, à l'étiquette ou au filtre rapide sélectionné.",
+            Self::English => {
+                "No messages match the current folder, label, or quick-filter selection."
+            }
+            Self::French => {
+                "Aucun message ne correspond au dossier, à l'étiquette ou au filtre rapide sélectionné."
+            }
         }
     }
 
@@ -678,8 +708,12 @@ impl Language {
 
     pub fn no_message_selected_hint(self) -> &'static str {
         match self {
-            Self::English => "Select a message in the table above to read its content, or check multiple messages to label a selection.",
-            Self::French => "Sélectionnez un message dans le tableau ci-dessus pour lire son contenu, ou cochez plusieurs messages pour étiqueter une sélection.",
+            Self::English => {
+                "Select a message in the table above to read its content, or check multiple messages to label a selection."
+            }
+            Self::French => {
+                "Sélectionnez un message dans le tableau ci-dessus pour lire son contenu, ou cochez plusieurs messages pour étiqueter une sélection."
+            }
         }
     }
 
@@ -777,8 +811,12 @@ impl Language {
 
     pub fn chat_welcome_desc(self) -> &'static str {
         match self {
-            Self::English => "Ask about decisions, people, dates, or projects. Only selected evidence is sent to your configured LLM.",
-            Self::French => "Posez des questions sur les décisions, les personnes, les dates ou les projets. Seules les preuves sélectionnées sont envoyées à votre LLM configuré.",
+            Self::English => {
+                "Ask about decisions, people, dates, or projects. Only selected evidence is sent to your configured LLM."
+            }
+            Self::French => {
+                "Posez des questions sur les décisions, les personnes, les dates ou les projets. Seules les preuves sélectionnées sont envoyées à votre LLM configuré."
+            }
         }
     }
 
@@ -943,8 +981,8 @@ impl Language {
     // Backend names
     pub fn backend_name(self, backend: LabelerBackend) -> &'static str {
         match (self, backend) {
-            (Self::English, LabelerBackend::Laya) => "Laya (Local GGUF)",
-            (Self::French, LabelerBackend::Laya) => "Laya (GGUF local)",
+            (Self::English, LabelerBackend::Laya) => "Laya (Local)",
+            (Self::French, LabelerBackend::Laya) => "Laya (local)",
             (Self::English, LabelerBackend::LlmJudge) => "LLM Judge",
             (Self::French, LabelerBackend::LlmJudge) => "Juge LLM",
         }
@@ -960,8 +998,12 @@ impl Language {
 
     pub fn status_storage_saved_err(self, err: &str) -> String {
         match self {
-            Self::English => format!("Storage changed for this session, but the selection could not be saved: {err}"),
-            Self::French => format!("Stockage modifié pour cette session, mais le choix n'a pas pu être enregistré : {err}"),
+            Self::English => format!(
+                "Storage changed for this session, but the selection could not be saved: {err}"
+            ),
+            Self::French => format!(
+                "Stockage modifié pour cette session, mais le choix n'a pas pu être enregistré : {err}"
+            ),
         }
     }
 
@@ -1017,7 +1059,9 @@ impl Language {
     pub fn status_pst_removed(self, count: usize) -> String {
         match self {
             Self::English => format!("Removed {count} indexed messages and their embeddings"),
-            Self::French => format!("{count} messages indexés et leurs plongements ont été supprimés"),
+            Self::French => {
+                format!("{count} messages indexés et leurs embeddings ont été supprimés")
+            }
         }
     }
 
@@ -1123,7 +1167,9 @@ impl Language {
     pub fn status_enter_embedding_model_first(self) -> &'static str {
         match self {
             Self::English => "Enter an embedding model before enabling remote embeddings",
-            Self::French => "Indiquez un modèle de plongement avant d'activer les plongements distants",
+            Self::French => {
+                "Indiquez un modèle d'embedding avant d'activer les embeddings distants"
+            }
         }
     }
 
@@ -1185,8 +1231,14 @@ impl Language {
 
     pub fn status_label_updated(self, label: &str, added: bool) -> String {
         match self {
-            Self::English => format!("{} label '{label}'", if added { "Added" } else { "Removed" }),
-            Self::French => format!("Étiquette « {label} » {}", if added { "ajoutée" } else { "retirée" }),
+            Self::English => format!(
+                "{} label '{label}'",
+                if added { "Added" } else { "Removed" }
+            ),
+            Self::French => format!(
+                "Étiquette « {label} » {}",
+                if added { "ajoutée" } else { "retirée" }
+            ),
         }
     }
 
@@ -1263,7 +1315,9 @@ impl Language {
     pub fn status_label_batch_err(self, label: &str, err: &str) -> String {
         match self {
             Self::English => format!("Could not update label '{label}' on selection: {err}"),
-            Self::French => format!("Impossible de modifier l'étiquette « {label} » sur la sélection : {err}"),
+            Self::French => {
+                format!("Impossible de modifier l'étiquette « {label} » sur la sélection : {err}")
+            }
         }
     }
 
@@ -1297,8 +1351,13 @@ impl Language {
 
     pub fn worker_search_status(self, count: usize) -> String {
         match self {
-            Self::English => format!("Found {count} local results - nothing was sent over the network"),
-            Self::French => format!("{count} résultat{} locaux trouvés - rien n'a été envoyé sur le réseau", if count <= 1 { "" } else { "s" }),
+            Self::English => {
+                format!("Found {count} local results - nothing was sent over the network")
+            }
+            Self::French => format!(
+                "{count} résultat{} locaux trouvés - rien n'a été envoyé sur le réseau",
+                if count <= 1 { "" } else { "s" }
+            ),
         }
     }
 
@@ -1327,14 +1386,18 @@ impl Language {
         match self {
             Self::English => {
                 if embedded > 0 {
-                    format!("Indexed {added} new messages with BM25 and stored {embedded} remote embeddings")
+                    format!(
+                        "Indexed {added} new messages with BM25 and stored {embedded} remote embeddings"
+                    )
                 } else {
                     format!("Indexed {added} new messages with local BM25")
                 }
             }
             Self::French => {
                 if embedded > 0 {
-                    format!("{added} nouveaux messages indexés avec BM25 et {embedded} plongements distants enregistrés")
+                    format!(
+                        "{added} nouveaux messages indexés avec BM25 et {embedded} embeddings distants enregistrés"
+                    )
                 } else {
                     format!("{added} nouveaux messages indexés avec BM25 local")
                 }
@@ -1342,10 +1405,20 @@ impl Language {
         }
     }
 
-    pub fn worker_labeled(self, cancelled: bool, messages: usize, labels: usize, source: &str) -> String {
+    pub fn worker_labeled(
+        self,
+        cancelled: bool,
+        messages: usize,
+        labels: usize,
+        source: &str,
+    ) -> String {
         match self {
             Self::English => {
-                let prefix = if cancelled { "Stopped labeling after" } else { "Labeled" };
+                let prefix = if cancelled {
+                    "Stopped labeling after"
+                } else {
+                    "Labeled"
+                };
                 format!(
                     "{prefix} {messages} email{} ({labels} label{} assigned via {source})",
                     if messages == 1 { "" } else { "s" },
@@ -1353,7 +1426,11 @@ impl Language {
                 )
             }
             Self::French => {
-                let prefix = if cancelled { "Étiquetage interrompu après" } else { "Étiquetage terminé pour" };
+                let prefix = if cancelled {
+                    "Étiquetage interrompu après"
+                } else {
+                    "Étiquetage terminé pour"
+                };
                 format!(
                     "{prefix} {messages} courriel{} ({labels} étiquette{} attribuée{} via {source})",
                     if messages == 1 { "" } else { "s" },
