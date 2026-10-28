@@ -145,9 +145,7 @@ struct LabelOutcome {
 enum SidebarSection {
     Mailboxes,
     Labels,
-    LayaModel,
-    AiModels,
-    Storage,
+    Settings,
 }
 
 impl SidebarSection {
@@ -155,9 +153,7 @@ impl SidebarSection {
         match self {
             Self::Mailboxes => 0,
             Self::Labels => 1,
-            Self::LayaModel => 2,
-            Self::AiModels => 3,
-            Self::Storage => 4,
+            Self::Settings => 2,
         }
     }
 }
@@ -252,7 +248,7 @@ pub struct PstRagApp {
     sources: Vec<IndexedSource>,
     pending_remove_source: Option<String>,
     collapsed_source_folders: HashSet<(String, String)>,
-    collapsed_sections: [bool; 5],
+    collapsed_sections: [bool; 3],
     explorer_messages: Vec<EmailRecord>,
     selected_message_id: Option<i64>,
     range_anchor_id: Option<i64>,
@@ -518,7 +514,7 @@ impl PstRagApp {
             sources,
             pending_remove_source: None,
             collapsed_source_folders: HashSet::new(),
-            collapsed_sections: [false, false, true, false, true],
+            collapsed_sections: [false, false, true],
             explorer_messages: vec![],
             selected_message_id: None,
             range_anchor_id: None,

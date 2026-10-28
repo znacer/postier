@@ -37,7 +37,8 @@ fn config_serializes_and_deserializes_with_language() {
         "max_context_chars": 24000,
         "labeler_backend": "Laya"
     }"#;
-    let legacy_config: LlmConfig = serde_json::from_str(legacy_json).expect("deserialize legacy config");
+    let legacy_config: LlmConfig =
+        serde_json::from_str(legacy_json).expect("deserialize legacy config");
     assert_eq!(legacy_config.language, Language::French);
 }
 
@@ -56,9 +57,14 @@ fn system_prompts_match_language() {
 #[test]
 fn french_ui_translations_are_complete_and_accurate() {
     let fr = Language::French;
-    assert_eq!(fr.app_title(), "PSTbeetle - Explorateur de courriels et RAG local");
+    assert_eq!(
+        fr.app_title(),
+        "PSTbeetle - Explorateur de courriels et RAG local"
+    );
     assert_eq!(fr.section_mailboxes(), "BOÎTES ET DOSSIERS");
     assert_eq!(fr.section_labels(), "ÉTIQUETTES DE COURRIEL");
+    assert_eq!(fr.section_settings(), "Paramètres");
+    assert_eq!(Language::English.section_settings(), "Settings");
     assert_eq!(fr.section_laya(), "MODÈLE DE DÉCISION LAYA");
     assert_eq!(fr.section_ai(), "JUGE LLM ET RAG");
     assert_eq!(fr.table_header_subj(), "SUJET");

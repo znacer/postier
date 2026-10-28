@@ -78,6 +78,13 @@ impl Language {
         }
     }
 
+    pub fn section_settings(self) -> &'static str {
+        match self {
+            Self::English => "Settings",
+            Self::French => "Paramètres",
+        }
+    }
+
     pub fn section_laya(self) -> &'static str {
         match self {
             Self::English => "LAYA DECISION MODEL",

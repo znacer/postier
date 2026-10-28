@@ -660,6 +660,7 @@ impl PstRagApp {
                 div {
                     style: "display: flex; flex-direction: row; gap: 6px; flex-wrap: wrap;",
                     {choose_gguf_btn}
+                    {download_q8_btn}
                 }
                 span { class: "form-hint", "{laya_exp}" }
             }
@@ -799,6 +800,39 @@ impl PstRagApp {
             }
         });
 
+        let ai_sub_lbl = tr.section_ai();
+        let laya_sub_lbl = tr.section_laya();
+        let storage_sub_lbl = tr.section_storage();
+        let settings_body = rsx! {
+            div {
+                style: "display: flex; flex-direction: column; gap: 10px;",
+                div {
+                    style: "display: flex; flex-direction: column; gap: 4px;",
+                    span {
+                        style: "font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: {muted_color}; text-transform: uppercase; padding: 0 2px;",
+                        "{ai_sub_lbl}"
+                    }
+                    {llm_card}
+                }
+                div {
+                    style: "display: flex; flex-direction: column; gap: 4px;",
+                    span {
+                        style: "font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: {muted_color}; text-transform: uppercase; padding: 0 2px;",
+                        "{laya_sub_lbl}"
+                    }
+                    {laya_card}
+                }
+                div {
+                    style: "display: flex; flex-direction: column; gap: 4px;",
+                    span {
+                        style: "font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: {muted_color}; text-transform: uppercase; padding: 0 2px;",
+                        "{storage_sub_lbl}"
+                    }
+                    {storage_card}
+                }
+            }
+        };
+
         let tile_style = accent_tile_style();
         let brand_sub = tr.brand_subtitle();
         let hide_sb_btn = small_button(tr.btn_hide(), Some(SidebarMessage::ToggleSidebar));
@@ -816,9 +850,11 @@ impl PstRagApp {
                 mailboxes_card,
             ),
             (SidebarSection::Labels, tr.section_labels(), labels_card),
-            (SidebarSection::LayaModel, tr.section_laya(), laya_card),
-            (SidebarSection::AiModels, tr.section_ai(), llm_card),
-            (SidebarSection::Storage, tr.section_storage(), storage_card),
+            (
+                SidebarSection::Settings,
+                tr.section_settings(),
+                settings_body,
+            ),
         ] {
             let collapsed = self.collapsed_sections[section.index()];
             let header_el =
