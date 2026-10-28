@@ -45,12 +45,11 @@ fn config_serializes_and_deserializes_with_language() {
 #[test]
 fn system_prompts_match_language() {
     let fr_prompt = agent_system_prompt(Language::French);
-    assert!(fr_prompt.contains("Vous êtes Dungbeetle"));
     assert!(fr_prompt.contains("courriels"));
     assert!(fr_prompt.contains("[Email 1]"));
 
     let en_prompt = agent_system_prompt(Language::English);
-    assert!(en_prompt.contains("You are Dungbeetle"));
+    assert!(en_prompt.contains("email archive intelligence assistant"));
     assert!(en_prompt.contains("[Email 1]"));
 }
 
@@ -59,7 +58,7 @@ fn french_ui_translations_are_complete_and_accurate() {
     let fr = Language::French;
     assert_eq!(
         fr.app_title(),
-        "PSTbeetle - Explorateur de courriels et RAG local"
+        "PoSTier - Explorateur de courriels et RAG local"
     );
     assert_eq!(fr.section_mailboxes(), "BOÎTES ET DOSSIERS");
     assert_eq!(fr.section_labels(), "ÉTIQUETTES DE COURRIEL");

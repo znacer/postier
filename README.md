@@ -1,11 +1,15 @@
-# PSTbeetle — PST Mail Explorer & RAG
+# PoSTier — PST Mail Explorer & RAG
+
+<p align="center">
+  <img src="assets/logo.svg" alt="PoSTier Logo" width="110" height="110" />
+</p>
 
 Portable, local-first desktop mail explorer (3-pane web-standard layout built with **Dioxus 0.7 Desktop** and **Dioxus Components** / `dioxus-primitives`) for browsing Outlook PST archives, rendering HTML and plain-text emails, labeling messages with **Laya-GGUF** or an **LLM Judge**, and querying a collapsible/resizable RAG Chat pane backed by an OpenAI-compatible private LLM endpoint.
 
 ## Features
 
 - **Modern 3-Pane Mail Explorer UI** (native Rust + **Dioxus 0.7 Desktop** + **Dioxus Components** in `src/components/` on Linux, macOS, and Windows):
-  - **Left Folder, Mailbox & Label Sidebar**: Collapsible navigation sidebar (`285px` expanded / `42px` rail) built with `Sidebar*`, `Collapsible`, `ToggleGroup`, `Input`, `Checkbox`, `Switch`, `Badge`, and `ScrollArea` components. Supports bilingual UI switching (**Français** / **English**), PST archive and hierarchical folder trees (`SidebarMenu` / `SidebarMenuSub`), independent RAG retrieval checkboxes, label filter badges with live counts, Laya-GGUF model management, AI endpoint settings, and storage configuration.
+  - **Left Folder, Mailbox & Label Sidebar**: Collapsible navigation sidebar (`285px` expanded / `42px` rail) built with `Sidebar*`, `Collapsible`, `ToggleGroup`, `Input`, `Checkbox`, `Switch`, `Badge`, and `ScrollArea` components. Supports bilingual UI switching (**Français** / **English**), PST archive and hierarchical folder trees (`SidebarMenu` / `SidebarMenuSub`), independent RAG retrieval checkboxes, label filter badges with live counts, and a unified `Settings` (`Paramètres`) section collapsed by default (grouping LLM endpoint settings, Laya-GGUF model management, and storage configuration).
   - **Center Message Table & Rich Email Reader**:
     - Action bar powered by `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `ToggleGroup`, `Input`, and `Button` components, with a quick-filter bar (FTS5/BM25 with `/` keyboard shortcut), multi-select `Checkbox` rows, `Shift`-key range selection (`Shift + Click` or `Shift + ↑/↓`), and sortable columns (`Subject`, `From`, `Folder`, `Labels`, `Date`).
     - **Structured Envelope Header**: Displays sender `Avatar` / `AvatarFallback` initials, parsed `From` (`De`), `To` (`À`), and `Cc` (`Cc`) contact pills (display name + `<email@domain>`), localized human-readable date and time badges (`chrono`), folder path pill, attachment `Badge` chips, and manual/automatic label controls.

@@ -44,15 +44,15 @@ impl Language {
     // App header & brand
     pub fn app_title(self) -> &'static str {
         match self {
-            Self::English => "PSTbeetle - Mail Explorer and Local RAG",
-            Self::French => "PSTbeetle - Explorateur de courriels et RAG local",
+            Self::English => "PoSTier - Mail Explorer and Local RAG",
+            Self::French => "PoSTier - Explorateur de courriels et RAG local",
         }
     }
 
     pub fn brand_subtitle(self) -> &'static str {
         match self {
-            Self::English => "Thunderbird Mail Explorer",
-            Self::French => "Explorateur de courriels Thunderbird",
+            Self::English => "PST Mail Explorer & Triage",
+            Self::French => "Explorateur et tri de courriels PST",
         }
     }
 
@@ -400,9 +400,9 @@ impl Language {
     // Explorer - Status bar
     pub fn status_ready(self) -> &'static str {
         match self {
-            Self::English => "Ready - Thunderbird mail explorer with Laya and LLM Judge labeling",
+            Self::English => "Ready - PoSTier mail explorer with Laya and LLM Judge labeling",
             Self::French => {
-                "Prêt - Explorateur de courriels Thunderbird avec étiquetage Laya et Juge LLM"
+                "Prêt - Explorateur de courriels PoSTier avec étiquetage Laya et Juge LLM"
             }
         }
     }

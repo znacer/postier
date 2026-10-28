@@ -1,13 +1,13 @@
-# Contributing to PSTbeetle (`pst-rag`)
+# Contributing to PoSTier (`pst-rag`)
 
-Thank you for your interest in contributing to **PSTbeetle**! This document outlines the project structure, setup instructions, coding conventions, and Dioxus (`dx`) development workflow.
+Thank you for your interest in contributing to **PoSTier**! This document outlines the project structure, setup instructions, coding conventions, and Dioxus (`dx`) development workflow.
 
 ---
 
 ## 1. Development Environment Setup
 
 ### Rust Toolchain & Dioxus CLI (`dx`)
-PSTbeetle uses **Rust Edition 2024** and the **Dioxus CLI (`dx`)** for serving, checking, building, and bundling the desktop app:
+PoSTier uses **Rust Edition 2024** and the **Dioxus CLI (`dx`)** for serving, checking, building, and bundling the desktop app:
 
 ```shell
 rustup update stable
@@ -48,6 +48,8 @@ Because the desktop UI is powered by `dioxus` (`0.7`, `desktop` feature) and `wr
 
 ```text
 assets/
+├── logo.svg                # PoSTier vector logo
+├── logo.jpg                # PoSTier high-resolution app icon
 └── dx-components-theme.css # Base theme variables for Dioxus Components
 src/
 ├── main.rs                 # Application entry point

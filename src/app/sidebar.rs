@@ -888,11 +888,52 @@ impl PstRagApp {
                         style: "display: flex; flex-direction: row; align-items: center; gap: 10px;",
                         div {
                             style: "width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; {tile_style}",
-                            span { style: "font-size: 16px; color: {on_prim}; font-weight: 700;", "P" }
+                            svg {
+                                width: "22",
+                                height: "22",
+                                view_box: "0 0 128 128",
+                                fill: "none",
+                                path {
+                                    d: "M20 50L64 20L108 50H20Z",
+                                    fill: "#93c5fd",
+                                    stroke: "{on_prim}",
+                                    stroke_width: "6",
+                                    stroke_linejoin: "round",
+                                }
+                                rect {
+                                    x: "20",
+                                    y: "50",
+                                    width: "88",
+                                    height: "56",
+                                    rx: "8",
+                                    fill: "rgba(30, 58, 138, 0.55)",
+                                    stroke: "{on_prim}",
+                                    stroke_width: "6",
+                                    stroke_linejoin: "round",
+                                }
+                                circle {
+                                    cx: "64",
+                                    cy: "78",
+                                    r: "15",
+                                    stroke: "#93c5fd",
+                                    stroke_width: "6",
+                                }
+                                path {
+                                    d: "M57 78L62 83L72 73",
+                                    stroke: "{on_prim}",
+                                    stroke_width: "6",
+                                    stroke_linecap: "round",
+                                    stroke_linejoin: "round",
+                                }
+                                path {
+                                    d: "M102 22L104.5 29.5L112 32L104.5 34.5L102 42L99.5 34.5L92 32L99.5 29.5L102 22Z",
+                                    fill: "{on_prim}",
+                                }
+                            }
                         }
                         div {
                             style: "flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;",
-                            span { style: "font-size: 14px; color: {bright}; font-weight: 700; letter-spacing: -0.01em;", "PSTbeetle" }
+                            span { style: "font-size: 14px; color: {bright}; font-weight: 700; letter-spacing: -0.01em;", "PoSTier" }
                             span { style: "font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", "{brand_sub}" }
                         }
                         {hide_sb_btn}
