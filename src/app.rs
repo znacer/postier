@@ -201,8 +201,8 @@ impl ChatMessage {
 
 #[derive(Debug, Clone, Copy)]
 enum KeyShortcut {
-    SelectPrevEmail,
-    SelectNextEmail,
+    SelectPrevEmail { extend_range: bool },
+    SelectNextEmail { extend_range: bool },
     ToggleCheckSelected,
     FocusQuickFilter,
     ClearFilterOrSelection,
@@ -255,6 +255,7 @@ pub struct PstRagApp {
     collapsed_sections: [bool; 5],
     explorer_messages: Vec<EmailRecord>,
     selected_message_id: Option<i64>,
+    range_anchor_id: Option<i64>,
     checked_message_ids: HashSet<i64>,
     mail_scope: MailScope,
     label_filter: LabelFilter,
@@ -427,13 +428,28 @@ fn app_root() -> Element {
                 if mods.meta() || mods.ctrl() || mods.alt() {
                     return;
                 }
+                let shift = mods.shift();
                 let shortcut = match evt.key() {
-                    Key::ArrowUp => Some(KeyShortcut::SelectPrevEmail),
-                    Key::ArrowDown => Some(KeyShortcut::SelectNextEmail),
+                    Key::ArrowUp => {
+                        evt.prevent_default();
+                        Some(KeyShortcut::SelectPrevEmail {
+                            extend_range: shift,
+                        })
+                    }
+                    Key::ArrowDown => {
+                        evt.prevent_default();
+                        Some(KeyShortcut::SelectNextEmail {
+                            extend_range: shift,
+                        })
+                    }
                     Key::Escape => Some(KeyShortcut::ClearFilterOrSelection),
                     Key::Character(ref ch) => match ch.as_str() {
-                        "k" => Some(KeyShortcut::SelectPrevEmail),
-                        "j" => Some(KeyShortcut::SelectNextEmail),
+                        "k" | "K" => Some(KeyShortcut::SelectPrevEmail {
+                            extend_range: shift,
+                        }),
+                        "j" | "J" => Some(KeyShortcut::SelectNextEmail {
+                            extend_range: shift,
+                        }),
                         " " | "x" => Some(KeyShortcut::ToggleCheckSelected),
                         "/" => {
                             evt.prevent_default();
@@ -505,6 +521,7 @@ impl PstRagApp {
             collapsed_sections: [false, false, true, false, true],
             explorer_messages: vec![],
             selected_message_id: None,
+            range_anchor_id: None,
             checked_message_ids: HashSet::new(),
             mail_scope: MailScope::AllMessages,
             label_filter: LabelFilter::Any,
@@ -909,12 +926,12 @@ impl PstRagApp {
 
     fn handle_key_shortcut(&mut self, shortcut: KeyShortcut) -> AppTask {
         match shortcut {
-            KeyShortcut::SelectPrevEmail => {
-                self.select_adjacent_email(-1);
+            KeyShortcut::SelectPrevEmail { extend_range } => {
+                self.select_adjacent_email(-1, extend_range);
                 AppTask::none()
             }
-            KeyShortcut::SelectNextEmail => {
-                self.select_adjacent_email(1);
+            KeyShortcut::SelectNextEmail { extend_range } => {
+                self.select_adjacent_email(1, extend_range);
                 AppTask::none()
             }
             KeyShortcut::ToggleCheckSelected => {

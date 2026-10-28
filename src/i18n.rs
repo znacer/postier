@@ -634,13 +634,6 @@ impl Language {
         }
     }
 
-    pub fn btn_range(self) -> &'static str {
-        match self {
-            Self::English => "Range",
-            Self::French => "Plage",
-        }
-    }
-
     pub fn no_subject(self) -> &'static str {
         match self {
             Self::English => "(No subject)",

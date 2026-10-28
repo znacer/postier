@@ -7,7 +7,7 @@ Portable, local-first desktop mail explorer (3-pane web-standard layout built wi
 - **Modern 3-Pane Mail Explorer UI** (native Rust + **Dioxus 0.7 Desktop** + **Dioxus Components** in `src/components/` on Linux, macOS, and Windows):
   - **Left Folder, Mailbox & Label Sidebar**: Collapsible navigation sidebar (`285px` expanded / `42px` rail) built with `Sidebar*`, `Collapsible`, `ToggleGroup`, `Input`, `Checkbox`, `Switch`, `Badge`, and `ScrollArea` components. Supports bilingual UI switching (**Français** / **English**), PST archive and hierarchical folder trees (`SidebarMenu` / `SidebarMenuSub`), independent RAG retrieval checkboxes, label filter badges with live counts, Laya-GGUF model management, AI endpoint settings, and storage configuration.
   - **Center Message Table & Rich Email Reader**:
-    - Action bar powered by `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `ToggleGroup`, `Input`, and `Button` components, with a quick-filter bar (FTS5/BM25 with `/` keyboard shortcut), multi-select `Checkbox` rows, range selection, and sortable columns (`Subject`, `From`, `Folder`, `Labels`, `Date`).
+    - Action bar powered by `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `ToggleGroup`, `Input`, and `Button` components, with a quick-filter bar (FTS5/BM25 with `/` keyboard shortcut), multi-select `Checkbox` rows, `Shift`-key range selection (`Shift + Click` or `Shift + ↑/↓`), and sortable columns (`Subject`, `From`, `Folder`, `Labels`, `Date`).
     - **Structured Envelope Header**: Displays sender `Avatar` / `AvatarFallback` initials, parsed `From` (`De`), `To` (`À`), and `Cc` (`Cc`) contact pills (display name + `<email@domain>`), localized human-readable date and time badges (`chrono`), folder path pill, attachment `Badge` chips, and manual/automatic label controls.
     - **Rich HTML & Plain-Text Email Rendering**: Sanitizes raw HTML emails (stripping scripts, trackers, unsafe attributes, and light-mode-only inline color overrides while preserving tables, lists, headings, blockquotes, and links) and upgrades plain-text emails into semantic HTML with structured reply/forward header cards, nested blockquotes, clickable URLs/emails, signatures, and legal disclaimer blocks inside a `ScrollArea`.
     - **Draggable Splitters**: Smoothly resize the message table height, mail header height, and chat pane width directly with the mouse.
@@ -27,6 +27,8 @@ For safe end-to-end development, the file picker also accepts `.jsonl` fixtures 
 | :--- | :--- |
 | `↓` or `j` | Select next email in the table |
 | `↑` or `k` | Select previous email in the table |
+| `Shift + Click` | Select a contiguous range of emails between the anchor and clicked row |
+| `Shift + ↓/↑` or `Shift + j/k` | Extend range selection to the next or previous email |
 | `Space` or `x` | Toggle selection checkbox on the focused email |
 | `/` | Focus the quick-filter search input |
 | `Esc` | Clear active filter query or multi-email selection |

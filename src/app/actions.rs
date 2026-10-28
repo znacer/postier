@@ -61,6 +61,7 @@ impl PstRagApp {
             .and_then(|d| d.count())
             .unwrap_or(0);
         self.checked_message_ids.clear();
+        self.range_anchor_id = None;
         self.refresh_sources();
         self.refresh_explorer();
         self.status = match fs::write(
@@ -464,6 +465,7 @@ impl PstRagApp {
 
     pub(super) fn select_email(&mut self, id: i64) {
         self.selected_message_id = Some(id);
+        self.range_anchor_id = Some(id);
         if !self.explorer_messages.iter().any(|email| email.id == id)
             && let Ok(db) = Index::open(&self.db_path)
             && let Ok(Some(record)) = db.get_message(id)
@@ -472,7 +474,7 @@ impl PstRagApp {
         }
     }
 
-    pub(super) fn select_adjacent_email(&mut self, delta: isize) {
+    pub(super) fn select_adjacent_email(&mut self, delta: isize, extend_range: bool) {
         if self.explorer_messages.is_empty() {
             return;
         }
@@ -484,7 +486,13 @@ impl PstRagApp {
             .clamp(0, self.explorer_messages.len().saturating_sub(1) as isize)
             as usize;
         if let Some(email) = self.explorer_messages.get(next_idx) {
-            self.selected_message_id = Some(email.id);
+            let next_id = email.id;
+            if extend_range {
+                self.select_range_to(next_id);
+            } else {
+                self.selected_message_id = Some(next_id);
+                self.range_anchor_id = Some(next_id);
+            }
         }
     }
 
@@ -497,6 +505,7 @@ impl PstRagApp {
     }
 
     pub(super) fn toggle_check_email(&mut self, id: i64, checked: bool) {
+        self.range_anchor_id = Some(id);
         if checked {
             self.checked_message_ids.insert(id);
             if self.selected_message_id.is_none() {
@@ -538,7 +547,10 @@ impl PstRagApp {
     }
 
     pub(super) fn select_range_to(&mut self, target_id: i64) {
-        let anchor_id = self.selected_message_id.unwrap_or(target_id);
+        let anchor_id = self
+            .range_anchor_id
+            .or(self.selected_message_id)
+            .unwrap_or(target_id);
         let anchor_idx = self
             .explorer_messages
             .iter()
@@ -553,6 +565,7 @@ impl PstRagApp {
                 self.checked_message_ids.insert(email.id);
             }
             self.selected_message_id = Some(target_id);
+            self.range_anchor_id = Some(anchor_id);
             self.status = self
                 .config
                 .language
@@ -560,6 +573,7 @@ impl PstRagApp {
         } else {
             self.checked_message_ids.insert(target_id);
             self.selected_message_id = Some(target_id);
+            self.range_anchor_id = Some(target_id);
         }
     }
 
@@ -611,6 +625,7 @@ impl PstRagApp {
             Ok(removed) => {
                 self.count = self.count.saturating_sub(removed as u64);
                 self.checked_message_ids.clear();
+                self.range_anchor_id = None;
                 self.refresh_sources();
                 self.refresh_explorer();
                 self.config.language.status_pst_removed(removed)

@@ -293,17 +293,6 @@ html, body, #main {
     border-left-color: var(--primary-hover);
 }
 
-.mail-row .range-btn {
-    opacity: 0.55;
-    font-size: 10px;
-    padding: 2px 6px;
-    border-radius: var(--radius-xs);
-}
-
-.mail-row:hover .range-btn {
-    opacity: 1;
-}
-
 /* Splitters */
 .splitter-v {
     width: 7px;

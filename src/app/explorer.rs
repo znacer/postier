@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{cell::Cell, collections::HashSet};
 
 use dioxus::prelude::*;
 use dioxus_primitives::checkbox::CheckboxState;
@@ -27,6 +27,10 @@ use super::{
     },
     theme::*,
 };
+
+thread_local! {
+    static CHECKBOX_SHIFT_HELD: Cell<bool> = const { Cell::new(false) };
+}
 
 #[derive(Debug, Clone)]
 pub(super) enum ExplorerMessage {
@@ -475,10 +479,6 @@ impl PstRagApp {
             MailSort::DateDesc
         };
 
-        let unlabeled_btn = small_button(
-            tr.unlabeled(),
-            Some(ExplorerMessage::SelectUnlabeledVisible),
-        );
         let labels_hdr = tr.table_header_labels();
         let folder_hdr = tr.table_header_folder();
 
@@ -491,7 +491,6 @@ impl PstRagApp {
                         ExplorerMessage::ToggleCheckAllVisible(matches!(state, CheckboxState::Checked)).dispatch();
                     }
                 }
-                {unlabeled_btn}
                 Button {
                     variant: ButtonVariant::Ghost,
                     size: ButtonSize::Xs,
@@ -614,7 +613,6 @@ impl PstRagApp {
             }
         }
 
-        let range_lbl = tr.btn_range();
         let subj_trunc = truncate_str(subject, 64);
         let sender_trunc = truncate_str(sender, 36);
         let folder_trunc = truncate_str(folder, 24);
@@ -644,24 +642,37 @@ impl PstRagApp {
             div {
                 key: "{email_id}",
                 class: "{row_class}",
-                Checkbox {
-                    checked: check_state,
-                    on_checked_change: move |state: CheckboxState| {
-                        ExplorerMessage::ToggleCheckEmail(email_id, matches!(state, CheckboxState::Checked)).dispatch();
+                div {
+                    style: "display: inline-flex; align-items: center;",
+                    onmousedown: move |evt: MouseEvent| {
+                        CHECKBOX_SHIFT_HELD.with(|cell| cell.set(evt.modifiers().shift()));
+                    },
+                    Checkbox {
+                        checked: check_state,
+                        on_checked_change: move |state: CheckboxState| {
+                            let shift = CHECKBOX_SHIFT_HELD.with(|cell| cell.replace(false));
+                            if shift {
+                                ExplorerMessage::SelectRangeTo(email_id).dispatch();
+                            } else {
+                                ExplorerMessage::ToggleCheckEmail(
+                                    email_id,
+                                    matches!(state, CheckboxState::Checked),
+                                )
+                                .dispatch();
+                            }
+                        }
                     }
                 }
                 Button {
                     variant: ButtonVariant::Ghost,
-                    size: ButtonSize::Xs,
-                    class: "range-btn",
-                    style: "color: {muted_color}; flex-shrink: 0;",
-                    onclick: move |_| ExplorerMessage::SelectRangeTo(email_id).dispatch(),
-                    "{range_lbl}"
-                }
-                Button {
-                    variant: ButtonVariant::Ghost,
                     style: "flex: 1; min-width: 0; height: auto; padding: 0; display: flex; flex-direction: row; align-items: center; gap: 10px;",
-                    onclick: move |_| ExplorerMessage::SelectEmail(email_id).dispatch(),
+                    onclick: move |evt: MouseEvent| {
+                        if evt.modifiers().shift() {
+                            ExplorerMessage::SelectRangeTo(email_id).dispatch();
+                        } else {
+                            ExplorerMessage::SelectEmail(email_id).dispatch();
+                        }
+                    },
                     span {
                         style: "flex: 4; text-align: left; font-size: 12.5px; font-weight: {subj_weight}; color: {subj_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                         "{subj_trunc}"
