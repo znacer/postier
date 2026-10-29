@@ -32,6 +32,9 @@ pub struct LlmConfig {
     pub bearer_token: String,
     #[serde(default = "default_context_chars")]
     pub max_context_chars: usize,
+    /// Number of emails retrieved from the index per chat question (before thread expansion).
+    #[serde(default = "default_context_emails")]
+    pub max_context_emails: usize,
     #[serde(default)]
     pub labeler_backend: LabelerBackend,
     #[serde(default)]
@@ -50,6 +53,27 @@ fn default_context_chars() -> usize {
     16_000
 }
 
+pub const MIN_CONTEXT_EMAILS: usize = 1;
+pub const MAX_CONTEXT_EMAILS: usize = 100;
+
+fn default_context_emails() -> usize {
+    8
+}
+
+impl LlmConfig {
+    /// Number of search hits to retrieve per chat question, clamped to a sane range.
+    pub fn context_email_limit(&self) -> usize {
+        self.max_context_emails
+            .clamp(MIN_CONTEXT_EMAILS, MAX_CONTEXT_EMAILS)
+    }
+
+    /// Total emails allowed after expanding hits with their thread siblings (50% headroom).
+    pub fn context_thread_limit(&self) -> usize {
+        let hits = self.context_email_limit();
+        hits + hits.div_ceil(2)
+    }
+}
+
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
@@ -59,6 +83,7 @@ impl Default for LlmConfig {
             embedding_model: String::new(),
             bearer_token: String::new(),
             max_context_chars: default_context_chars(),
+            max_context_emails: default_context_emails(),
             labeler_backend: LabelerBackend::Laya,
             laya_gguf_path: String::new(),
             language: Language::default(),

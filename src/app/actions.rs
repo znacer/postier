@@ -337,12 +337,12 @@ impl PstRagApp {
                             &search_query,
                             &query_embedding,
                             config.embedding_model.trim(),
-                            8,
+                            config.context_email_limit(),
                         )?
                     } else {
-                        db.search(&search_query, 8)?
+                        db.search(&search_query, config.context_email_limit())?
                     };
-                db.expand_threads(&mut hits, 12)?;
+                db.expand_threads(&mut hits, config.context_thread_limit())?;
                 emit_worker_event(
                     tx,
                     WorkerEvent::Progress(format!(

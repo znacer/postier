@@ -17,6 +17,7 @@ fn config_serializes_and_deserializes_with_language() {
         embedding_model: "text-embedding-3-small".to_string(),
         bearer_token: "sk-test".to_string(),
         max_context_chars: 24_000,
+        max_context_emails: 15,
         labeler_backend: crate::model::LabelerBackend::Laya,
         laya_gguf_path: String::new(),
         language: Language::French,
@@ -28,6 +29,7 @@ fn config_serializes_and_deserializes_with_language() {
 
     let deserialized: LlmConfig = serde_json::from_str(&serialized).expect("deserialize config");
     assert_eq!(deserialized.language, Language::French);
+    assert_eq!(deserialized.max_context_emails, 15);
 
     // Backward compatibility: when "language" is missing in older json, it defaults to French
     let legacy_json = r#"{
@@ -43,6 +45,10 @@ fn config_serializes_and_deserializes_with_language() {
     assert_eq!(legacy_config.language, Language::French);
     // dark_mode defaults to true when omitted
     assert!(legacy_config.dark_mode);
+    // max_context_emails defaults to 8 (12 with thread expansion) when omitted
+    assert_eq!(legacy_config.max_context_emails, 8);
+    assert_eq!(legacy_config.context_email_limit(), 8);
+    assert_eq!(legacy_config.context_thread_limit(), 12);
 }
 
 #[test]

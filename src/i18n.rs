@@ -388,6 +388,24 @@ impl Language {
         }
     }
 
+    pub fn context_emails_label(self) -> &'static str {
+        match self {
+            Self::English => "Emails retrieved per question",
+            Self::French => "Courriels récupérés par question",
+        }
+    }
+
+    pub fn context_emails_hint(self) -> &'static str {
+        match self {
+            Self::English => {
+                "Top search results sent to the LLM (1–100), plus related thread messages"
+            }
+            Self::French => {
+                "Meilleurs résultats envoyés au LLM (1–100), plus les messages du même fil"
+            }
+        }
+    }
+
     pub fn https_required_notice(self) -> &'static str {
         match self {
             Self::English => "HTTPS required except for 127.0.0.1",
