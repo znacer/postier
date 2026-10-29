@@ -53,6 +53,7 @@ pub(super) enum SidebarMessage {
     RemoteEmbeddingsChanged(bool),
     EmbeddingModelChanged(String),
     LanguageChanged(crate::i18n::Language),
+    ThemeChanged(bool),
 }
 
 #[derive(Default)]
@@ -842,6 +843,11 @@ impl PstRagApp {
         let mut lang_pressed = HashSet::new();
         lang_pressed.insert(if is_fr { 0usize } else { 1usize });
 
+        let theme_lbl = tr.theme_label();
+        let is_dark = self.config.dark_mode;
+        let theme_dark_lbl = tr.theme_dark();
+        let theme_light_lbl = tr.theme_light();
+
         let mut sections = Vec::new();
         for (section, label, body) in [
             (
@@ -961,6 +967,57 @@ impl PstRagApp {
                                 index: 1usize,
                                 style: "padding: 4px 10px; font-size: 11px;",
                                 "English"
+                            }
+                        }
+                    }
+                    div {
+                        style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px;",
+                        span { style: "font-size: 11.5px; color: {muted_color}; font-weight: 500;", "{theme_lbl}" }
+                        div {
+                            style: "display: flex; flex-direction: row; align-items: center; gap: 6px;",
+                            svg {
+                                width: "13",
+                                height: "13",
+                                view_box: "0 0 24 24",
+                                fill: "none",
+                                stroke: if !is_dark { "var(--text-accent)" } else { "var(--text-muted)" },
+                                stroke_width: "2",
+                                stroke_linecap: "round",
+                                stroke_linejoin: "round",
+                                circle { cx: "12", cy: "12", r: "5" }
+                                line { x1: "12", y1: "1", x2: "12", y2: "3" }
+                                line { x1: "12", y1: "21", x2: "12", y2: "23" }
+                                line { x1: "4.22", y1: "4.22", x2: "5.64", y2: "5.64" }
+                                line { x1: "18.36", y1: "18.36", x2: "19.78", y2: "19.78" }
+                                line { x1: "1", y1: "12", x2: "3", y2: "12" }
+                                line { x1: "21", y1: "12", x2: "23", y2: "12" }
+                                line { x1: "4.22", y1: "19.78", x2: "5.64", y2: "18.36" }
+                                line { x1: "18.36", y1: "5.64", x2: "19.78", y2: "4.22" }
+                            }
+                            span {
+                                style: if !is_dark { "font-size: 11px; color: var(--text-accent); font-weight: 600;" } else { "font-size: 11px; color: var(--text-muted); font-weight: 400;" },
+                                "{theme_light_lbl}"
+                            }
+                            Switch {
+                                checked: is_dark,
+                                on_checked_change: move |dark: bool| {
+                                    SidebarMessage::ThemeChanged(dark).dispatch();
+                                },
+                            }
+                            span {
+                                style: if is_dark { "font-size: 11px; color: var(--text-accent); font-weight: 600;" } else { "font-size: 11px; color: var(--text-muted); font-weight: 400;" },
+                                "{theme_dark_lbl}"
+                            }
+                            svg {
+                                width: "13",
+                                height: "13",
+                                view_box: "0 0 24 24",
+                                fill: "none",
+                                stroke: if is_dark { "var(--text-accent)" } else { "var(--text-muted)" },
+                                stroke_width: "2",
+                                stroke_linecap: "round",
+                                stroke_linejoin: "round",
+                                path { d: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" }
                             }
                         }
                     }
