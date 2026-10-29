@@ -1,8 +1,12 @@
 use dioxus::prelude::*;
 use dioxus_primitives::toggle::{self, ToggleProps};
 
-#[css_module("/src/components/toggle/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_toggle: &'static str = "dx-toggle";
+}
 
 #[component]
 pub fn Toggle(props: ToggleProps) -> Element {

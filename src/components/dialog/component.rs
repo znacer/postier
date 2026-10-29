@@ -2,8 +2,15 @@ use dioxus::prelude::*;
 use dioxus_primitives::dialog::{self, DialogDescriptionProps, DialogRootProps, DialogTitleProps};
 use dioxus_primitives::{dioxus_attributes::attributes, merge_attributes};
 
-#[css_module("/src/components/dialog/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_dialog: &'static str = "dx-dialog";
+    const dx_dialog_backdrop: &'static str = "dx-dialog-backdrop";
+    const dx_dialog_title: &'static str = "dx-dialog-title";
+    const dx_dialog_description: &'static str = "dx-dialog-description";
+}
 
 #[component]
 pub fn Dialog(props: DialogRootProps) -> Element {

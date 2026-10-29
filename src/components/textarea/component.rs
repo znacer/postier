@@ -1,7 +1,11 @@
 use dioxus::prelude::*;
 
-#[css_module("/src/components/textarea/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_textarea: &'static str = "dx-textarea";
+}
 
 #[derive(Copy, Clone, PartialEq, Default)]
 #[non_exhaustive]

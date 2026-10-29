@@ -3,8 +3,14 @@ use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::merge_attributes;
 use dioxus_primitives::tooltip::{self, TooltipContentProps, TooltipProps, TooltipTriggerProps};
 
-#[css_module("/src/components/tooltip/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_tooltip: &'static str = "dx-tooltip";
+    const dx_tooltip_trigger: &'static str = "dx-tooltip-trigger";
+    const dx_tooltip_content: &'static str = "dx-tooltip-content";
+}
 
 #[component]
 pub fn Tooltip(props: TooltipProps) -> Element {

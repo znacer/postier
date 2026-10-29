@@ -1,10 +1,21 @@
 use dioxus::prelude::*;
-use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::avatar::{self, AvatarState};
+use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::merge_attributes;
 
-#[css_module("/src/components/avatar/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_avatar: &'static str = "dx-avatar";
+    const dx_avatar_sm: &'static str = "dx-avatar-sm";
+    const dx_avatar_md: &'static str = "dx-avatar-md";
+    const dx_avatar_lg: &'static str = "dx-avatar-lg";
+    const dx_avatar_circle: &'static str = "dx-avatar-circle";
+    const dx_avatar_rounded: &'static str = "dx-avatar-rounded";
+    const dx_avatar_image: &'static str = "dx-avatar-image";
+    const dx_avatar_fallback: &'static str = "dx-avatar-fallback";
+}
 
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum AvatarImageSize {
@@ -17,9 +28,9 @@ pub enum AvatarImageSize {
 impl AvatarImageSize {
     fn to_class(self) -> &'static str {
         match self {
-            AvatarImageSize::Small => Styles::dx_avatar_sm.inner,
-            AvatarImageSize::Medium => Styles::dx_avatar_md.inner,
-            AvatarImageSize::Large => Styles::dx_avatar_lg.inner,
+            AvatarImageSize::Small => Styles::dx_avatar_sm,
+            AvatarImageSize::Medium => Styles::dx_avatar_md,
+            AvatarImageSize::Large => Styles::dx_avatar_lg,
         }
     }
 }
@@ -34,8 +45,8 @@ pub enum AvatarShape {
 impl AvatarShape {
     fn to_class(self) -> &'static str {
         match self {
-            AvatarShape::Circle => Styles::dx_avatar_circle.inner,
-            AvatarShape::Rounded => Styles::dx_avatar_rounded.inner,
+            AvatarShape::Circle => Styles::dx_avatar_circle,
+            AvatarShape::Rounded => Styles::dx_avatar_rounded,
         }
     }
 }
@@ -77,9 +88,7 @@ pub fn Avatar(props: AvatarProps) -> Element {
         props.size.to_class(),
         props.shape.to_class()
     );
-    let base = attributes!(span {
-        class
-    });
+    let base = attributes!(span { class });
     let merged = merge_attributes(vec![base, props.attributes]);
 
     rsx! {

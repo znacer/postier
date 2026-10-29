@@ -1,8 +1,13 @@
 use dioxus::prelude::*;
 use dioxus_primitives::toggle_group::{self, ToggleGroupProps, ToggleItemProps};
 
-#[css_module("/src/components/toggle_group/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_toggle_group: &'static str = "dx-toggle-group";
+    const dx_toggle_item: &'static str = "dx-toggle-item";
+}
 
 #[component]
 pub fn ToggleGroup(props: ToggleGroupProps) -> Element {

@@ -11,8 +11,28 @@ use dioxus_primitives::calendar::{
 use dioxus_primitives::{dioxus_attributes::attributes, merge_attributes};
 use time::{Date, Month, UtcDateTime, Weekday};
 
-#[css_module("/src/components/calendar/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_calendar: &'static str = "dx-calendar";
+    const dx_calendar_view: &'static str = "dx-calendar-view";
+    const dx_calendar_navigation: &'static str = "dx-calendar-navigation";
+    const dx_calendar_nav_prev: &'static str = "dx-calendar-nav-prev";
+    const dx_calendar_nav_next: &'static str = "dx-calendar-nav-next";
+    const dx_calendar_month_select_container: &'static str = "dx-calendar-month-select-container";
+    const dx_calendar_month_select: &'static str = "dx-calendar-month-select";
+    const dx_calendar_month_select_value: &'static str = "dx-calendar-month-select-value";
+    const dx_calendar_year_select_container: &'static str = "dx-calendar-year-select-container";
+    const dx_calendar_year_select: &'static str = "dx-calendar-year-select";
+    const dx_calendar_year_select_value: &'static str = "dx-calendar-year-select-value";
+    const dx_calendar_grid: &'static str = "dx-calendar-grid";
+    const dx_calendar_grid_header: &'static str = "dx-calendar-grid-header";
+    const dx_calendar_grid_day_header: &'static str = "dx-calendar-grid-day-header";
+    const dx_calendar_grid_body: &'static str = "dx-calendar-grid-body";
+    const dx_calendar_grid_week: &'static str = "dx-calendar-grid-week";
+    const dx_calendar_grid_cell: &'static str = "dx-calendar-grid-cell";
+}
 
 fn fixed_date(year: i32, month: Month, day: u8) -> Date {
     Date::from_calendar_date(year, month, day).expect("valid fixed date")

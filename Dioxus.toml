@@ -1,0 +1,7 @@
+[application]
+name = "PoSTier"
+
+[bundle]
+identifier = "com.postier"
+publisher = "S4080"
+icon = ["assets/logo.jpg"]

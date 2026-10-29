@@ -6816,6 +6816,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "postier"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dioxus",
+ "dioxus-icons",
+ "dioxus-primitives",
+ "dioxus-ssr",
+ "outlook-pst",
+ "reqwest 0.13.5",
+ "rfd 0.15.4",
+ "rig",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "potential_utf"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7003,29 +7026,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
 dependencies = [
  "prost",
-]
-
-[[package]]
-name = "pst-rag"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "dioxus",
- "dioxus-icons",
- "dioxus-primitives",
- "dioxus-ssr",
- "outlook-pst",
- "reqwest 0.13.5",
- "rfd 0.15.4",
- "rig",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "time",
- "tokio",
- "url",
 ]
 
 [[package]]

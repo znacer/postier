@@ -2,8 +2,12 @@ use dioxus::prelude::*;
 use dioxus_primitives::separator::{self, SeparatorProps};
 use dioxus_primitives::{dioxus_attributes::attributes, merge_attributes};
 
-#[css_module("/src/components/separator/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_separator: &'static str = "dx-separator";
+}
 
 #[component]
 pub fn Separator(props: SeparatorProps) -> Element {

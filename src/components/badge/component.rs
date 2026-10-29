@@ -1,8 +1,12 @@
 use dioxus::prelude::*;
 use dioxus_icons::lucide::BadgeCheck;
 
-#[css_module("/src/components/badge/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_badge: &'static str = "dx-badge";
+}
 
 #[derive(Copy, Clone, PartialEq, Default)]
 #[non_exhaustive]

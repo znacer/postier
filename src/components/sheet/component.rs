@@ -1,13 +1,23 @@
 use dioxus::prelude::*;
 use dioxus_icons::lucide::X;
-use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::dialog::{
     self, DialogCtx, DialogDescriptionProps, DialogRootProps, DialogTitleProps,
 };
+use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::merge_attributes;
 
-#[css_module("/src/components/sheet/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_sheet: &'static str = "dx-sheet";
+    const dx_sheet_root: &'static str = "dx-sheet-root";
+    const dx_sheet_close: &'static str = "dx-sheet-close";
+    const dx_sheet_header: &'static str = "dx-sheet-header";
+    const dx_sheet_footer: &'static str = "dx-sheet-footer";
+    const dx_sheet_title: &'static str = "dx-sheet-title";
+    const dx_sheet_description: &'static str = "dx-sheet-description";
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum SheetSide {
@@ -57,7 +67,9 @@ pub fn Sheet(props: DialogRootProps) -> Element {
 }
 
 #[component]
-pub fn SheetContentClose(#[props(extends = GlobalAttributes)] attributes: Vec<Attribute>) -> Element {
+pub fn SheetContentClose(
+    #[props(extends = GlobalAttributes)] attributes: Vec<Attribute>,
+) -> Element {
     let base = attributes!(button {
         class: Styles::dx_sheet_close,
     });

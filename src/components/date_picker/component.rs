@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use dioxus_icons::lucide::ChevronDown;
 use dioxus_primitives::{
+    ContentAlign,
     calendar::DateRange,
     date_picker::{
         self, DatePickerDaySegmentProps, DatePickerInputProps, DatePickerMonthSegmentProps,
@@ -11,15 +12,23 @@ use dioxus_primitives::{
     dioxus_attributes::attributes,
     merge_attributes,
     popover::{PopoverContentProps, PopoverTriggerProps},
-    ContentAlign,
 };
 use time::{Date, Month};
 
 use super::super::calendar::*;
 use super::super::popover::*;
 
-#[css_module("/src/components/date_picker/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_date_picker: &'static str = "dx-date-picker";
+    const dx_date_picker_group: &'static str = "dx-date-picker-group";
+    const dx_date_segment: &'static str = "dx-date-segment";
+    const dx_date_picker_popover_trigger: &'static str = "dx-date-picker-popover-trigger";
+    const dx_date_picker_trigger: &'static str = "dx-date-picker-trigger";
+    const dx_date_picker_popover_content: &'static str = "dx-date-picker-popover-content";
+}
 
 fn fixed_date(year: i32, month: Month, day: u8) -> Date {
     Date::from_calendar_date(year, month, day).expect("valid fixed date")
@@ -446,5 +455,4 @@ mod tests {
         assert!(html.contains("11"));
         assert!(html.contains("Show Calendar"));
     }
-
 }

@@ -2,8 +2,14 @@ use dioxus::prelude::*;
 use dioxus_primitives::toolbar::{self, ToolbarButtonProps, ToolbarProps, ToolbarSeparatorProps};
 use dioxus_primitives::{dioxus_attributes::attributes, merge_attributes};
 
-#[css_module("/src/components/toolbar/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_toolbar: &'static str = "dx-toolbar";
+    const dx_toolbar_separator: &'static str = "dx-toolbar-separator";
+    const dx_toolbar_group: &'static str = "dx-toolbar-group";
+}
 
 #[component]
 pub fn Toolbar(props: ToolbarProps) -> Element {

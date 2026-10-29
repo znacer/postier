@@ -2,8 +2,22 @@ use crate::components::separator::Separator;
 use dioxus::prelude::*;
 use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::merge_attributes;
-#[css_module("/src/components/item/style.css")]
+
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_item_group: &'static str = "dx-item-group";
+    const dx_item_separator: &'static str = "dx-item-separator";
+    const dx_item: &'static str = "dx-item";
+    const dx_item_media: &'static str = "dx-item-media";
+    const dx_item_content: &'static str = "dx-item-content";
+    const dx_item_title: &'static str = "dx-item-title";
+    const dx_item_description: &'static str = "dx-item-description";
+    const dx_item_actions: &'static str = "dx-item-actions";
+    const dx_item_header: &'static str = "dx-item-header";
+    const dx_item_footer: &'static str = "dx-item-footer";
+}
 
 #[derive(Copy, Clone, PartialEq, Default)]
 #[non_exhaustive]

@@ -6,8 +6,13 @@ use dioxus_primitives::collapsible::{
 use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::merge_attributes;
 
-#[css_module("/src/components/collapsible/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_collapsible_trigger: &'static str = "dx-collapsible-trigger";
+    const dx_collapsible_content: &'static str = "dx-collapsible-content";
+}
 
 #[component]
 pub fn Collapsible(props: CollapsibleProps) -> Element {

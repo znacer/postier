@@ -39,7 +39,7 @@ use chat::{ChatPaneMessage, chat_question_input_id};
 use explorer::{ExplorerMessage, explorer_filter_input_id, reader_header_id};
 use markdown::{MdBlock, parse_markdown};
 use sidebar::SidebarMessage;
-use theme::{APP_CSS, DX_COMPONENTS_THEME_CSS, SplitAxis, page_style, splitter};
+use theme::{APP_CSS, DX_COMPONENTS_CSS, DX_COMPONENTS_THEME_CSS, SplitAxis, page_style, splitter};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Point {
@@ -415,6 +415,7 @@ fn app_root() -> Element {
 
     rsx! {
         style { "{DX_COMPONENTS_THEME_CSS}" }
+        style { "{DX_COMPONENTS_CSS}" }
         style { "{APP_CSS}" }
         div {
             tabindex: "0",
@@ -1058,8 +1059,7 @@ impl PstRagApp {
     fn view(&self) -> Element {
         let sb = self.sidebar();
         let exp = self.explorer();
-        let chat_open = self.chat_open;
-        let chat_splitter = if chat_open {
+        let chat_splitter = if self.chat_open {
             Some(splitter(
                 SplitAxis::Vertical,
                 self.is_resizing(Splitter::ChatWidth),

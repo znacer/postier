@@ -2,8 +2,13 @@ use dioxus::prelude::*;
 use dioxus_icons::lucide::Check;
 use dioxus_primitives::checkbox::{self, CheckboxProps};
 
-#[css_module("/src/components/checkbox/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_checkbox: &'static str = "dx-checkbox";
+    const dx_checkbox_indicator: &'static str = "dx-checkbox-indicator";
+}
 
 #[component]
 pub fn Checkbox(props: CheckboxProps) -> Element {

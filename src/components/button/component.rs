@@ -2,8 +2,12 @@ use dioxus::prelude::*;
 use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::merge_attributes;
 
-#[css_module("/src/components/button/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_button: &'static str = "dx-button";
+}
 
 #[derive(Copy, Clone, PartialEq, Default)]
 #[non_exhaustive]

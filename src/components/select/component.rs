@@ -7,12 +7,22 @@ use dioxus_primitives::{dioxus_attributes::attributes, merge_attributes};
 
 pub use dioxus_primitives::select::SelectGroup;
 
-#[css_module("/src/components/select/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_select: &'static str = "dx-select";
+    const dx_select_trigger: &'static str = "dx-select-trigger";
+    const dx_select_list: &'static str = "dx-select-list";
+    const dx_select_group_label: &'static str = "dx-select-group-label";
+    const dx_select_option: &'static str = "dx-select-option";
+}
 
 #[component]
 pub fn Select<T: Clone + PartialEq + 'static>(props: SelectProps<T>) -> Element {
-    let base = attributes!(div { class: Styles::dx_select });
+    let base = attributes!(div {
+        class: Styles::dx_select
+    });
     let merged = merge_attributes(vec![base, props.attributes]);
 
     rsx! {
@@ -47,7 +57,9 @@ pub fn Select<T: Clone + PartialEq + 'static>(props: SelectProps<T>) -> Element 
 
 #[component]
 pub fn SelectMulti<T: Clone + PartialEq + 'static>(props: SelectMultiProps<T>) -> Element {
-    let base = attributes!(div { class: Styles::dx_select });
+    let base = attributes!(div {
+        class: Styles::dx_select
+    });
     let merged = merge_attributes(vec![base, props.attributes]);
 
     rsx! {
@@ -82,7 +94,9 @@ pub fn SelectMulti<T: Clone + PartialEq + 'static>(props: SelectMultiProps<T>) -
 
 #[component]
 pub fn SelectGroupLabel(props: SelectGroupLabelProps) -> Element {
-    let base = attributes!(div { class: Styles::dx_select_group_label });
+    let base = attributes!(div {
+        class: Styles::dx_select_group_label
+    });
     let merged = merge_attributes(vec![base, props.attributes]);
 
     rsx! {
@@ -96,7 +110,9 @@ pub fn SelectGroupLabel(props: SelectGroupLabelProps) -> Element {
 
 #[component]
 pub fn SelectOption<T: Clone + PartialEq + 'static>(props: SelectOptionProps<T>) -> Element {
-    let base = attributes!(div { class: Styles::dx_select_option });
+    let base = attributes!(div {
+        class: Styles::dx_select_option
+    });
     let merged = merge_attributes(vec![base, props.attributes]);
 
     rsx! {

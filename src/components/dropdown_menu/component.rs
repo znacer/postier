@@ -6,8 +6,15 @@ use dioxus_primitives::dropdown_menu::{
 };
 use dioxus_primitives::merge_attributes;
 
-#[css_module("/src/components/dropdown_menu/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_dropdown_menu: &'static str = "dx-dropdown-menu";
+    const dx_dropdown_menu_trigger: &'static str = "dx-dropdown-menu-trigger";
+    const dx_dropdown_menu_content: &'static str = "dx-dropdown-menu-content";
+    const dx_dropdown_menu_item: &'static str = "dx-dropdown-menu-item";
+}
 
 #[component]
 pub fn DropdownMenu(props: DropdownMenuProps) -> Element {

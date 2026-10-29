@@ -4,8 +4,14 @@ use dioxus_primitives::popover::{
 };
 use dioxus_primitives::{dioxus_attributes::attributes, merge_attributes};
 
-#[css_module("/src/components/popover/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_popover: &'static str = "dx-popover";
+    const dx_popover_trigger: &'static str = "dx-popover-trigger";
+    const dx_popover_content: &'static str = "dx-popover-content";
+}
 
 #[component]
 pub fn PopoverRoot(props: PopoverRootProps) -> Element {

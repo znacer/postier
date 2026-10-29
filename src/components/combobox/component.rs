@@ -1,12 +1,23 @@
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Check, ChevronsUpDown};
 use dioxus_primitives::combobox::{
-    self, default_combobox_filter, ComboboxEmptyProps, ComboboxOptionProps,
+    self, ComboboxEmptyProps, ComboboxOptionProps, default_combobox_filter,
 };
 use dioxus_primitives::{dioxus_attributes::attributes, merge_attributes};
 
-#[css_module("/src/components/combobox/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_combobox: &'static str = "dx-combobox";
+    const dx_combobox_input_wrapper: &'static str = "dx-combobox-input-wrapper";
+    const dx_combobox_input: &'static str = "dx-combobox-input";
+    const dx_combobox_expand_icon: &'static str = "dx-combobox-expand-icon";
+    const dx_combobox_list: &'static str = "dx-combobox-list";
+    const dx_combobox_empty: &'static str = "dx-combobox-empty";
+    const dx_combobox_option: &'static str = "dx-combobox-option";
+    const dx_combobox_check_icon: &'static str = "dx-combobox-check-icon";
+}
 
 #[derive(Props, Clone, PartialEq)]
 pub struct ComboboxProps<T: Clone + PartialEq + 'static = String> {
@@ -63,7 +74,9 @@ pub struct ComboboxProps<T: Clone + PartialEq + 'static = String> {
 
 #[component]
 pub fn Combobox<T: Clone + PartialEq + 'static>(props: ComboboxProps<T>) -> Element {
-    let base = attributes!(div { class: Styles::dx_combobox });
+    let base = attributes!(div {
+        class: Styles::dx_combobox
+    });
     let merged = merge_attributes(vec![base, props.attributes]);
 
     rsx! {
@@ -103,7 +116,9 @@ pub fn Combobox<T: Clone + PartialEq + 'static>(props: ComboboxProps<T>) -> Elem
 
 #[component]
 pub fn ComboboxEmpty(props: ComboboxEmptyProps) -> Element {
-    let base = attributes!(div { class: Styles::dx_combobox_empty });
+    let base = attributes!(div {
+        class: Styles::dx_combobox_empty
+    });
     let merged = merge_attributes(vec![base, props.attributes]);
 
     rsx! {
@@ -116,7 +131,9 @@ pub fn ComboboxEmpty(props: ComboboxEmptyProps) -> Element {
 
 #[component]
 pub fn ComboboxOption<T: Clone + PartialEq + 'static>(props: ComboboxOptionProps<T>) -> Element {
-    let base = attributes!(div { class: Styles::dx_combobox_option });
+    let base = attributes!(div {
+        class: Styles::dx_combobox_option
+    });
     let merged = merge_attributes(vec![base, props.attributes]);
 
     rsx! {

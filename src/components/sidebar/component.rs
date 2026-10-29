@@ -12,8 +12,45 @@ use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::merge_attributes;
 use dioxus_primitives::use_controlled;
 
-#[css_module("/src/components/sidebar/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_sr_only: &'static str = "dx-sr-only";
+    const dx_sidebar_wrapper: &'static str = "dx-sidebar-wrapper";
+    const dx_sidebar_static: &'static str = "dx-sidebar-static";
+    const dx_sidebar_sheet: &'static str = "dx-sidebar-sheet";
+    const dx_sidebar_sheet_close: &'static str = "dx-sidebar-sheet-close";
+    const dx_sidebar_mobile_inner: &'static str = "dx-sidebar-mobile-inner";
+    const dx_sidebar_container: &'static str = "dx-sidebar-container";
+    const dx_sidebar_desktop: &'static str = "dx-sidebar-desktop";
+    const dx_sidebar_gap: &'static str = "dx-sidebar-gap";
+    const dx_sidebar_inner: &'static str = "dx-sidebar-inner";
+    const dx_sidebar_trigger: &'static str = "dx-sidebar-trigger";
+    const dx_sidebar_trigger_icon: &'static str = "dx-sidebar-trigger-icon";
+    const dx_sidebar_rail: &'static str = "dx-sidebar-rail";
+    const dx_sidebar_inset: &'static str = "dx-sidebar-inset";
+    const dx_sidebar_header: &'static str = "dx-sidebar-header";
+    const dx_sidebar_content: &'static str = "dx-sidebar-content";
+    const dx_sidebar_footer: &'static str = "dx-sidebar-footer";
+    const dx_sidebar_separator: &'static str = "dx-sidebar-separator";
+    const dx_sidebar_group: &'static str = "dx-sidebar-group";
+    const dx_sidebar_group_label: &'static str = "dx-sidebar-group-label";
+    const dx_sidebar_group_action: &'static str = "dx-sidebar-group-action";
+    const dx_sidebar_group_content: &'static str = "dx-sidebar-group-content";
+    const dx_sidebar_menu: &'static str = "dx-sidebar-menu";
+    const dx_sidebar_menu_item: &'static str = "dx-sidebar-menu-item";
+    const dx_sidebar_menu_button: &'static str = "dx-sidebar-menu-button";
+    const dx_sidebar_tooltip: &'static str = "dx-sidebar-tooltip";
+    const dx_sidebar_menu_action: &'static str = "dx-sidebar-menu-action";
+    const dx_sidebar_menu_badge: &'static str = "dx-sidebar-menu-badge";
+    const dx_sidebar_menu_skeleton: &'static str = "dx-sidebar-menu-skeleton";
+    const dx_sidebar_menu_skeleton_icon: &'static str = "dx-sidebar-menu-skeleton-icon";
+    const dx_sidebar_menu_skeleton_text: &'static str = "dx-sidebar-menu-skeleton-text";
+    const dx_sidebar_menu_sub: &'static str = "dx-sidebar-menu-sub";
+    const dx_sidebar_menu_sub_item: &'static str = "dx-sidebar-menu-sub-item";
+    const dx_sidebar_menu_sub_button: &'static str = "dx-sidebar-menu-sub-button";
+}
 
 // constants
 const SIDEBAR_WIDTH: &str = "16rem";

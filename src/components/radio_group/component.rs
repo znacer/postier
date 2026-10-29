@@ -1,8 +1,13 @@
 use dioxus::prelude::*;
 use dioxus_primitives::radio_group::{self, RadioGroupProps, RadioItemProps};
 
-#[css_module("/src/components/radio_group/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_radio_group: &'static str = "dx-radio-group";
+    const dx_radio_item: &'static str = "dx-radio-item";
+}
 
 #[component]
 pub fn RadioGroup(props: RadioGroupProps) -> Element {

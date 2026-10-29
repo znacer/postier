@@ -4,8 +4,16 @@ use dioxus_primitives::accordion::{
     self, AccordionContentProps, AccordionItemProps, AccordionProps, AccordionTriggerProps,
 };
 
-#[css_module("/src/components/accordion/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_accordion: &'static str = "dx-accordion";
+    const dx_accordion_item: &'static str = "dx-accordion-item";
+    const dx_accordion_trigger: &'static str = "dx-accordion-trigger";
+    const dx_accordion_expand_icon: &'static str = "dx-accordion-expand-icon";
+    const dx_accordion_content: &'static str = "dx-accordion-content";
+}
 
 #[component]
 pub fn Accordion(props: AccordionProps) -> Element {

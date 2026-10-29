@@ -1,8 +1,13 @@
 use dioxus::prelude::*;
 use dioxus_primitives::switch::{self, SwitchProps};
 
-#[css_module("/src/components/switch/style.css")]
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_switch: &'static str = "dx-switch";
+    const dx_switch_thumb: &'static str = "dx-switch-thumb";
+}
 
 #[component]
 pub fn Switch(props: SwitchProps) -> Element {

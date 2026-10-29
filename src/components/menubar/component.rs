@@ -3,8 +3,17 @@ use dioxus_primitives::menubar::{
     self, MenubarContentProps, MenubarItemProps, MenubarMenuProps, MenubarProps,
     MenubarTriggerProps,
 };
-#[css_module("/src/components/menubar/style.css")]
+
+#[allow(non_upper_case_globals)]
 struct Styles;
+#[allow(non_upper_case_globals)]
+impl Styles {
+    const dx_menubar: &'static str = "dx-menubar";
+    const dx_menubar_menu: &'static str = "dx-menubar-menu";
+    const dx_menubar_trigger: &'static str = "dx-menubar-trigger";
+    const dx_menubar_content: &'static str = "dx-menubar-content";
+    const dx_menubar_item: &'static str = "dx-menubar-item";
+}
 
 #[component]
 pub fn Menubar(props: MenubarProps) -> Element {
