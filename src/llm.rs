@@ -38,6 +38,12 @@ pub struct LlmConfig {
     pub laya_gguf_path: String,
     #[serde(default)]
     pub language: Language,
+    #[serde(default = "default_true")]
+    pub dark_mode: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_context_chars() -> usize {
@@ -56,6 +62,7 @@ impl Default for LlmConfig {
             labeler_backend: LabelerBackend::Laya,
             laya_gguf_path: String::new(),
             language: Language::default(),
+            dark_mode: true,
         }
     }
 }

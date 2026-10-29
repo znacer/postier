@@ -15,18 +15,27 @@ pub(super) struct Color {
     pub g: f32,
     pub b: f32,
     pub a: f32,
+    pub var: Option<&'static str>,
 }
 
 impl Color {
     pub const fn from_rgb(r: f32, g: f32, b: f32) -> Self {
-        Self { r, g, b, a: 1.0 }
+        Self { r, g, b, a: 1.0, var: None }
+    }
+
+    pub const fn from_rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
+        Self { r, g, b, a, var: None }
     }
 
     pub const fn from_hex(hex: u32) -> Self {
         let r = ((hex >> 16) & 0xFF) as f32 / 255.0;
         let g = ((hex >> 8) & 0xFF) as f32 / 255.0;
         let b = (hex & 0xFF) as f32 / 255.0;
-        Self { r, g, b, a: 1.0 }
+        Self { r, g, b, a: 1.0, var: None }
+    }
+
+    pub const fn from_var(var: &'static str) -> Self {
+        Self { r: 0.0, g: 0.0, b: 0.0, a: 1.0, var: Some(var) }
     }
 
     pub fn parse(hex: &str) -> Option<Self> {
@@ -42,6 +51,9 @@ impl Color {
 
 impl fmt::Display for Color {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(var) = self.var {
+            return write!(f, "var({var})");
+        }
         let r = (self.r.clamp(0.0, 1.0) * 255.0).round() as u8;
         let g = (self.g.clamp(0.0, 1.0) * 255.0).round() as u8;
         let b = (self.b.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -59,6 +71,7 @@ const fn shade(color: Color, amount: f32) -> Color {
         g: color.g * amount,
         b: color.b * amount,
         a: color.a,
+        var: None,
     }
 }
 
@@ -72,7 +85,9 @@ const ERROR: Color = Color::from_hex(0xEF4444);
 const CUSTOM1: Color = Color::from_hex(0x0284C7);
 
 const ACCENT_TEXT: Color = Color::from_hex(0x60A5FA);
+#[allow(dead_code)]
 const BRIGHT_TEXT: Color = Color::from_hex(0xF1F5F9);
+#[allow(dead_code)]
 const MUTED: Color = Color::from_hex(0x94A3B8);
 const BACKGROUND: Color = Color::from_hex(0x0B0F17);
 const ON_PRIMARY: Color = Color::from_hex(0xF8FAFC);
@@ -87,13 +102,13 @@ pub(super) const fn primary() -> Color {
     PRIMARY
 }
 pub(super) const fn accent_text() -> Color {
-    ACCENT_TEXT
+    Color::from_var("--text-accent")
 }
 pub(super) const fn bright_text() -> Color {
-    BRIGHT_TEXT
+    Color::from_var("--text-primary")
 }
 pub(super) const fn muted() -> Color {
-    MUTED
+    Color::from_var("--text-muted")
 }
 #[allow(dead_code)]
 pub(super) const fn background() -> Color {
@@ -178,7 +193,7 @@ pub(super) const DX_COMPONENTS_CSS: &str = concat!(
 );
 
 pub(super) const APP_CSS: &str = r#"
-:root {
+:root, [data-theme="dark"], html[data-theme="dark"] {
     --dark: initial;
     --light: ;
 
@@ -189,8 +204,8 @@ pub(super) const APP_CSS: &str = r#"
     --primary-color-3: #131b2e;
     --primary-color-4: #172136;
     --primary-color-5: #1a243b;
-    --primary-color-6: rgba(148, 163, 184, 0.16);
-    --primary-color-7: rgba(148, 163, 184, 0.28);
+    --primary-color-6: rgba(148, 163, 184, 0.22);
+    --primary-color-7: rgba(148, 163, 184, 0.32);
 
     --secondary-color: #ffffff;
     --secondary-color-1: #f8fafc;
@@ -209,13 +224,13 @@ pub(super) const APP_CSS: &str = r#"
     --bg-sidebar: #0f1420;
     --bg-surface: #131b2e;
     --bg-elevated: #1a243b;
-    --bg-hover: rgba(255, 255, 255, 0.045);
-    --bg-active: rgba(59, 130, 246, 0.14);
+    --bg-hover: rgba(255, 255, 255, 0.05);
+    --bg-active: rgba(59, 130, 246, 0.16);
     --bg-input: #0b101d;
 
     --border-subtle: rgba(148, 163, 184, 0.12);
-    --border-default: rgba(148, 163, 184, 0.18);
-    --border-strong: rgba(148, 163, 184, 0.28);
+    --border-default: rgba(148, 163, 184, 0.20);
+    --border-strong: rgba(148, 163, 184, 0.32);
     --border-focus: #3b82f6;
 
     --text-primary: #f1f5f9;
@@ -243,6 +258,74 @@ pub(super) const APP_CSS: &str = r#"
 
     --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
     --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+[data-theme="light"], html[data-theme="light"] {
+    --dark: ;
+    --light: initial;
+
+    /* Override dx-components-theme variables to match clean light palette */
+    --primary-color: #ffffff;
+    --primary-color-1: #f8fafc;
+    --primary-color-2: #f1f5f9;
+    --primary-color-3: #e2e8f0;
+    --primary-color-4: #cbd5e1;
+    --primary-color-5: #e2e8f0;
+    --primary-color-6: rgba(15, 23, 42, 0.12);
+    --primary-color-7: rgba(15, 23, 42, 0.24);
+
+    --secondary-color: #0f172a;
+    --secondary-color-1: #1e293b;
+    --secondary-color-2: #2563eb;
+    --secondary-color-3: #334155;
+    --secondary-color-4: #475569;
+    --secondary-color-5: #64748b;
+    --secondary-color-6: #94a3b8;
+
+    --focused-border-color: #2563eb;
+    --primary-error-color: #dc2626;
+    --secondary-error-color: #ef4444;
+    --contrast-error-color: #991b1b;
+
+    --bg-app: #f8fafc;
+    --bg-sidebar: #f1f5f9;
+    --bg-surface: #ffffff;
+    --bg-elevated: #f1f5f9;
+    --bg-hover: rgba(15, 23, 42, 0.05);
+    --bg-active: rgba(37, 99, 235, 0.12);
+    --bg-input: #ffffff;
+
+    --border-subtle: rgba(15, 23, 42, 0.08);
+    --border-default: rgba(15, 23, 42, 0.16);
+    --border-strong: rgba(15, 23, 42, 0.28);
+    --border-focus: #2563eb;
+
+    --text-primary: #0f172a;
+    --text-secondary: #334155;
+    --text-muted: #64748b;
+    --text-accent: #2563eb;
+    --text-on-primary: #ffffff;
+
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --primary-subtle: rgba(37, 99, 235, 0.10);
+    --danger: #ef4444;
+    --danger-subtle: rgba(239, 68, 68, 0.10);
+    --success: #10b981;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="dark"] [class~="dxc-system"], html[data-theme="dark"] [class~="dxc-system"] {
+    --dxc-light-on: ;
+    --dxc-dark-on: initial;
+}
+
+[data-theme="light"] [class~="dxc-system"], html[data-theme="light"] [class~="dxc-system"] {
+    --dxc-light-on: initial;
+    --dxc-dark-on: ;
 }
 
 * {
@@ -344,7 +427,7 @@ html, body, #main {
 }
 
 .mail-row:hover {
-    background-color: #172136;
+    background-color: var(--bg-hover);
 }
 
 .mail-row.checked {
@@ -461,7 +544,7 @@ html, body, #main {
     justify-content: space-between;
     gap: 14px;
     padding: 9px 12px;
-    background-color: rgba(15, 23, 42, 0.5);
+    background-color: var(--bg-elevated);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
 }
@@ -690,7 +773,7 @@ html, body, #main {
     margin: 8px 0 12px 0;
     padding: 8px 14px;
     border-left: 3px solid rgba(96, 165, 250, 0.55);
-    background-color: rgba(15, 23, 42, 0.55);
+    background-color: var(--bg-hover);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     color: var(--text-secondary);
 }
@@ -804,7 +887,7 @@ html, body, #main {
 .email-html-body code {
     font-family: var(--font-mono);
     font-size: 12px;
-    background-color: rgba(15, 23, 42, 0.7);
+    background-color: var(--bg-elevated);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-xs);
     padding: 1px 5px;
@@ -828,7 +911,7 @@ html, body, #main {
 .email-html-body .email-disclaimer {
     margin-top: 14px;
     padding: 8px 12px;
-    background-color: rgba(15, 23, 42, 0.48);
+    background-color: var(--bg-hover);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
     font-size: 11px;
@@ -1027,12 +1110,14 @@ pub(super) fn label_badge(name: &str, hex_color: &str, detail: Option<String>) -
         g: base.g * 0.24,
         b: base.b * 0.24,
         a: 0.92,
+        var: None,
     };
     let border_col = Color {
         r: base.r,
         g: base.g,
         b: base.b,
         a: 0.55,
+        var: None,
     };
     let label_name = name.to_owned();
     let bright = bright_text();
@@ -1098,7 +1183,7 @@ fn panel(background: Color, border: Color, radius: f32) -> String {
 }
 
 pub(super) fn page_style() -> String {
-    format!("background-color: var(--bg-app); color: {BRIGHT_TEXT};")
+    "background-color: var(--bg-app); color: var(--text-primary);".into()
 }
 pub(super) fn sidebar_style() -> String {
     "background-color: var(--bg-sidebar); border-right: 1px solid var(--border-default);".into()
@@ -1125,6 +1210,7 @@ pub(super) fn mail_row_style(selected: bool, checked: bool) -> String {
                 g: 0.20,
                 b: 0.42,
                 a: 1.0,
+                var: None,
             },
             ACCENT_TEXT,
             4.0,
@@ -1136,6 +1222,7 @@ pub(super) fn mail_row_style(selected: bool, checked: bool) -> String {
                 g: 0.15,
                 b: 0.26,
                 a: 0.95,
+                var: None,
             },
             shade(ACCENT_TEXT, 0.55),
             2.0,
@@ -1227,6 +1314,17 @@ mod tests {
     fn full_app_view_renders_in_virtual_dom() {
         fn app_comp() -> Element {
             let app = crate::app::PstRagApp::new();
+            app.view()
+        }
+        let mut vdom = VirtualDom::new(app_comp);
+        vdom.rebuild_in_place();
+    }
+
+    #[test]
+    fn full_app_view_renders_in_light_mode() {
+        fn app_comp() -> Element {
+            let mut app = crate::app::PstRagApp::new();
+            app.config.dark_mode = false;
             app.view()
         }
         let mut vdom = VirtualDom::new(app_comp);

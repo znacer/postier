@@ -280,18 +280,8 @@ fn render_inline_text<M: DispatchMessage>(
             MdSpan::Code(code) => {
                 let code_size = (font_size - 1.0).max(10.0);
                 let code_color = Color::from_rgb(0.95, 0.85, 0.58);
-                let code_bg = Color {
-                    r: 0.04,
-                    g: 0.05,
-                    b: 0.08,
-                    a: 0.92,
-                };
-                let code_border = Color {
-                    r: 0.25,
-                    g: 0.30,
-                    b: 0.40,
-                    a: 0.7,
-                };
+                let code_bg = Color::from_rgba(0.04, 0.05, 0.08, 0.92);
+                let code_border = Color::from_rgba(0.25, 0.30, 0.40, 0.7);
                 spans.push(rsx! {
                     code {
                         style: "font-size: {code_size}px; font-family: monospace; color: {code_color}; background-color: {code_bg}; border: 1px solid {code_border}; border-radius: 4px; padding: 0px 4px;",

@@ -20,6 +20,7 @@ fn config_serializes_and_deserializes_with_language() {
         labeler_backend: crate::model::LabelerBackend::Laya,
         laya_gguf_path: String::new(),
         language: Language::French,
+        dark_mode: true,
     };
 
     let serialized = serde_json::to_string(&config).expect("serialize config");
@@ -40,6 +41,18 @@ fn config_serializes_and_deserializes_with_language() {
     let legacy_config: LlmConfig =
         serde_json::from_str(legacy_json).expect("deserialize legacy config");
     assert_eq!(legacy_config.language, Language::French);
+    // dark_mode defaults to true when omitted
+    assert!(legacy_config.dark_mode);
+}
+
+#[test]
+fn theme_labels_are_translated() {
+    assert_eq!(Language::English.theme_label(), "Theme");
+    assert_eq!(Language::French.theme_label(), "Thème");
+    assert_eq!(Language::English.theme_dark(), "Dark");
+    assert_eq!(Language::French.theme_dark(), "Sombre");
+    assert_eq!(Language::English.theme_light(), "Light");
+    assert_eq!(Language::French.theme_light(), "Clair");
 }
 
 #[test]

@@ -63,6 +63,27 @@ impl Language {
         }
     }
 
+    pub fn theme_label(self) -> &'static str {
+        match self {
+            Self::English => "Theme",
+            Self::French => "Thème",
+        }
+    }
+
+    pub fn theme_dark(self) -> &'static str {
+        match self {
+            Self::English => "Dark",
+            Self::French => "Sombre",
+        }
+    }
+
+    pub fn theme_light(self) -> &'static str {
+        match self {
+            Self::English => "Light",
+            Self::French => "Clair",
+        }
+    }
+
     // Sidebar sections
     pub fn section_mailboxes(self) -> &'static str {
         match self {

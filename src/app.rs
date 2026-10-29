@@ -410,6 +410,15 @@ fn app_root() -> Element {
     });
 
     let is_dragging = app_signal.read().resizing.is_some();
+    let is_dark = app_signal.read().config.dark_mode;
+    let theme_name = if is_dark { "dark" } else { "light" };
+
+    use_effect(move || {
+        let theme = if app_signal.read().config.dark_mode { "dark" } else { "light" };
+        let js = format!("document.documentElement.setAttribute('data-theme', '{theme}');");
+        let _ = document::eval(&js);
+    });
+
     let view = app_signal.read().view();
     let bg_style = page_style();
 
@@ -419,6 +428,7 @@ fn app_root() -> Element {
         style { "{APP_CSS}" }
         div {
             tabindex: "0",
+            "data-theme": "{theme_name}",
             style: "width: 100vw; height: 100vh; overflow: hidden; outline: none; {bg_style}",
             onkeydown: move |evt| {
                 let mods = evt.modifiers();
@@ -764,6 +774,17 @@ impl PstRagApp {
                 self.set_language(language);
                 AppTask::none()
             }
+            SidebarMessage::ThemeChanged(dark_mode) => {
+                self.set_theme_mode(dark_mode);
+                AppTask::none()
+            }
+        }
+    }
+
+    fn set_theme_mode(&mut self, dark_mode: bool) {
+        if self.config.dark_mode != dark_mode {
+            self.config.dark_mode = dark_mode;
+            let _ = actions::save_config(&self.storage_dir, &self.config);
         }
     }
 
