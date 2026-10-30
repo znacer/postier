@@ -269,12 +269,17 @@ fn search_populates_rich_metadata_labels_and_expands_threads() {
     assert_eq!(hits[0].labels.len(), 1);
     assert_eq!(hits[0].labels[0].label, "Urgent");
 
-    db.expand_threads(&mut hits, 10).unwrap();
-    assert_eq!(hits.len(), 2);
-    assert!(hits[1].score > 0.0 && hits[1].score < hits[0].score);
-    assert!(hits.iter().any(|h| h.sender == "ops@example.test"));
+    let (total, thread_messages) = db.get_thread("thread-migration-42", 10).unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(thread_messages.len(), 2);
     assert!(
-        hits.iter()
+        thread_messages
+            .iter()
+            .any(|h| h.sender == "ops@example.test")
+    );
+    assert!(
+        thread_messages
+            .iter()
             .any(|h| h.attachment_names == "backup_checksums.txt")
     );
 }

@@ -5,135 +5,12 @@ use rusqlite::params;
 
 use crate::model::{EmbeddingDocument, SearchHit};
 
-use super::{Index, build_fts_query, truncate_chars};
+use super::{Index, truncate_chars};
 
+// Embedding storage and hybrid search are kept but currently disabled
+// (`llm::EMBEDDINGS_ENABLED`); retrieval is BM25-only via `query.rs`.
+#[allow(dead_code)]
 impl Index {
-    pub(super) fn search_fts_raw(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
-        let fts_query = build_fts_query(query);
-        if fts_query.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut stmt = self.conn.prepare(
-            "SELECT m.id,m.source_key,m.subject,m.sender,m.recipients,m.sent_at,m.folder,m.body,
-                    m.attachment_names,m.conversation_id,m.message_id,
-                    bm25(messages_fts,8.0,3.0,2.0,1.0,1.0) AS rank
-             FROM messages_fts f JOIN messages m ON m.id=f.rowid
-             JOIN indexed_sources s ON s.source_key=m.source_key
-             WHERE messages_fts MATCH ?1 AND s.enabled=1
-               AND NOT EXISTS (
-                 SELECT 1 FROM source_folder_settings sf
-                 WHERE sf.source_key=m.source_key AND sf.folder=m.folder AND sf.enabled=0
-               )
-             ORDER BY rank LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![fts_query, limit as i64], |r| {
-            let raw_rank: f64 = r.get(11)?;
-            Ok(SearchHit {
-                id: r.get(0)?,
-                source_key: r.get(1)?,
-                subject: r.get(2)?,
-                sender: r.get(3)?,
-                recipients: r.get(4)?,
-                sent_at: r.get(5)?,
-                folder: r.get(6)?,
-                body: r.get(7)?,
-                attachment_names: r.get(8)?,
-                conversation_id: r.get(9)?,
-                message_id: r.get(10)?,
-                labels: Vec::new(),
-                score: -raw_rank,
-            })
-        })?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
-    }
-
-    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
-        let mut hits = self.search_fts_raw(query, limit)?;
-        self.attach_search_hit_labels(&mut hits)?;
-        Ok(hits)
-    }
-
-    pub fn expand_threads(&self, hits: &mut Vec<SearchHit>, max_total: usize) -> Result<()> {
-        if hits.is_empty() || hits.len() >= max_total {
-            return Ok(());
-        }
-        let existing_ids: std::collections::HashSet<i64> = hits.iter().map(|h| h.id).collect();
-        let mut thread_conv_ids: Vec<(String, f64)> = Vec::new();
-        for hit in hits.iter() {
-            let conv = hit.conversation_id.trim();
-            if !conv.is_empty() && !thread_conv_ids.iter().any(|(c, _)| c == conv) {
-                thread_conv_ids.push((conv.to_string(), hit.score));
-            }
-        }
-        if thread_conv_ids.is_empty() {
-            return Ok(());
-        }
-
-        let remaining_slots = max_total - hits.len();
-        let per_thread_cap = if thread_conv_ids.len() <= 1 {
-            remaining_slots
-        } else {
-            remaining_slots.div_ceil(thread_conv_ids.len()).max(2)
-        };
-
-        let mut stmt = self.conn.prepare(
-            "SELECT m.id, m.source_key, m.subject, m.sender, m.recipients, m.sent_at, m.folder, m.body,
-                    m.attachment_names, m.conversation_id, m.message_id
-             FROM messages m
-             JOIN indexed_sources s ON s.source_key=m.source_key
-             WHERE m.conversation_id = ?1 AND s.enabled=1
-               AND NOT EXISTS (
-                 SELECT 1 FROM source_folder_settings sf
-                 WHERE sf.source_key=m.source_key AND sf.folder=m.folder AND sf.enabled=0
-               )
-             ORDER BY coalesce(m.sent_at, '') ASC, m.id ASC
-             LIMIT 10",
-        )?;
-
-        let mut companions = Vec::new();
-        for (conv_id, parent_score) in thread_conv_ids {
-            let rows = stmt.query_map(params![conv_id], |r| {
-                Ok(SearchHit {
-                    id: r.get(0)?,
-                    source_key: r.get(1)?,
-                    subject: r.get(2)?,
-                    sender: r.get(3)?,
-                    recipients: r.get(4)?,
-                    sent_at: r.get(5)?,
-                    folder: r.get(6)?,
-                    body: r.get(7)?,
-                    attachment_names: r.get(8)?,
-                    conversation_id: r.get(9)?,
-                    message_id: r.get(10)?,
-                    labels: Vec::new(),
-                    score: parent_score * 0.9,
-                })
-            })?;
-            let mut added_for_thread = 0usize;
-            for row in rows {
-                let hit = row?;
-                if !existing_ids.contains(&hit.id)
-                    && !companions.iter().any(|c: &SearchHit| c.id == hit.id)
-                {
-                    companions.push(hit);
-                    added_for_thread += 1;
-                    if hits.len() + companions.len() >= max_total
-                        || added_for_thread >= per_thread_cap
-                    {
-                        break;
-                    }
-                }
-            }
-            if hits.len() + companions.len() >= max_total {
-                break;
-            }
-        }
-
-        self.attach_search_hit_labels(&mut companions)?;
-        hits.extend(companions);
-        Ok(())
-    }
-
     pub fn documents_missing_embeddings(&self, model: &str) -> Result<Vec<EmbeddingDocument>> {
         let mut stmt = self.conn.prepare(
             "SELECT m.id, m.subject, m.sender, m.recipients, m.sent_at, m.body
@@ -188,7 +65,7 @@ impl Index {
         model: &str,
         limit: usize,
     ) -> Result<Vec<SearchHit>> {
-        let bm25 = self.search_fts_raw(query, 50)?;
+        let bm25 = self.search(query, 50)?;
         let mut combined: HashMap<i64, (SearchHit, f64)> = HashMap::new();
         for (rank, hit) in bm25.into_iter().enumerate() {
             combined.insert(hit.id, (hit, reciprocal_rank(rank)));
@@ -222,6 +99,7 @@ impl Index {
                     message_id: row.get(10)?,
                     labels: Vec::new(),
                     score: 0.0,
+                    ..Default::default()
                 },
                 encoded,
             ))

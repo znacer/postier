@@ -1493,4 +1493,91 @@ impl Language {
             Self::French => format!("Modèle ggml-org/Laya-GGUF téléchargé vers {path}"),
         }
     }
+
+    pub fn agent_progress_search(self, query: &str) -> String {
+        match self {
+            Self::English => format!("Searching archive: {query}..."),
+            Self::French => format!("Recherche dans l'archive : {query}..."),
+        }
+    }
+
+    pub fn agent_progress_read(self, id: i64) -> String {
+        match self {
+            Self::English => format!("Reading email #{id}..."),
+            Self::French => format!("Lecture du courriel #{id}..."),
+        }
+    }
+
+    pub fn agent_progress_thread(self, count: usize) -> String {
+        match self {
+            Self::English => format!(
+                "Reading thread ({count} message{})...",
+                if count == 1 { "" } else { "s" }
+            ),
+            Self::French => format!(
+                "Lecture du fil ({count} message{})...",
+                if count == 1 { "" } else { "s" }
+            ),
+        }
+    }
+
+    pub fn agent_progress_stats(self, group: &str) -> String {
+        match self {
+            Self::English => format!("Calculating statistics (group: {group})..."),
+            Self::French => format!("Calcul des statistiques (groupe : {group})..."),
+        }
+    }
+
+    pub fn agent_progress_thinking(self) -> &'static str {
+        match self {
+            Self::English => "Investigating archive...",
+            Self::French => "Exploration de l'archive...",
+        }
+    }
+
+    pub fn agent_progress_finalizing(self) -> &'static str {
+        match self {
+            Self::English => "Synthesizing answer from collected evidence...",
+            Self::French => "Synthèse de la réponse à partir des preuves collectées...",
+        }
+    }
+
+    pub fn agent_today_label(self) -> &'static str {
+        match self {
+            Self::English => "Today's reference date:",
+            Self::French => "Date de référence du jour :",
+        }
+    }
+
+    pub fn agent_cancelled(self) -> &'static str {
+        match self {
+            Self::English => "Agent operation cancelled by user.",
+            Self::French => "Opération de l'agent annulée par l'utilisateur.",
+        }
+    }
+
+    pub fn agent_budget_exhausted_note(self) -> &'static str {
+        match self {
+            Self::English => {
+                "Note: Research turn limit reached. Answer using the evidence gathered so far."
+            }
+            Self::French => {
+                "Note : Limite d'étapes de recherche atteinte. Répondez à l'aide des preuves collectées jusqu'ici."
+            }
+        }
+    }
+
+    pub fn agent_no_tool_calls(self) -> &'static str {
+        match self {
+            Self::English => "Answered directly without extra tool calls.",
+            Self::French => "Réponse directe sans appel d'outil supplémentaire.",
+        }
+    }
+
+    pub fn agent_trace_heading(self) -> &'static str {
+        match self {
+            Self::English => "### Research Trace",
+            Self::French => "### Journal de recherche",
+        }
+    }
 }

@@ -1,6 +1,6 @@
 use crate::{
     i18n::Language,
-    llm::{ChatTurn, LlmConfig, agent_system_prompt, contextualize_search_query},
+    llm::{LlmConfig, agent_system_prompt},
 };
 
 #[test]
@@ -48,7 +48,6 @@ fn config_serializes_and_deserializes_with_language() {
     // max_context_emails defaults to 8 (12 with thread expansion) when omitted
     assert_eq!(legacy_config.max_context_emails, 8);
     assert_eq!(legacy_config.context_email_limit(), 8);
-    assert_eq!(legacy_config.context_thread_limit(), 12);
 }
 
 #[test]
@@ -65,11 +64,11 @@ fn theme_labels_are_translated() {
 fn system_prompts_match_language() {
     let fr_prompt = agent_system_prompt(Language::French);
     assert!(fr_prompt.contains("courriels"));
-    assert!(fr_prompt.contains("[Email 1]"));
+    assert!(fr_prompt.contains("[#1234]"));
 
     let en_prompt = agent_system_prompt(Language::English);
-    assert!(en_prompt.contains("email archive intelligence assistant"));
-    assert!(en_prompt.contains("[Email 1]"));
+    assert!(en_prompt.contains("expert research assistant for the user's email archive"));
+    assert!(en_prompt.contains("[#1234]"));
 }
 
 #[test]
@@ -108,18 +107,9 @@ fn french_ui_translations_are_complete_and_accurate() {
 }
 
 #[test]
-fn contextualizes_french_query_with_history() {
-    let history = vec![
-        ChatTurn {
-            role: "user".to_string(),
-            content: "Qui est responsable de la facture d'avril ?".to_string(),
-        },
-        ChatTurn {
-            role: "assistant".to_string(),
-            content: "Jean Dupont est en charge selon [Email 1].".to_string(),
-        },
-    ];
-
-    let contextualized = contextualize_search_query("qu'en est-il de son adresse ?", &history);
-    assert!(contextualized.to_lowercase().contains("facture"));
+fn parses_french_queries_with_filters() {
+    let parsed = crate::db::query::parse_query("de:jean avant:2024-05 factures*");
+    assert_eq!(parsed.filters.from.as_deref(), Some("jean"));
+    assert_eq!(parsed.filters.date_to.as_deref(), Some("2024-05"));
+    assert_eq!(parsed.terms, vec!["factures*"]);
 }

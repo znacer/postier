@@ -4,4 +4,6 @@ mod i18n;
 mod laya;
 mod llm;
 mod markdown;
+mod query;
 mod sidebar;
+mod text;

@@ -1,6 +1,6 @@
 use crate::{
     llm::{
-        ChatTurn, build_context, clean_email_body, contextualize_search_query, endpoint_for_log,
+        ChatTurn, build_context, clean_email_body, endpoint_for_log, linkify_citations,
         openai_base_url, parse_judge_response, validate_endpoint,
     },
     model::{AssignedLabel, SearchHit, default_label_definitions},
@@ -88,6 +88,7 @@ fn build_context_includes_metadata_and_prevents_starvation() {
             source: "laya".into(),
         }],
         score: 0.95,
+        ..Default::default()
     };
 
     let hit2 = SearchHit {
@@ -108,6 +109,7 @@ fn build_context_includes_metadata_and_prevents_starvation() {
             source: "llm-judge".into(),
         }],
         score: 0.82,
+        ..Default::default()
     };
 
     let hits = vec![hit1, hit2];
@@ -118,7 +120,7 @@ fn build_context_includes_metadata_and_prevents_starvation() {
     assert!(context.contains("Dates: 2025-03-10T10:00:00Z to 2025-03-11T12:00:00Z"));
     assert!(context.contains("Archives: sample.pst"));
 
-    assert!(context.contains("[Email 1]"));
+    assert!(context.contains("[#1]"));
     assert!(context.contains("From: alice@example.test"));
     assert!(context.contains("Attachments: specs.pdf, budget.xlsx"));
     assert!(context.contains("Thread: atlas-thread"));
@@ -126,31 +128,21 @@ fn build_context_includes_metadata_and_prevents_starvation() {
     assert!(context.contains("Message-ID: m1@example.test"));
 
     // Hit 2 is not starved even when Hit 1 contains multi-byte UTF-8 characters!
-    assert!(context.contains("[Email 2]"));
+    assert!(context.contains("[#2]"));
     assert!(context.contains("From: bob@example.test"));
     assert!(context.contains("Deployment is confirmed for Friday."));
     assert!(context.contains("Labels: Decision (88%)"));
 }
 
 #[test]
-fn contextualizes_anaphoric_follow_up_queries() {
-    let history = vec![
-        ChatTurn {
-            role: "user".into(),
-            content: "Tell me about the database migration schedule.".into(),
-        },
-        ChatTurn {
-            role: "assistant".into(),
-            content: "The migration is planned for Q4 as discussed in [Email 1].".into(),
-        },
-    ];
-
-    let q1 = "Who is the lead for Project Apollo?";
-    assert_eq!(contextualize_search_query(q1, &history), q1);
-
-    let q2 = "When was that?";
-    let enriched = contextualize_search_query(q2, &history);
-    assert!(enriched.starts_with("When was that?"));
-    assert!(enriched.contains("database"));
-    assert!(enriched.contains("migration"));
+fn linkify_citations_converts_known_ids_into_mail_urls() {
+    use std::collections::HashSet;
+    let known: HashSet<i64> = [42, 108].into_iter().collect();
+    let text = "Decided in [#42] and confirmed in [Email #108], but not [#999].";
+    let (linked, cited) = linkify_citations(text, &known);
+    assert_eq!(
+        linked,
+        "Decided in [#42](mail://42) and confirmed in [#108](mail://108), but not #999."
+    );
+    assert_eq!(cited, vec![42, 108]);
 }

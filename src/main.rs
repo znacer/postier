@@ -11,6 +11,7 @@ mod model;
 mod pst;
 #[cfg(test)]
 mod tests;
+mod text;
 
 fn main() {
     app::run();

@@ -754,36 +754,38 @@ impl PstRagApp {
                         }
                     }
                 }
-                Separator {}
-                div {
-                    style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0;",
-                    Label {
-                        html_for: "remote-emb-switch",
-                        style: "font-size: 11.5px; cursor: pointer;",
-                        "{remote_emb_lbl}"
+                if crate::llm::EMBEDDINGS_ENABLED {
+                    Separator {}
+                    div {
+                        style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0;",
+                        Label {
+                            html_for: "remote-emb-switch",
+                            style: "font-size: 11.5px; cursor: pointer;",
+                            "{remote_emb_lbl}"
+                        }
+                        Switch {
+                            checked: remote_emb_val,
+                            on_checked_change: move |checked: bool| SidebarMessage::RemoteEmbeddingsChanged(checked).dispatch(),
+                        }
                     }
-                    Switch {
-                        checked: remote_emb_val,
-                        on_checked_change: move |checked: bool| SidebarMessage::RemoteEmbeddingsChanged(checked).dispatch(),
-                    }
-                }
-                div {
-                    style: "display: flex; flex-direction: column; gap: 3px;",
-                    Label {
-                        html_for: "llm-emb-model-input",
-                        style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
-                        "{emb_model_lbl}"
-                    }
-                    Input {
-                        id: "llm-emb-model-input",
-                        r#type: "text",
-                        placeholder: "{emb_model_ph}",
-                        value: "{emb_model_val}",
-                        style: "width: 100%; font-size: 12px;",
-                        oninput: move |evt: FormEvent| SidebarMessage::EmbeddingModelChanged(evt.value()).dispatch(),
-                        onkeydown: move |evt: KeyboardEvent| {
-                            if evt.key() != Key::Escape {
-                                evt.stop_propagation();
+                    div {
+                        style: "display: flex; flex-direction: column; gap: 3px;",
+                        Label {
+                            html_for: "llm-emb-model-input",
+                            style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
+                            "{emb_model_lbl}"
+                        }
+                        Input {
+                            id: "llm-emb-model-input",
+                            r#type: "text",
+                            placeholder: "{emb_model_ph}",
+                            value: "{emb_model_val}",
+                            style: "width: 100%; font-size: 12px;",
+                            oninput: move |evt: FormEvent| SidebarMessage::EmbeddingModelChanged(evt.value()).dispatch(),
+                            onkeydown: move |evt: KeyboardEvent| {
+                                if evt.key() != Key::Escape {
+                                    evt.stop_propagation();
+                                }
                             }
                         }
                     }

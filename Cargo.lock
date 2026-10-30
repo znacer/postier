@@ -6830,6 +6830,7 @@ dependencies = [
  "rfd 0.15.4",
  "rig",
  "rusqlite",
+ "rust-stemmers",
  "serde",
  "serde_json",
  "sha2",

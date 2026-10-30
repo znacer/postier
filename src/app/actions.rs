@@ -9,8 +9,6 @@ use std::{
     },
 };
 
-use anyhow::Context;
-
 use crate::{db::Index, laya, llm, model::EmailRecord, pst};
 
 use super::{
@@ -184,7 +182,7 @@ impl PstRagApp {
         };
         let db_path = self.db_path.clone();
         let config = self.config.clone();
-        if config.use_remote_embeddings && config.embedding_model.trim().is_empty() {
+        if config.embeddings_active() && config.embedding_model.trim().is_empty() {
             self.status = self
                 .config
                 .language
@@ -197,14 +195,14 @@ impl PstRagApp {
         self.busy = true;
         self.status = match self.config.language {
             crate::i18n::Language::English => {
-                if config.use_remote_embeddings {
+                if config.embeddings_active() {
                     "Importing archive and indexing BM25 locally...".into()
                 } else {
                     "Indexing BM25 locally...".into()
                 }
             }
             crate::i18n::Language::French => {
-                if config.use_remote_embeddings {
+                if config.embeddings_active() {
                     "Importation de l'archive et indexation BM25 locale en cours...".into()
                 } else {
                     "Indexation BM25 locale en cours...".into()
@@ -224,7 +222,7 @@ impl PstRagApp {
                 let mut db = Index::open(&db_path)?;
                 let added = db.index_batch(&emails)?;
                 let mut embedded = 0;
-                if config.use_remote_embeddings && !cancel.load(Ordering::Relaxed) {
+                if config.embeddings_active() && !cancel.load(Ordering::Relaxed) {
                     let model = config.embedding_model.trim();
                     let documents = db.documents_missing_embeddings(model)?;
                     let total_docs = documents.len();
@@ -314,45 +312,19 @@ impl PstRagApp {
         self.question.clear();
         let db_path = self.db_path.clone();
         let config = self.config.clone();
-        self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel_flag = Some(cancel.clone());
         self.busy = true;
-        self.status = self.config.language.status_searching_local_index().into();
+        self.status = self.config.language.agent_progress_thinking().into();
         spawn_worker(move |tx| {
+            let tx_clone = tx.clone();
+            let progress: llm::ProgressFn = Arc::new(move |msg| {
+                emit_worker_event(&tx_clone, WorkerEvent::Progress(msg));
+            });
             let result = (|| {
-                let db = Index::open(&db_path)?;
-                let search_query = llm::contextualize_search_query(&question, &history);
-                let mut hits =
-                    if config.use_remote_embeddings && !config.embedding_model.trim().is_empty() {
-                        emit_worker_event(
-                            tx,
-                            WorkerEvent::Progress(
-                                "Embedding query and running hybrid search...".into(),
-                            ),
-                        );
-                        let mut embeddings = llm::embed(&config, vec![search_query.clone()])?;
-                        let query_embedding = embeddings
-                            .pop()
-                            .context("embedding provider returned no query vector")?;
-                        db.search_hybrid(
-                            &search_query,
-                            &query_embedding,
-                            config.embedding_model.trim(),
-                            config.context_email_limit(),
-                        )?
-                    } else {
-                        db.search(&search_query, config.context_email_limit())?
-                    };
-                db.expand_threads(&mut hits, config.context_thread_limit())?;
-                emit_worker_event(
-                    tx,
-                    WorkerEvent::Progress(format!(
-                        "Found {} relevant emails, waiting for LLM answer...",
-                        hits.len()
-                    )),
-                );
-                let context = llm::build_context(&hits, config.max_context_chars);
-                let answer = llm::ask_with_history(&config, &question, &context, &history)?;
-                Ok(Arc::new((answer, hits, context)))
+                let answer =
+                    llm::run_agent(&config, &db_path, &question, &history, progress, cancel)?;
+                Ok(Arc::new((answer.answer, answer.evidence, answer.trace)))
             })()
             .map_err(|error: anyhow::Error| format!("{error:#}"));
             WorkerResult::Answered(result)

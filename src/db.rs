@@ -1,16 +1,42 @@
 mod labels;
+pub mod query;
 mod search;
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, params, types::Value};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, types::Value};
 use sha2::{Digest, Sha256};
 
-use crate::model::{
-    Email, EmailRecord, IndexedFolder, IndexedSource, LabelFilter, MailScope, MailSort,
-    default_label_definitions,
+use crate::{
+    model::{
+        Email, EmailRecord, IndexedFolder, IndexedSource, LabelFilter, MailScope, MailSort,
+        default_label_definitions,
+    },
+    text,
 };
+
+/// Bump when the FTS schema or the derived `body_text`/`stems` columns change; the
+/// migration recomputes them from the stored raw bodies (no PST re-import needed).
+const SCHEMA_VERSION: i64 = 2;
+
+/// BM25 column weights: subject, sender, recipients, body_text, attachment_names, stems.
+pub(super) const BM25_RANK: &str = "bm25(messages_fts, 8.0, 3.0, 2.0, 1.0, 1.0, 1.0)";
+
+const FTS_SCHEMA: &str = "
+    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+      subject, sender, recipients, body_text, attachment_names, stems,
+      content='messages', content_rowid='id',
+      tokenize='unicode61 remove_diacritics 2'
+    );
+    CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+      INSERT INTO messages_fts(rowid,subject,sender,recipients,body_text,attachment_names,stems)
+      VALUES(new.id,new.subject,new.sender,new.recipients,new.body_text,new.attachment_names,new.stems);
+    END;
+    CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts,rowid,subject,sender,recipients,body_text,attachment_names,stems)
+      VALUES('delete',old.id,old.subject,old.sender,old.recipients,old.body_text,old.attachment_names,old.stems);
+    END;";
 
 pub struct Index {
     conn: Connection,
@@ -21,7 +47,8 @@ impl Index {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(path).context("open local search index")?;
+        let mut conn = Connection::open(path).context("open local search index")?;
+        conn.busy_timeout(std::time::Duration::from_secs(60))?;
         conn.execute_batch(
             "PRAGMA foreign_keys=ON;
              PRAGMA journal_mode=WAL;
@@ -39,7 +66,9 @@ impl Index {
                sent_at TEXT,
                body TEXT NOT NULL DEFAULT '',
                attachment_names TEXT NOT NULL DEFAULT '',
-               content_hash TEXT NOT NULL UNIQUE
+               content_hash TEXT NOT NULL UNIQUE,
+               body_text TEXT NOT NULL DEFAULT '',
+               stems TEXT NOT NULL DEFAULT ''
              );
              CREATE INDEX IF NOT EXISTS messages_source ON messages(source_key);
              CREATE INDEX IF NOT EXISTS messages_source_folder ON messages(source_key, folder);
@@ -77,20 +106,9 @@ impl Index {
                PRIMARY KEY(message_id, label)
              );
              CREATE INDEX IF NOT EXISTS message_labels_label ON message_labels(label);
-             CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-               subject, sender, recipients, body, attachment_names,
-               content='messages', content_rowid='id',
-               tokenize='unicode61 remove_diacritics 2'
-             );
-             CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-               INSERT INTO messages_fts(rowid,subject,sender,recipients,body,attachment_names)
-               VALUES(new.id,new.subject,new.sender,new.recipients,new.body,new.attachment_names);
-             END;
-             CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-               INSERT INTO messages_fts(messages_fts,rowid,subject,sender,recipients,body,attachment_names)
-               VALUES('delete',old.id,old.subject,old.sender,old.recipients,old.body,old.attachment_names);
-             END;",
+             CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id);",
         )?;
+        migrate(&mut conn)?;
 
         let source_count: u64 =
             conn.query_row("SELECT count(*) FROM indexed_sources", [], |r| r.get(0))?;
@@ -132,8 +150,8 @@ impl Index {
             )?;
             let mut stmt = tx.prepare(
                 "INSERT OR IGNORE INTO messages
-                 (source_key,message_id,conversation_id,folder,subject,sender,recipients,sent_at,body,attachment_names,content_hash)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                 (source_key,message_id,conversation_id,folder,subject,sender,recipients,sent_at,body,attachment_names,content_hash,body_text,stems)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             )?;
             for email in emails {
                 let display_name = Path::new(&email.source_key)
@@ -166,6 +184,8 @@ impl Index {
                 } else {
                     base_digest
                 };
+                let body_text = text::index_body(&email.subject, &email.body);
+                let stems = text::index_stems(&email.subject, &body_text);
                 added += stmt.execute(params![
                     email.source_key,
                     email.message_id,
@@ -177,7 +197,9 @@ impl Index {
                     email.sent_at,
                     email.body,
                     email.attachment_names,
-                    digest
+                    digest,
+                    body_text,
+                    stems
                 ])?;
             }
         }
@@ -217,7 +239,8 @@ impl Index {
         sort: MailSort,
         limit: usize,
     ) -> Result<Vec<EmailRecord>> {
-        let fts_query = build_fts_query(query);
+        let parsed = query::parse_query(query);
+        let fts_query = parsed.fts_all().unwrap_or_default();
         let order_clause = match sort {
             MailSort::DateDesc => "coalesce(m.sent_at, '') DESC, m.id DESC",
             MailSort::DateAsc => "coalesce(m.sent_at, '') ASC, m.id ASC",
@@ -279,6 +302,8 @@ impl Index {
             }
         }
 
+        query::push_filter_sql(&parsed.filters, &mut sql, &mut bind_values);
+
         match label_filter {
             LabelFilter::Any => {}
             LabelFilter::Labeled(target) => {
@@ -303,9 +328,7 @@ impl Index {
         if fts_query.is_empty() {
             sql.push_str(&format!(" ORDER BY {order_clause} LIMIT ?"));
         } else {
-            sql.push_str(&format!(
-                " ORDER BY bm25(messages_fts, 8.0, 3.0, 2.0, 1.0, 1.0), {order_clause} LIMIT ?"
-            ));
+            sql.push_str(&format!(" ORDER BY {BM25_RANK}, {order_clause} LIMIT ?"));
         }
         bind_values.push(Value::Integer(limit as i64));
 
@@ -423,13 +446,65 @@ fn map_email_record(r: &rusqlite::Row<'_>) -> rusqlite::Result<EmailRecord> {
     })
 }
 
-pub(super) fn build_fts_query(query: &str) -> String {
-    query
-        .split_whitespace()
-        .filter(|s| !s.is_empty())
-        .map(|s| format!("\"{}\"", s.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" OR ")
+/// Brings the derived search columns and the FTS table up to [`SCHEMA_VERSION`].
+fn migrate(conn: &mut Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // Another process may have migrated while we waited for the write lock.
+    let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    let columns: Vec<String> = {
+        let mut stmt = tx.prepare("PRAGMA table_info(messages)")?;
+        stmt.query_map([], |r| r.get::<_, String>(1))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for column in ["body_text", "stems"] {
+        if !columns.iter().any(|c| c == column) {
+            tx.execute(
+                &format!("ALTER TABLE messages ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"),
+                [],
+            )?;
+        }
+    }
+    {
+        let mut select = tx.prepare(
+            "SELECT id, subject, body FROM messages WHERE id > ?1 ORDER BY id LIMIT 500",
+        )?;
+        let mut update = tx.prepare("UPDATE messages SET body_text=?2, stems=?3 WHERE id=?1")?;
+        let mut last_id = i64::MIN;
+        loop {
+            let rows: Vec<(i64, String, String)> = select
+                .query_map([last_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            let Some(last) = rows.last() else {
+                break;
+            };
+            last_id = last.0;
+            for (id, subject, body) in rows {
+                let body_text = text::index_body(&subject, &body);
+                let stems = text::index_stems(&subject, &body_text);
+                update.execute(params![id, body_text, stems])?;
+            }
+        }
+    }
+    tx.execute_batch(
+        "DROP TRIGGER IF EXISTS messages_ai;
+         DROP TRIGGER IF EXISTS messages_ad;
+         DROP TABLE IF EXISTS messages_fts;",
+    )?;
+    tx.execute_batch(FTS_SCHEMA)?;
+    tx.execute(
+        "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
+        [],
+    )?;
+    tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+    tx.commit()?;
+    Ok(())
 }
 
 pub(super) fn truncate_chars(value: &str, max_chars: usize) -> String {

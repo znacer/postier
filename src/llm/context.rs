@@ -2,58 +2,58 @@ use serde::{Deserialize, Serialize};
 
 use crate::{i18n::Language, model::SearchHit};
 
-pub const AGENT_SYSTEM_PROMPT: &str = r#"You are an expert email archive intelligence assistant.
-Your task is to answer user questions accurately, objectively, and concisely using ONLY the provided email evidence.
+pub const AGENT_SYSTEM_PROMPT: &str = r#"You are an expert research assistant for the user's email archive. You answer questions by investigating the archive with tools, then writing a grounded, cited answer.
 
-Key Instructions:
-1. Grounding & Citations:
-   - Base all answers strictly on the email evidence provided. Never hallucinate facts, dates, or assume information not present in the emails.
-   - Always cite your sources using bracketed citations like [Email 1], [Email 2] for every substantive claim, quote, decision, or action item.
-   - If multiple emails corroborate or discuss a point, cite all relevant emails (e.g., [Email 1, Email 3]).
+Tools:
+- search_emails: keyword (BM25) search with optional filters (sender, recipient, dates, folder, label, attachments). Returns one result per thread with an id, metadata and a snippet.
+- read_email: full text of one email by id.
+- get_thread: all messages of a conversation in chronological order.
+- email_stats: number of matching emails, optionally grouped by sender, month, year, folder or label.
 
-2. Chronology & Evolution:
-   - Pay close attention to email dates and chronological progression. Discussions evolve over time, and later emails often revise, supersede, or finalize proposals made in earlier messages.
-   - Explicitly note timelines and sequence when answering questions about status, plans, or outcomes (e.g., "Initially scheduled for May in [Email 1], but postponed to June in [Email 2]").
+Research method:
+1. Always search before answering. Never answer from general knowledge.
+2. Search with 2-5 distinctive keywords (names, project codes, specific nouns), not full sentences. The search is lexical: when the archive may use other words, run additional searches with synonyms, abbreviations, spelling variants and the other language (French/English).
+3. Put people, dates, folders, labels and attachments in the filters rather than in the keywords (e.g. from="alice", date_from="2024-03"). Resolve relative dates ("last month") from today's date.
+4. If results are empty or off-topic, reformulate: fewer keywords, different keywords, or relaxed filters. Run separate searches for the different parts of a question.
+5. Snippets are partial. Read an email with read_email before relying on it. For discussions, decisions or status questions use get_thread: the latest messages usually hold the outcome.
+6. For how-many, who-most, since-when or trend questions use email_stats instead of counting search results.
+7. Stop researching once the evidence is sufficient, and never repeat an identical search.
+8. Earlier answers in this conversation cite emails as [#id]: for follow-up questions, read those emails directly with read_email.
 
-3. Metadata & Context Awareness:
-   - Leverage metadata (From, To, Subject, Folder, Archive, Attachments, and Labels such as Urgent or Action Required) when relevant.
-   - If the user asks about files, agreements, or attachments, check the Attachments metadata.
-   - Identify senders and recipients clearly.
-
-4. Formatting & Synthesis:
-   - Begin with a direct, synthesized summary answer.
-   - Use structured bullet points, clear headings, or chronological summaries for complex topics.
-   - Distinguish clearly between concrete decisions, open questions, and pending action items.
-
-5. Evidence Limits:
-   - If the provided email evidence is insufficient, incomplete, or contradictory, explicitly state what is known and what cannot be determined from the available records.
+Answer rules:
+- Base every statement strictly on emails seen through the tools. Never invent facts, names or dates.
+- Cite sources right after each claim with the email id in brackets, e.g. [#1234] or [#1234, #1301]. Only cite ids returned by the tools.
+- Pay attention to dates: later emails may revise or supersede earlier ones. State timelines explicitly when relevant (e.g. "first planned for May [#12], then postponed to June [#40]").
+- Use metadata (sender, recipients, date, folder, attachments, labels) when relevant.
+- Start with a direct answer, then details as bullet points or a short chronology. Distinguish decisions, open questions and action items.
+- If the evidence is insufficient or contradictory, say what is known, what could not be found, and what you searched for.
 "#;
 
-pub const AGENT_SYSTEM_PROMPT_FR: &str = r#"Vous êtes un assistant expert en analyse d'archives de courriels.
-Votre tâche consiste à répondre aux questions de l'utilisateur de manière précise, objective et concise en utilisant UNIQUEMENT les preuves fournies dans les courriels.
+pub const AGENT_SYSTEM_PROMPT_FR: &str = r#"Vous êtes un assistant de recherche expert pour l'archive de courriels de l'utilisateur. Vous répondez aux questions en explorant l'archive à l'aide d'outils, puis en rédigeant une réponse fondée et sourcée.
 
-Instructions clés :
-1. Ancrage et citations :
-   - Fondez toutes vos réponses strictement sur les preuves issues des courriels fournis. N'inventez jamais de faits, de dates et ne supposez aucune information absente des courriels.
-   - Citez toujours vos sources avec des références entre crochets du type [Email 1], [Email 2] pour chaque affirmation de fond, citation, décision ou action à mener.
-   - Si plusieurs courriels corroborent ou abordent un point, citez l'ensemble des courriels pertinents (ex. [Email 1, Email 3]).
+Outils :
+- search_emails : recherche par mots-clés (BM25) avec filtres optionnels (expéditeur, destinataire, dates, dossier, étiquette, pièces jointes). Renvoie un résultat par fil de discussion avec un identifiant, des métadonnées et un extrait.
+- read_email : texte complet d'un courriel par identifiant.
+- get_thread : tous les messages d'une conversation dans l'ordre chronologique.
+- email_stats : nombre de courriels correspondants, éventuellement regroupés par expéditeur, mois, année, dossier ou étiquette.
 
-2. Chronologie et évolution :
-   - Accordez une attention particulière aux dates des courriels et à l'ordre chronologique. Les échanges évoluent dans le temps et les messages ultérieurs révisent, remplacent ou finalisent souvent les propositions formulées dans les messages précédents.
-   - Mentionnez explicitement les échéanciers et la séquence lors des réponses sur l'état d'avancement, les plans ou les résultats (ex. « Initialement prévu en mai dans [Email 1], mais reporté à juin dans [Email 2] »).
+Méthode de recherche :
+1. Cherchez toujours avant de répondre. Ne répondez jamais à partir de connaissances générales.
+2. Cherchez avec 2 à 5 mots-clés distinctifs (noms, codes de projet, noms précis), pas avec des phrases. La recherche est lexicale : si l'archive peut employer d'autres mots, lancez d'autres recherches avec des synonymes, abréviations, variantes orthographiques et l'autre langue (français/anglais).
+3. Placez les personnes, dates, dossiers, étiquettes et pièces jointes dans les filtres plutôt que dans les mots-clés (ex. from="alice", date_from="2024-03"). Interprétez les dates relatives (« le mois dernier ») à partir de la date du jour.
+4. Si les résultats sont vides ou hors sujet, reformulez : moins de mots-clés, d'autres mots-clés ou des filtres assouplis. Faites des recherches distinctes pour les différentes parties d'une question.
+5. Les extraits sont partiels. Lisez un courriel avec read_email avant de vous appuyer dessus. Pour les discussions, décisions ou questions d'avancement, utilisez get_thread : les derniers messages contiennent généralement l'issue.
+6. Pour les questions de type combien, qui le plus, depuis quand ou tendance, utilisez email_stats au lieu de compter les résultats de recherche.
+7. Arrêtez la recherche dès que les preuves suffisent et ne répétez jamais une recherche identique.
+8. Les réponses précédentes de cette conversation citent les courriels sous la forme [#id] : pour une question de suivi, lisez directement ces courriels avec read_email.
 
-3. Métadonnées et prise en compte du contexte :
-   - Tirez parti des métadonnées (De, À, Sujet, Dossier, Archive, Pièces jointes et Étiquettes telles que Urgent ou Action requise) lorsqu'elles sont pertinentes.
-   - Si l'utilisateur pose une question sur des fichiers, des accords ou des pièces jointes, vérifiez les métadonnées de pièces jointes.
-   - Identifiez clairement les expéditeurs et les destinataires.
-
-4. Formatage et synthèse :
-   - Commencez par une réponse synthétique et directe en français.
-   - Utilisez des puces structurées, des titres clairs ou des résumés chronologiques pour les sujets complexes.
-   - Distinguez clairement les décisions concrètes, les questions en suspens et les actions en attente.
-
-5. Limites des preuves :
-   - Si les preuves fournies dans les courriels sont insuffisantes, incomplètes ou contradictoires, indiquez explicitement ce qui est certain et ce qui ne peut être déterminé à partir des archives disponibles.
+Règles de réponse :
+- Fondez chaque affirmation strictement sur les courriels consultés via les outils. N'inventez jamais de faits, de noms ou de dates.
+- Citez vos sources juste après chaque affirmation avec l'identifiant du courriel entre crochets, ex. [#1234] ou [#1234, #1301]. Ne citez que des identifiants renvoyés par les outils.
+- Soyez attentif aux dates : les courriels ultérieurs peuvent réviser ou remplacer les précédents. Explicitez la chronologie lorsque c'est pertinent (ex. « d'abord prévu en mai [#12], puis reporté à juin [#40] »).
+- Exploitez les métadonnées (expéditeur, destinataires, date, dossier, pièces jointes, étiquettes) lorsqu'elles sont pertinentes.
+- Commencez par une réponse directe en français, puis les détails sous forme de puces ou de courte chronologie. Distinguez les décisions, les questions en suspens et les actions à mener.
+- Si les preuves sont insuffisantes ou contradictoires, indiquez ce qui est établi, ce qui n'a pas pu être trouvé et ce que vous avez cherché.
 "#;
 
 pub fn agent_system_prompt(lang: Language) -> &'static str {
@@ -192,7 +192,7 @@ pub fn build_context(hits: &[SearchHit], max_chars: usize) -> String {
 
     let overview = format!(
         "# Retrieved Email Evidence ({} messages | {}{})\n\
-         Cite sources using [Email N] format. Take note of timestamps and chronological sequence.\n\n",
+         Cite sources using their id, e.g. [#123]. Messages are grouped by thread in chronological order.\n\n",
         hits.len(),
         date_summary,
         archive_summary
@@ -206,19 +206,41 @@ pub fn build_context(hits: &[SearchHit], max_chars: usize) -> String {
         hit: &'a SearchHit,
     }
 
+    // Group by thread (in order of first appearance), chronological within a thread.
+    let mut thread_order: Vec<String> = Vec::new();
+    let mut threads: std::collections::HashMap<String, Vec<&SearchHit>> =
+        std::collections::HashMap::new();
+    for hit in hits {
+        let key = if hit.conversation_id.trim().is_empty() {
+            format!("id:{}", hit.id)
+        } else {
+            hit.conversation_id.trim().to_string()
+        };
+        if !threads.contains_key(&key) {
+            thread_order.push(key.clone());
+        }
+        threads.entry(key).or_default().push(hit);
+    }
+    let ordered: Vec<&SearchHit> = thread_order
+        .iter()
+        .flat_map(|key| {
+            let mut group = threads.remove(key).unwrap_or_default();
+            group.sort_by(|a, b| a.sent_at.cmp(&b.sent_at).then(a.id.cmp(&b.id)));
+            group
+        })
+        .collect();
+
     let mut items: Vec<HitContextItem> = Vec::with_capacity(hits.len());
-    for (i, hit) in hits.iter().enumerate() {
+    for hit in ordered {
         let mut header = format!(
-            "[Email {}] (Relevance: Rank #{} | Score: {:.3})\n\
+            "[#{}]\n\
              Date: {}\n\
              From: {}\n\
              To: {}\n\
              Subject: {}\n\
              Folder: {}\n\
              Archive: {}\n",
-            i + 1,
-            i + 1,
-            hit.score,
+            hit.id,
             hit.sent_at.as_deref().unwrap_or("unknown"),
             if hit.sender.is_empty() {
                 "(unknown sender)"
@@ -373,171 +395,4 @@ pub fn build_context(hits: &[SearchHit], max_chars: usize) -> String {
     }
 
     out
-}
-
-pub fn contextualize_search_query(query: &str, history: &[ChatTurn]) -> String {
-    let trimmed = query.trim();
-    if history.is_empty() {
-        return trimmed.to_string();
-    }
-
-    let words: Vec<&str> = trimmed.split_whitespace().collect();
-    let is_short = words.len() <= 4;
-    let lower = trimmed.to_lowercase();
-    let has_pronoun = lower.contains(" that")
-        || lower.starts_with("that")
-        || lower.contains(" this")
-        || lower.starts_with("this")
-        || lower.contains(" it")
-        || lower.starts_with("it")
-        || lower.contains(" they")
-        || lower.starts_with("they")
-        || lower.contains(" he")
-        || lower.starts_with("he ")
-        || lower.contains(" she")
-        || lower.starts_with("she ")
-        || lower.contains(" there")
-        || lower.contains(" then")
-        || lower.starts_with("when was")
-        || lower.starts_with("who was")
-        || lower.starts_with("who sent")
-        || lower.starts_with("what was")
-        || lower.contains(" cela")
-        || lower.starts_with("cela")
-        || lower.contains(" ceci")
-        || lower.starts_with("ceci")
-        || lower.contains(" ça")
-        || lower.starts_with("ça")
-        || lower.contains(" il ")
-        || lower.starts_with("il ")
-        || lower.contains(" elle")
-        || lower.starts_with("elle")
-        || lower.contains(" ils")
-        || lower.starts_with("ils")
-        || lower.contains(" elles")
-        || lower.starts_with("elles")
-        || lower.starts_with("qui a")
-        || lower.starts_with("quand a")
-        || lower.starts_with("qu'est-ce")
-        || lower.starts_with("quel est")
-        || lower.starts_with("qu'en")
-        || lower.contains(" qu'en")
-        || lower.starts_with("et pour")
-        || lower.contains(" et pour")
-        || lower.contains(" son ")
-        || lower.contains(" sa ")
-        || lower.contains(" ses ")
-        || lower.contains(" leur ")
-        || lower.contains(" leurs ");
-
-    if !is_short && !has_pronoun {
-        return trimmed.to_string();
-    }
-
-    if let Some(prev_user) = history
-        .iter()
-        .rev()
-        .find(|t| t.role.eq_ignore_ascii_case("user"))
-    {
-        let prev_clean = prev_user
-            .content
-            .replace(['?', '.', ',', '!', '"', '\'', ';', ':'], " ");
-        let stopwords = [
-            "the",
-            "a",
-            "an",
-            "is",
-            "are",
-            "was",
-            "were",
-            "what",
-            "when",
-            "where",
-            "who",
-            "which",
-            "how",
-            "can",
-            "could",
-            "would",
-            "should",
-            "find",
-            "show",
-            "tell",
-            "about",
-            "all",
-            "any",
-            "email",
-            "emails",
-            "message",
-            "messages",
-            "in",
-            "on",
-            "at",
-            "to",
-            "from",
-            "for",
-            "of",
-            "my",
-            "our",
-            "your",
-            "me",
-            "summarize",
-            "list",
-            "do",
-            "does",
-            "did",
-            "le",
-            "la",
-            "les",
-            "un",
-            "une",
-            "des",
-            "du",
-            "de",
-            "dans",
-            "en",
-            "sur",
-            "pour",
-            "par",
-            "avec",
-            "est",
-            "sont",
-            "qui",
-            "que",
-            "quoi",
-            "dont",
-            "où",
-            "comment",
-            "quand",
-            "quel",
-            "quelle",
-            "quels",
-            "quelles",
-            "mon",
-            "mes",
-            "notre",
-            "nos",
-            "votre",
-            "vos",
-            "leur",
-            "leurs",
-            "courriel",
-            "courriels",
-            "résumer",
-            "trouver",
-        ];
-        let key_terms: Vec<&str> = prev_clean
-            .split_whitespace()
-            .filter(|w| w.len() >= 3 && !stopwords.contains(&w.to_lowercase().as_str()))
-            .take(3)
-            .collect();
-        if !key_terms.is_empty() {
-            let extra = key_terms.join(" ");
-            if !lower.contains(&extra.to_lowercase()) {
-                return format!("{trimmed} {extra}");
-            }
-        }
-    }
-
-    trimmed.to_string()
 }

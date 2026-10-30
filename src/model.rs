@@ -142,7 +142,7 @@ impl EmailRecord {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SearchHit {
     pub id: i64,
     pub source_key: String,
@@ -157,6 +157,10 @@ pub struct SearchHit {
     pub message_id: String,
     pub labels: Vec<AssignedLabel>,
     pub score: f64,
+    /// Indexed plain text (markup, quoted replies and signatures removed).
+    pub body_text: String,
+    /// Number of matching messages in this hit's thread (search results are one per thread).
+    pub thread_matches: usize,
 }
 
 #[derive(Clone, Debug)]

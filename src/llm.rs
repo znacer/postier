@@ -1,3 +1,4 @@
+mod agent;
 mod context;
 
 use anyhow::{Context, Result, bail};
@@ -12,13 +13,18 @@ use serde::{Deserialize, Serialize};
 use crate::model::{AssignedLabel, EmailRecord, LabelDefinition, LabelerBackend};
 
 #[cfg(test)]
+pub(crate) use self::agent::linkify_citations;
+pub use self::agent::{AgentAnswer, ProgressFn, run_agent};
 pub(crate) use self::context::clean_email_body;
 #[allow(unused_imports)]
 pub use self::context::{
     AGENT_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT_FR, ChatTurn, agent_system_prompt, build_context,
-    contextualize_search_query,
 };
 pub use crate::i18n::Language;
+
+/// Remote embeddings / hybrid search are hidden from the UI and disabled: retrieval is
+/// BM25-only. The code paths are kept so they can be re-enabled later.
+pub const EMBEDDINGS_ENABLED: bool = false;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LlmConfig {
@@ -61,16 +67,16 @@ fn default_context_emails() -> usize {
 }
 
 impl LlmConfig {
-    /// Number of search hits to retrieve per chat question, clamped to a sane range.
+    /// Default number of results (one per thread) returned by each agent search,
+    /// clamped to a sane range.
     pub fn context_email_limit(&self) -> usize {
         self.max_context_emails
             .clamp(MIN_CONTEXT_EMAILS, MAX_CONTEXT_EMAILS)
     }
 
-    /// Total emails allowed after expanding hits with their thread siblings (50% headroom).
-    pub fn context_thread_limit(&self) -> usize {
-        let hits = self.context_email_limit();
-        hits + hits.div_ceil(2)
+    /// Whether remote embeddings should be used (always false while they are disabled).
+    pub fn embeddings_active(&self) -> bool {
+        EMBEDDINGS_ENABLED && self.use_remote_embeddings
     }
 }
 
@@ -90,6 +96,18 @@ impl Default for LlmConfig {
             dark_mode: true,
         }
     }
+}
+
+fn to_rig_history(history: &[ChatTurn]) -> Vec<rig::completion::Message> {
+    let mut rig_messages = Vec::new();
+    for turn in history {
+        if turn.role.eq_ignore_ascii_case("user") {
+            rig_messages.push(rig::completion::Message::user(&turn.content));
+        } else if turn.role.eq_ignore_ascii_case("assistant") {
+            rig_messages.push(rig::completion::Message::assistant(&turn.content));
+        }
+    }
+    rig_messages
 }
 
 #[allow(dead_code)]
@@ -124,14 +142,7 @@ pub fn ask_with_history(
         .context(context)
         .build();
 
-    let mut rig_messages = Vec::new();
-    for turn in history {
-        if turn.role.eq_ignore_ascii_case("user") {
-            rig_messages.push(rig::completion::Message::user(&turn.content));
-        } else if turn.role.eq_ignore_ascii_case("assistant") {
-            rig_messages.push(rig::completion::Message::assistant(&turn.content));
-        }
-    }
+    let mut rig_messages = to_rig_history(history);
 
     debug_log(format_args!(
         "LLM request: POST {endpoint_for_log}; model={:?}; auth={}; history_turns={}; question_bytes={}; context_bytes={}",
