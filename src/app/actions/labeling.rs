@@ -53,21 +53,23 @@ impl PstRagApp {
                 ordered_ids.push(id);
             }
         }
-        let batch =
-            match Index::open(&self.db_path).and_then(|db| db.get_messages_by_ids(&ordered_ids)) {
-                Ok(records) if !records.is_empty() => records,
-                Ok(_) => {
-                    self.status = self.config.language.status_labeling_no_matches().into();
-                    return AppTask::none();
-                }
-                Err(error) => {
-                    self.status = self
-                        .config
-                        .language
-                        .status_labeling_load_err(&format!("{error:#}"));
-                    return AppTask::none();
-                }
-            };
+        let batch = match self
+            .db_mut()
+            .and_then(|db| db.get_messages_by_ids(&ordered_ids))
+        {
+            Ok(records) if !records.is_empty() => records,
+            Ok(_) => {
+                self.status = self.config.language.status_labeling_no_matches().into();
+                return AppTask::none();
+            }
+            Err(error) => {
+                self.status = self
+                    .config
+                    .language
+                    .status_labeling_load_err(&format!("{error:#}"));
+                return AppTask::none();
+            }
+        };
         self.run_labeling_job(batch, backend)
     }
 
@@ -182,7 +184,10 @@ impl PstRagApp {
     }
 
     pub(in crate::app) fn toggle_manual_label(&mut self, message_id: i64, label: &str) {
-        match Index::open(&self.db_path).and_then(|db| db.toggle_manual_label(message_id, label)) {
+        let res = self
+            .db_mut()
+            .and_then(|db| db.toggle_manual_label(message_id, label));
+        match res {
             Ok(added) => {
                 self.refresh_explorer();
                 self.status = self.config.language.status_label_updated(label, added);
@@ -202,20 +207,20 @@ impl PstRagApp {
             return;
         }
         let ids: Vec<i64> = self.checked_message_ids.iter().copied().collect();
-        let all_have_label =
-            match Index::open(&self.db_path).and_then(|db| db.get_messages_by_ids(&ids)) {
-                Ok(records) => {
-                    !records.is_empty()
-                        && records
-                            .iter()
-                            .all(|m| m.labels.iter().any(|l| l.label == label))
-                }
-                Err(_) => false,
-            };
+        let all_have_label = match self.db_mut().and_then(|db| db.get_messages_by_ids(&ids)) {
+            Ok(records) => {
+                !records.is_empty()
+                    && records
+                        .iter()
+                        .all(|m| m.labels.iter().any(|l| l.label == label))
+            }
+            Err(_) => false,
+        };
         let assign = !all_have_label;
-        match Index::open(&self.db_path)
-            .and_then(|mut db| db.set_manual_label_for_messages(&ids, label, assign))
-        {
+        let res = self
+            .db_mut()
+            .and_then(|db| db.set_manual_label_for_messages(&ids, label, assign));
+        match res {
             Ok(_) => {
                 self.refresh_explorer();
                 self.status =
@@ -251,7 +256,10 @@ impl PstRagApp {
             description,
             color,
         };
-        match Index::open(&self.db_path).and_then(|db| db.upsert_label_definition(&def)) {
+        let res = self
+            .db_mut()
+            .and_then(|db| db.upsert_label_definition(&def));
+        match res {
             Ok(()) => {
                 self.new_label_name.clear();
                 self.new_label_description.clear();
@@ -268,7 +276,10 @@ impl PstRagApp {
     }
 
     pub(in crate::app) fn remove_label_definition(&mut self, name: &str) {
-        match Index::open(&self.db_path).and_then(|mut db| db.remove_label_definition(name)) {
+        let res = self
+            .db_mut()
+            .and_then(|db| db.remove_label_definition(name));
+        match res {
             Ok(()) => {
                 if self.label_filter == LabelFilter::Labeled(name.to_string()) {
                     self.label_filter = LabelFilter::Any;

@@ -14,7 +14,7 @@ use crate::model::{AssignedLabel, EmailRecord, LabelDefinition, LabelerBackend};
 
 #[cfg(test)]
 pub(crate) use self::agent::linkify_citations;
-pub use self::agent::{AgentAnswer, ProgressFn, run_agent};
+pub use self::agent::{ProgressFn, run_agent};
 pub(crate) use self::context::clean_email_body;
 #[allow(unused_imports)]
 pub use self::context::{

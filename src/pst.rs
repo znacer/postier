@@ -16,8 +16,23 @@ use outlook_pst::{
     ndb::node_id::NodeId,
 };
 
+pub const IMPORT_BATCH_SIZE: usize = 500;
+
 pub trait MailSource {
-    fn read_messages(&self, path: &Path) -> Result<Vec<Email>>;
+    fn read_messages(&self, path: &Path) -> Result<Vec<Email>> {
+        let mut all = Vec::new();
+        self.stream_messages(path, &mut |batch| {
+            all.extend(batch);
+            Ok(())
+        })?;
+        Ok(all)
+    }
+
+    fn stream_messages(
+        &self,
+        path: &Path,
+        on_batch: &mut dyn FnMut(Vec<Email>) -> Result<()>,
+    ) -> Result<usize>;
 }
 
 /// Development importer. One serialized `Email` per line permits end-to-end testing
@@ -25,25 +40,42 @@ pub trait MailSource {
 pub struct JsonlSource;
 
 impl MailSource for JsonlSource {
-    fn read_messages(&self, path: &Path) -> Result<Vec<Email>> {
+    fn stream_messages(
+        &self,
+        path: &Path,
+        on_batch: &mut dyn FnMut(Vec<Email>) -> Result<()>,
+    ) -> Result<usize> {
         let source = path.to_string_lossy().into_owned();
-        BufReader::new(File::open(path)?)
-            .lines()
-            .enumerate()
-            .map(|(line_no, line)| {
-                let mut email: Email = serde_json::from_str(&line?)
-                    .with_context(|| format!("invalid message on line {}", line_no + 1))?;
-                email.source_key = source.clone();
-                Ok(email)
-            })
-            .collect()
+        let mut batch = Vec::with_capacity(IMPORT_BATCH_SIZE);
+        let mut total = 0usize;
+        for (line_no, line) in BufReader::new(File::open(path)?).lines().enumerate() {
+            let mut email: Email = serde_json::from_str(&line?)
+                .with_context(|| format!("invalid message on line {}", line_no + 1))?;
+            email.source_key = source.clone();
+            batch.push(email);
+            total += 1;
+            if batch.len() >= IMPORT_BATCH_SIZE {
+                on_batch(std::mem::replace(
+                    &mut batch,
+                    Vec::with_capacity(IMPORT_BATCH_SIZE),
+                ))?;
+            }
+        }
+        if !batch.is_empty() {
+            on_batch(batch)?;
+        }
+        Ok(total)
     }
 }
 
 pub struct PstSource;
 
 impl MailSource for PstSource {
-    fn read_messages(&self, path: &Path) -> Result<Vec<Email>> {
+    fn stream_messages(
+        &self,
+        path: &Path,
+        on_batch: &mut dyn FnMut(Vec<Email>) -> Result<()>,
+    ) -> Result<usize> {
         // outlook-pst opens the archive read-only and supports both ANSI and Unicode PSTs.
         let store = outlook_pst::open_store(path).context("open PST read-only")?;
         let root_id = store
@@ -53,24 +85,40 @@ impl MailSource for PstSource {
         let root = store
             .open_folder(&root_id)
             .context("open the PST mail subtree")?;
-        let mut emails = Vec::new();
+        let mut batch = Vec::with_capacity(IMPORT_BATCH_SIZE);
+        let mut total = 0usize;
+        let mut skipped = 0usize;
         walk_folder(
             store,
             root,
             String::new(),
             &path.to_string_lossy(),
-            &mut emails,
+            &mut batch,
+            &mut total,
+            &mut skipped,
+            on_batch,
         )?;
-        Ok(emails)
+        if !batch.is_empty() {
+            on_batch(batch)?;
+        }
+        #[cfg(debug_assertions)]
+        if skipped > 0 {
+            eprintln!("[pstbeetle] PST import skipped {skipped} unreadable message(s)");
+        }
+        Ok(total)
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_folder(
     store: Rc<dyn Store>,
     folder: Rc<dyn Folder>,
     parent: String,
     source: &str,
-    out: &mut Vec<Email>,
+    batch: &mut Vec<Email>,
+    total: &mut usize,
+    skipped: &mut usize,
+    on_batch: &mut dyn FnMut(Vec<Email>) -> Result<()>,
 ) -> Result<()> {
     let name = folder
         .properties()
@@ -83,8 +131,20 @@ fn walk_folder(
     };
     if let Some(contents) = folder.contents_table() {
         for row in contents.rows_matrix() {
-            if let Ok(email) = read_message(store.clone(), row, &path, source) {
-                out.push(email);
+            match read_message(store.clone(), row, &path, source) {
+                Ok(email) => {
+                    batch.push(email);
+                    *total += 1;
+                    if batch.len() >= IMPORT_BATCH_SIZE {
+                        on_batch(std::mem::replace(
+                            batch,
+                            Vec::with_capacity(IMPORT_BATCH_SIZE),
+                        ))?;
+                    }
+                }
+                Err(_) => {
+                    *skipped += 1;
+                }
             }
         }
     }
@@ -93,7 +153,16 @@ fn walk_folder(
             let node = NodeId::from(u32::from(row.id()));
             let entry_id = store.properties().make_entry_id(node)?;
             if let Ok(child) = store.open_folder(&entry_id) {
-                walk_folder(store.clone(), child, path.clone(), source, out)?;
+                walk_folder(
+                    store.clone(),
+                    child,
+                    path.clone(),
+                    source,
+                    batch,
+                    total,
+                    skipped,
+                    on_batch,
+                )?;
             }
         }
     }
@@ -117,6 +186,7 @@ fn read_message(
     let sender = format_name_and_email(sender_name.as_deref(), sender_email.as_deref());
     let message_id =
         text_prop(props.get(0x1035)).unwrap_or_else(|| format!("pst-node-{}", u32::from(row.id())));
+    let conversation_id = extract_conversation_id(props, &subject);
     let sent_at = time_prop(props.get(0x0039)).or_else(|| time_prop(props.get(0x0E06)));
     let body = text_prop(props.get(0x1013))
         .or_else(|| text_prop(props.get(0x1000)))
@@ -127,18 +197,98 @@ fn read_message(
         .recipient_table()
         .map(|t| extract_recipients(t.as_ref(), display_to.as_deref(), display_cc.as_deref()))
         .unwrap_or_else(|| combine_to_and_cc(display_to.as_deref(), display_cc.as_deref()));
+    let attachment_names = message
+        .attachment_table()
+        .map(|t| extract_attachment_names(t.as_ref()))
+        .unwrap_or_default();
     Ok(Email {
         source_key: source.into(),
         message_id,
-        conversation_id: String::new(),
+        conversation_id,
         folder: folder.into(),
         subject,
         sender,
         recipients,
         sent_at,
         body,
-        attachment_names: String::new(),
+        attachment_names,
     })
+}
+
+fn extract_conversation_id(
+    props: &outlook_pst::messaging::message::MessageProperties,
+    subject: &str,
+) -> String {
+    // 1. PidTagConversationIndex (0x0071): first 22 bytes identify the root conversation thread
+    if let Some(PropertyValue::Binary(bin)) = props.get(0x0071) {
+        let buf = bin.buffer();
+        if buf.len() >= 22 {
+            let mut hex = String::with_capacity(44);
+            for &b in &buf[..22] {
+                use std::fmt::Write;
+                let _ = write!(&mut hex, "{b:02x}");
+            }
+            return hex;
+        }
+    }
+    // 2. PidTagConversationTopic (0x0070): normalized thread topic
+    if let Some(topic) = text_prop(props.get(0x0070)) {
+        return topic;
+    }
+    // 3. Fallback to normalized subject (stripping Re:/Fwd:/TR: prefixes)
+    normalize_subject_topic(subject)
+}
+
+fn normalize_subject_topic(subject: &str) -> String {
+    let mut s = subject.trim();
+    loop {
+        let lower = s.to_ascii_lowercase();
+        if let Some(rest) = lower
+            .strip_prefix("re:")
+            .or_else(|| lower.strip_prefix("fw:"))
+            .or_else(|| lower.strip_prefix("fwd:"))
+            .or_else(|| lower.strip_prefix("tr:"))
+        {
+            let advance = s.len() - rest.len();
+            s = s[advance..].trim_start();
+        } else {
+            break;
+        }
+    }
+    s.to_string()
+}
+
+fn extract_attachment_names(table: &dyn TableContext) -> String {
+    let context = table.context();
+    let mut names = Vec::new();
+    for row in table.rows_matrix() {
+        let Ok(cols) = row.columns(context) else {
+            continue;
+        };
+        let mut long_name: Option<String> = None;
+        let mut short_name: Option<String> = None;
+        let mut display_name: Option<String> = None;
+        for (col, raw) in context.columns().iter().zip(cols) {
+            let Some(raw_val) = raw else {
+                continue;
+            };
+            let Ok(prop_val) = table.read_column(&raw_val, col.prop_type()) else {
+                continue;
+            };
+            match col.prop_id() {
+                0x3707 => long_name = text_prop(Some(&prop_val)),
+                0x3704 => short_name = text_prop(Some(&prop_val)),
+                0x3001 => display_name = text_prop(Some(&prop_val)),
+                _ => {}
+            }
+        }
+        if let Some(name) = long_name.or(short_name).or(display_name)
+            && !names.contains(&name)
+        {
+            names.push(name);
+        }
+    }
+    names.join(", ")
 }
 
 fn format_name_and_email(name: Option<&str>, email: Option<&str>) -> String {
@@ -256,6 +406,7 @@ fn extract_recipients(
     combine_to_and_cc(to_str.as_deref(), cc_str.as_deref())
 }
 
+#[allow(dead_code)]
 pub fn import(path: &Path) -> Result<Vec<Email>> {
     match path
         .extension()
@@ -265,6 +416,22 @@ pub fn import(path: &Path) -> Result<Vec<Email>> {
     {
         Some("jsonl") => JsonlSource.read_messages(path),
         Some("pst") => PstSource.read_messages(path),
+        _ => bail!("choose a .pst archive or .jsonl development fixture"),
+    }
+}
+
+pub fn import_streaming(
+    path: &Path,
+    mut on_batch: impl FnMut(Vec<Email>) -> Result<()>,
+) -> Result<usize> {
+    match path
+        .extension()
+        .and_then(|x| x.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("jsonl") => JsonlSource.stream_messages(path, &mut on_batch),
+        Some("pst") => PstSource.stream_messages(path, &mut on_batch),
         _ => bail!("choose a .pst archive or .jsonl development fixture"),
     }
 }

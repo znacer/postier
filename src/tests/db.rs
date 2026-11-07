@@ -260,7 +260,7 @@ fn search_populates_rich_metadata_labels_and_expands_threads() {
     )
     .unwrap();
 
-    let mut hits = db.search("migrating", 10).unwrap();
+    let hits = db.search("migrating", 10).unwrap();
     assert_eq!(hits.len(), 1);
     assert!(hits[0].score > 0.0);
     assert_eq!(hits[0].attachment_names, "migration_guide.pdf");

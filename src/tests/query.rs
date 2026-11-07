@@ -5,7 +5,7 @@ use crate::{
         Index,
         query::{StatsGroup, parse_query},
     },
-    model::{AssignedLabel, Email},
+    model::Email,
 };
 
 #[test]

@@ -3,17 +3,12 @@ use serde::{Deserialize, Serialize};
 use crate::model::LabelerBackend;
 
 /// Supported interface languages.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
     English,
+    /// French by default for the French version of the app.
+    #[default]
     French,
-}
-
-impl Default for Language {
-    fn default() -> Self {
-        // French by default for the French version of the app.
-        Language::French
-    }
 }
 
 #[allow(dead_code)]
@@ -313,20 +308,13 @@ impl Language {
         }
     }
 
-    pub fn btn_download_q8(self) -> &'static str {
-        match self {
-            Self::English => "Download Q8_0",
-            Self::French => "Télécharger Q8_0",
-        }
-    }
-
     pub fn laya_explanation(self) -> &'static str {
         match self {
             Self::English => {
-                "Packaged Laya-GGUF runs in-process offline. Downloading Laya-Q8_0.gguf switches to the full 421M checkpoint."
+                "Packaged Laya-GGUF runs in-process offline. Select a local Laya-Q8_0.gguf file to use the full 421M checkpoint."
             }
             Self::French => {
-                "Laya-GGUF intégré s'exécute hors ligne dans le processus. Télécharger Laya-Q8_0.gguf active le point de contrôle complet de 421M."
+                "Laya-GGUF intégré s'exécute hors ligne dans le processus. Sélectionnez un fichier Laya-Q8_0.gguf local pour utiliser le modèle complet de 421M."
             }
         }
     }
@@ -798,6 +786,7 @@ impl Language {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_prefix(self, from: &str) -> String {
         match self {
             Self::English => format!("From: {from}"),
@@ -1261,13 +1250,6 @@ impl Language {
         }
     }
 
-    pub fn status_downloading_laya(self, path: &str) -> String {
-        match self {
-            Self::English => format!("Downloading ggml-org/Laya-GGUF to {path}..."),
-            Self::French => format!("Téléchargement de ggml-org/Laya-GGUF vers {path}..."),
-        }
-    }
-
     pub fn status_label_updated(self, label: &str, added: bool) -> String {
         match self {
             Self::English => format!(
@@ -1484,13 +1466,6 @@ impl Language {
         match self {
             Self::English => format!("Labeling failed: {error}"),
             Self::French => format!("Échec de l'étiquetage : {error}"),
-        }
-    }
-
-    pub fn worker_laya_downloaded(self, path: &str) -> String {
-        match self {
-            Self::English => format!("Downloaded ggml-org/Laya-GGUF to {path}"),
-            Self::French => format!("Modèle ggml-org/Laya-GGUF téléchargé vers {path}"),
         }
     }
 

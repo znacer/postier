@@ -13,15 +13,15 @@ Portable, local-first desktop mail explorer (3-pane web-standard layout built wi
   - **Center Message Table & Rich Email Reader**:
     - Action bar powered by `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `ToggleGroup`, `Input`, and `Button` components, with a quick-filter bar (FTS5/BM25 with `/` keyboard shortcut), multi-select `Checkbox` rows, `Shift`-key range selection (`Shift + Click` or `Shift + ↑/↓`), and sortable columns (`Subject`, `From`, `Folder`, `Labels`, `Date`).
     - **Structured Envelope Header**: Displays sender `Avatar` / `AvatarFallback` initials, parsed `From` (`De`), `To` (`À`), and `Cc` (`Cc`) contact pills (display name + `<email@domain>`), localized human-readable date and time badges (`chrono`), folder path pill, attachment `Badge` chips, and manual/automatic label controls.
-    - **Rich HTML & Plain-Text Email Rendering**: Sanitizes raw HTML emails (stripping scripts, trackers, unsafe attributes, and light-mode-only inline color overrides while preserving tables, lists, headings, blockquotes, and links) and upgrades plain-text emails into semantic HTML with structured reply/forward header cards, nested blockquotes, clickable URLs/emails, signatures, and legal disclaimer blocks inside a `ScrollArea`.
+    - **Rich HTML & Plain-Text Email Rendering**: Sanitizes raw HTML emails (stripping scripts, trackers, external images, unsafe attributes, and light-mode-only inline color overrides while preserving tables, lists, headings, blockquotes, and links) and upgrades plain-text emails into semantic HTML with structured reply/forward header cards, nested blockquotes, clickable URLs/emails, signatures, and legal disclaimer blocks inside a `ScrollArea`.
     - **Draggable Splitters**: Smoothly resize the message table height, mail header height, and chat pane width directly with the mouse.
   - **Right Collapsible & Resizable RAG Chat Pane**: Collapse into a `42px` rail or drag-resize the width (`310px` to window bounds). Includes suggested starter prompts, `Avatar`-badged message bubbles with Markdown-formatted assistant responses, expandable LLM context inspection (`Checkbox` + `Label`), and collapsible cited evidence cards (`Collapsible` + `ItemGroup` / `Item` components) with one-click `Open Mail` navigation.
 - **Email Labeling (`Laya-GGUF` or `LLM as a Judge`)**:
-  - **Laya Decision Model (`ggml-org/Laya-GGUF`)**: In-process pure-Rust GGUF v3 reader and ModernBERT + Laya Decision Head inference engine (`F32`, `F16`, `BF16`, `Q8_0` tensors, BPE tokenizer from `tokenizer.ggml.*` metadata, `[CLS] choice question: ... [SEP] [MASK] opt ... [SEP] state [SEP]` prompt formatting, and temperature scaling). Ships with a packaged in-process GGUF decision model that works offline out of the box, and can load or download full `Laya-bf16.gguf` / `Laya-Q8_0.gguf` weights from [`ggml-org/Laya-GGUF`](https://huggingface.co/ggml-org/Laya-GGUF).
+  - **Laya Decision Model (`ggml-org/Laya-GGUF`)**: In-process pure-Rust GGUF v3 reader and ModernBERT + Laya Decision Head inference engine (`F32`, `F16`, `BF16`, `Q8_0` tensors, BPE tokenizer from `tokenizer.ggml.*` metadata, `[CLS] choice question: ... [SEP] [MASK] opt ... [SEP] state [SEP]` prompt formatting, and temperature scaling). Ships with a packaged in-process GGUF decision model that works offline out of the box, and can load local `Laya-bf16.gguf` / `Laya-Q8_0.gguf` weights from [`ggml-org/Laya-GGUF`](https://huggingface.co/ggml-org/Laya-GGUF).
   - **LLM as a Judge**: Structured JSON classification against user-defined label definitions (`name`, `description`/criteria, `color`) using the configured OpenAI-compatible endpoint.
   - Label a single email, a multi-checked selection, or batch-label the current filtered explorer view with background progress and cancellation support.
 - **PST & Search Infrastructure**:
-  - Pure-Rust read-only PST extraction (`outlook-pst`), sender & `To`/`Cc` recipient resolution from MAPI properties, multi-PST index management, bundled SQLite with FTS5/BM25, content-hash deduplication, optional remote email embeddings with hybrid retrieval, and an isolated mail-source interface.
+  - Pure-Rust read-only PST extraction (`outlook-pst`), streaming batch ingestion, sender & `To`/`Cc` recipient resolution, conversation thread and attachment extraction from MAPI properties, multi-PST index management, bundled SQLite with FTS5/BM25, content-hash deduplication, optional remote email embeddings with hybrid retrieval, and an isolated mail-source interface.
 
 For safe end-to-end development, the file picker also accepts `.jsonl` fixtures with one `Email` object per line.
 
@@ -73,7 +73,7 @@ When started in development mode (`dx serve`), debug builds print sanitized Rig 
 
 The release profile enables LTO, stripping, size optimization, and abort-on-panic. SQLite is compiled into the executable (`rusqlite` bundled) and HTTP uses `rustls`, so no external database or TLS runtime is required.
 
-Runtime data defaults to `data/` beside the executable. The storage directory can be changed in the UI and the selection is remembered in `storage-directory.txt`; the selected directory contains `index.sqlite`, `credentials.json`, and any downloaded `Laya-Q8_0.gguf` weights.
+Runtime data defaults to `data/` beside the executable. The storage directory can be changed in the UI and the selection is remembered in `storage-directory.txt`; the selected directory contains `index.sqlite` and `credentials.json`.
 
 ## Fixture Example
 

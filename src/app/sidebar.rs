@@ -46,7 +46,6 @@ pub(super) enum SidebarMessage {
     RemoveLabelDefinition(String),
     LayaGgufPathChanged(String),
     ChooseLayaGguf,
-    DownloadLayaGguf,
     EndpointChanged(String),
     ModelChanged(String),
     TokenChanged(String),
@@ -629,10 +628,6 @@ impl PstRagApp {
             tr.btn_choose_gguf(),
             (!self.busy).then_some(SidebarMessage::ChooseLayaGguf),
         );
-        let download_q8_btn = small_button(
-            tr.btn_download_q8(),
-            (!self.busy).then_some(SidebarMessage::DownloadLayaGguf),
-        );
         let laya_exp = tr.laya_explanation();
 
         let laya_card = card(rsx! {
@@ -662,7 +657,6 @@ impl PstRagApp {
                 div {
                     style: "display: flex; flex-direction: row; gap: 6px; flex-wrap: wrap;",
                     {choose_gguf_btn}
-                    {download_q8_btn}
                 }
                 span { class: "form-hint", "{laya_exp}" }
             }

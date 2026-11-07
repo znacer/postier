@@ -6,7 +6,7 @@ mod tokenizer;
 use std::{
     collections::HashMap,
     fs::File,
-    io::{BufReader, Read, Write},
+    io::{BufReader, Read},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
@@ -24,8 +24,6 @@ use self::{
 
 #[allow(dead_code)]
 pub const HF_LAYA_REPO: &str = "https://huggingface.co/ggml-org/Laya-GGUF";
-pub const HF_LAYA_Q8_URL: &str =
-    "https://huggingface.co/ggml-org/Laya-GGUF/resolve/main/Laya-Q8_0.gguf";
 pub const DEFAULT_LAYA_FILENAME: &str = "Laya-Q8_0.gguf";
 
 type CachedLayaModel = (PathBuf, Arc<LayaModel>);
@@ -794,45 +792,4 @@ pub fn default_gguf_path(storage_dir: &Path) -> PathBuf {
         return in_data;
     }
     in_storage
-}
-
-pub fn download_laya_gguf(target_path: &Path) -> Result<u64> {
-    if let Some(parent) = target_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("start download runtime")?;
-    let tmp_path = target_path.with_extension("gguf.part");
-    let total = runtime.block_on(async {
-        let client = reqwest::Client::builder()
-            .https_only(true)
-            .build()
-            .context("build HTTPS client for Laya-GGUF download")?;
-        let mut response = client
-            .get(HF_LAYA_Q8_URL)
-            .send()
-            .await
-            .context("request Laya-Q8_0.gguf from Hugging Face")?
-            .error_for_status()
-            .context("Hugging Face returned an error for Laya-Q8_0.gguf")?;
-        let mut out =
-            File::create(&tmp_path).with_context(|| format!("create {}", tmp_path.display()))?;
-        let mut written = 0u64;
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .context("read Laya-Q8_0.gguf stream chunk")?
-        {
-            out.write_all(&chunk)
-                .context("write Laya-Q8_0.gguf chunk")?;
-            written += chunk.len() as u64;
-        }
-        out.flush()?;
-        Ok::<u64, anyhow::Error>(written)
-    })?;
-    std::fs::rename(&tmp_path, target_path)
-        .with_context(|| format!("move downloaded model to {}", target_path.display()))?;
-    Ok(total)
 }

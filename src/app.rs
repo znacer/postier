@@ -124,7 +124,6 @@ enum WorkerResult {
     Searched(Result<Arc<Vec<SearchHit>>, String>),
     Answered(Result<Arc<(String, Vec<SearchHit>, String)>, String>),
     Labeled(Result<LabelOutcome, String>),
-    LayaDownloaded(Result<PathBuf, String>),
 }
 
 #[derive(Debug, Clone)]
@@ -237,6 +236,7 @@ pub struct PstRagApp {
     storage_location_path: PathBuf,
     storage_dir: PathBuf,
     db_path: PathBuf,
+    db: Option<Index>,
     archive: Option<PathBuf>,
     question: String,
     messages: Vec<ChatMessage>,
@@ -414,7 +414,11 @@ fn app_root() -> Element {
     let theme_name = if is_dark { "dark" } else { "light" };
 
     use_effect(move || {
-        let theme = if app_signal.read().config.dark_mode { "dark" } else { "light" };
+        let theme = if app_signal.read().config.dark_mode {
+            "dark"
+        } else {
+            "light"
+        };
         let js = format!("document.documentElement.setAttribute('data-theme', '{theme}');");
         let _ = document::eval(&js);
     });
@@ -507,13 +511,16 @@ impl PstRagApp {
             .unwrap_or_else(|| base.join("data"));
         let db_path = storage_dir.join("index.sqlite");
         let config = load_config(&storage_dir).unwrap_or_default();
-        let (count, sources) = Index::open(&db_path)
-            .map(|db| (db.count().unwrap_or(0), db.sources().unwrap_or_default()))
+        let db = Index::open(&db_path).ok();
+        let (count, sources) = db
+            .as_ref()
+            .map(|d| (d.count().unwrap_or(0), d.sources().unwrap_or_default()))
             .unwrap_or_default();
         let mut app = Self {
             storage_location_path,
             storage_dir,
             db_path,
+            db,
             archive: None,
             question: String::new(),
             messages: vec![],
@@ -749,7 +756,6 @@ impl PstRagApp {
                 AppTask::none()
             }
             SidebarMessage::ChooseLayaGguf => self.choose_laya_gguf(),
-            SidebarMessage::DownloadLayaGguf => self.download_laya_gguf(),
             SidebarMessage::EndpointChanged(value) => {
                 self.config.endpoint = value;
                 AppTask::none()
@@ -1016,9 +1022,6 @@ impl PstRagApp {
         let tr = self.config.language;
         match result {
             WorkerResult::Indexed(Ok(outcome)) => {
-                self.count = Index::open(&self.db_path)
-                    .and_then(|db| db.count())
-                    .unwrap_or(self.count);
                 self.refresh_sources();
                 self.refresh_explorer();
                 self.status = tr.worker_indexed(outcome.added, outcome.embedded);
@@ -1074,14 +1077,6 @@ impl PstRagApp {
             WorkerResult::Labeled(Err(error)) => {
                 self.refresh_explorer();
                 self.status = tr.worker_labeling_failed(&error);
-            }
-            WorkerResult::LayaDownloaded(Ok(path)) => {
-                self.config.laya_gguf_path = path.to_string_lossy().to_string();
-                let _ = actions::save_config(&self.storage_dir, &self.config);
-                self.status = tr.worker_laya_downloaded(&path.display().to_string());
-            }
-            WorkerResult::LayaDownloaded(Err(error)) => {
-                self.status = format!("Laya GGUF download failed: {error}");
             }
         }
     }

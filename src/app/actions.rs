@@ -2,6 +2,7 @@ mod labeling;
 
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -34,6 +35,13 @@ pub(super) fn spawn_worker(
 }
 
 impl PstRagApp {
+    pub(super) fn db_mut(&mut self) -> anyhow::Result<&mut Index> {
+        if self.db.is_none() {
+            self.db = Some(Index::open(&self.db_path)?);
+        }
+        Ok(self.db.as_mut().expect("db initialized"))
+    }
+
     pub(super) fn choose_storage_dir(&self) -> AppTask {
         if self.busy {
             return AppTask::none();
@@ -54,10 +62,9 @@ impl PstRagApp {
     pub(super) fn apply_storage_dir(&mut self, path: PathBuf) {
         self.storage_dir = path;
         self.db_path = self.storage_dir.join("index.sqlite");
+        self.db = Index::open(&self.db_path).ok();
         self.config = load_config(&self.storage_dir).unwrap_or_default();
-        self.count = Index::open(&self.db_path)
-            .and_then(|d| d.count())
-            .unwrap_or(0);
+        self.count = self.db.as_ref().and_then(|d| d.count().ok()).unwrap_or(0);
         self.checked_message_ids.clear();
         self.range_anchor_id = None;
         self.refresh_sources();
@@ -134,29 +141,6 @@ impl PstRagApp {
             .status_selected_laya_gguf(&path.display().to_string());
     }
 
-    pub(super) fn download_laya_gguf(&mut self) -> AppTask {
-        if self.busy {
-            return AppTask::none();
-        }
-        let target = if self.config.laya_gguf_path.trim().is_empty() {
-            laya::default_gguf_path(&self.storage_dir)
-        } else {
-            PathBuf::from(self.config.laya_gguf_path.trim())
-        };
-        self.cancel_flag = Some(Arc::new(AtomicBool::new(false)));
-        self.busy = true;
-        self.status = self
-            .config
-            .language
-            .status_downloading_laya(&target.display().to_string());
-        spawn_worker(move |_tx| {
-            let result = laya::download_laya_gguf(&target)
-                .map(|_| target)
-                .map_err(|error| format!("{error:#}"));
-            WorkerResult::LayaDownloaded(result)
-        })
-    }
-
     pub(super) fn active_laya_gguf_path(&self) -> Option<PathBuf> {
         let configured = self.config.laya_gguf_path.trim();
         if !configured.is_empty() {
@@ -211,16 +195,23 @@ impl PstRagApp {
         };
         spawn_worker(move |tx| {
             let result = (|| {
-                let emails = pst::import(&path)?;
-                emit_worker_event(
-                    tx,
-                    WorkerEvent::Progress(format!(
-                        "Parsed {} emails, writing to local SQLite index...",
-                        emails.len()
-                    )),
-                );
                 let mut db = Index::open(&db_path)?;
-                let added = db.index_batch(&emails)?;
+                let mut added = 0usize;
+                let mut parsed = 0usize;
+                pst::import_streaming(&path, |batch| {
+                    if cancel.load(Ordering::Relaxed) {
+                        anyhow::bail!("{}", config.language.agent_cancelled());
+                    }
+                    parsed += batch.len();
+                    added += db.index_batch(&batch)?;
+                    emit_worker_event(
+                        tx,
+                        WorkerEvent::Progress(format!(
+                            "Indexed {added} new emails ({parsed} parsed)..."
+                        )),
+                    );
+                    Ok(())
+                })?;
                 let mut embedded = 0;
                 if config.embeddings_active() && !cancel.load(Ordering::Relaxed) {
                     let model = config.embedding_model.trim();
@@ -389,30 +380,33 @@ impl PstRagApp {
     }
 
     pub(super) fn refresh_sources(&mut self) {
-        self.sources = Index::open(&self.db_path)
+        self.sources = self
+            .db_mut()
             .and_then(|db| db.sources())
             .unwrap_or_default();
     }
 
     pub(super) fn refresh_explorer(&mut self) {
-        let Ok(db) = Index::open(&self.db_path) else {
+        let Ok(db) = self.db_mut() else {
             return;
         };
-        self.count = db.count().unwrap_or(self.count);
-        self.labels_with_counts = db.label_definitions_with_counts().unwrap_or_default();
-        self.unlabeled_count = db.unlabeled_count().unwrap_or(0);
-        self.refresh_explorer_messages_with(&db);
+        let count = db.count().unwrap_or(0);
+        let labels_with_counts = db.label_definitions_with_counts().unwrap_or_default();
+        let unlabeled_count = db.unlabeled_count().unwrap_or(0);
+        self.count = count;
+        self.labels_with_counts = labels_with_counts;
+        self.unlabeled_count = unlabeled_count;
+        self.refresh_explorer_messages();
     }
 
     pub(super) fn refresh_explorer_messages(&mut self) {
-        let Ok(db) = Index::open(&self.db_path) else {
+        if self.db.is_none() {
+            self.db = Index::open(&self.db_path).ok();
+        }
+        let Some(db) = self.db.as_ref() else {
             return;
         };
-        self.refresh_explorer_messages_with(&db);
-    }
-
-    fn refresh_explorer_messages_with(&mut self, db: &Index) {
-        self.explorer_messages = db
+        let messages = db
             .list_messages(
                 &self.mail_scope,
                 &self.label_filter,
@@ -421,6 +415,7 @@ impl PstRagApp {
                 300,
             )
             .unwrap_or_default();
+        self.explorer_messages = messages;
 
         if let Some(selected_id) = self.selected_message_id {
             if !self
@@ -439,7 +434,7 @@ impl PstRagApp {
         self.selected_message_id = Some(id);
         self.range_anchor_id = Some(id);
         if !self.explorer_messages.iter().any(|email| email.id == id)
-            && let Ok(db) = Index::open(&self.db_path)
+            && let Ok(db) = self.db_mut()
             && let Ok(Some(record)) = db.get_message(id)
         {
             self.explorer_messages.insert(0, record);
@@ -555,9 +550,10 @@ impl PstRagApp {
     }
 
     pub(super) fn set_source_enabled(&mut self, source: &str, enabled: bool) {
-        self.status = match Index::open(&self.db_path)
-            .and_then(|db| db.set_source_enabled(source, enabled))
-        {
+        let res = self
+            .db_mut()
+            .and_then(|db| db.set_source_enabled(source, enabled));
+        self.status = match res {
             Ok(()) => {
                 self.refresh_sources();
                 self.refresh_explorer();
@@ -572,9 +568,10 @@ impl PstRagApp {
     }
 
     pub(super) fn set_folders_enabled(&mut self, source: &str, folders: &[String], enabled: bool) {
-        self.status = match Index::open(&self.db_path)
-            .and_then(|mut db| db.set_folders_enabled(source, folders, enabled))
-        {
+        let res = self
+            .db_mut()
+            .and_then(|db| db.set_folders_enabled(source, folders, enabled));
+        self.status = match res {
             Ok(()) => {
                 self.refresh_sources();
                 self.refresh_explorer();
@@ -592,8 +589,8 @@ impl PstRagApp {
         let Some(source) = self.pending_remove_source.take() else {
             return;
         };
-        self.status = match Index::open(&self.db_path).and_then(|mut db| db.remove_source(&source))
-        {
+        let res = self.db_mut().and_then(|db| db.remove_source(&source));
+        self.status = match res {
             Ok(removed) => {
                 self.count = self.count.saturating_sub(removed as u64);
                 self.checked_message_ids.clear();
@@ -624,11 +621,22 @@ pub(super) fn save_config(
 ) -> anyhow::Result<()> {
     fs::create_dir_all(storage_dir)?;
     let path = storage_dir.join("credentials.json");
-    fs::write(&path, serde_json::to_vec_pretty(config)?)?;
+    let bytes = serde_json::to_vec_pretty(config)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)?;
+        file.write_all(&bytes)?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(&path, bytes)?;
     }
     Ok(())
 }

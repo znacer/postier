@@ -933,10 +933,9 @@ fn sanitize_img_tag(attrs: &[(String, String)]) -> String {
         );
     }
 
-    if src_lower.starts_with("https://")
-        || src_lower.starts_with("http://")
-        || src_lower.starts_with("data:image/")
-    {
+    // Only allow self-contained inline `data:image/` URIs; external `http(s)://` images are
+    // blocked so opening an email in the WebView never makes automatic outbound network requests.
+    if src_lower.starts_with("data:image/") {
         let mut img_attrs = vec![
             format!("src=\"{}\"", escape_html_attr(src)),
             "class=\"email-inline-img\"".to_string(),

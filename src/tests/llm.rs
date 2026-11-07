@@ -1,7 +1,7 @@
 use crate::{
     llm::{
-        ChatTurn, build_context, clean_email_body, endpoint_for_log, linkify_citations,
-        openai_base_url, parse_judge_response, validate_endpoint,
+        build_context, clean_email_body, endpoint_for_log, linkify_citations, openai_base_url,
+        parse_judge_response, validate_endpoint,
     },
     model::{AssignedLabel, SearchHit, default_label_definitions},
 };

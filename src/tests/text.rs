@@ -119,16 +119,16 @@ fn index_stems_generates_stemmed_token_string() {
 
 #[test]
 fn best_passages_extracts_matching_segment_from_long_text() {
-    let mut paragraphs = Vec::new();
-    paragraphs.push("Introduction: General company overview and routine updates.");
-    for i in 1..20 {
-        paragraphs
-            .push("Routine maintenance log line: Everything operating within standard parameters.");
-    }
+    let mut paragraphs = vec!["Introduction: General company overview and routine updates."];
+    paragraphs.extend(std::iter::repeat_n(
+        "Routine maintenance log line: Everything operating within standard parameters.",
+        19,
+    ));
     paragraphs.push("Crucial decision: The Atlas project launch is strictly postponed until June 15 due to vendor delays.");
-    for i in 1..10 {
-        paragraphs.push("Follow-up housekeeping notices and parking reminders.");
-    }
+    paragraphs.extend(std::iter::repeat_n(
+        "Follow-up housekeeping notices and parking reminders.",
+        9,
+    ));
     let full_text = paragraphs.join("\n\n");
 
     let query_tokens = vec!["Atlas".to_string(), "postponed".to_string()];

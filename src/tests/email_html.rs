@@ -41,6 +41,8 @@ fn sanitizes_html_emails_and_removes_scripts_styles_and_trackers() {
     <a href="https://example.com/report?id=1&amp;lang=fr" onclick="steal()">View Report</a>
     <a href="javascript:alert(1)">Bad Link</a>
     <img src="https://tracker.example.com/pixel.gif" width="1" height="1">
+    <img src="https://tracker.example.com/banner.png" alt="External Banner">
+    <img src="data:image/png;base64,iVBORw0KGgo=" alt="Inline Logo">
     <img src="cid:image001.png@01DA8F20.123456" alt="Architecture Diagram">
   </div>
 </body>
@@ -55,11 +57,15 @@ fn sanitizes_html_emails_and_removes_scripts_styles_and_trackers() {
     assert!(!sanitized.contains("javascript:"));
     assert!(!sanitized.contains("background-color"));
     assert!(!sanitized.contains("pixel.gif"));
+    assert!(!sanitized.contains("banner.png"));
 
     assert!(sanitized.contains("Hello <strong>Team</strong>"));
     assert!(sanitized.contains("text-align: center; font-weight: bold"));
     assert!(sanitized.contains(
         r#"<a href="https://example.com/report?id=1&amp;lang=fr" class="email-link" target="_blank" rel="noopener noreferrer">View Report</a>"#
+    ));
+    assert!(sanitized.contains(
+        r#"<img src="data:image/png;base64,iVBORw0KGgo=" class="email-inline-img" loading="lazy" alt="Inline Logo">"#
     ));
     assert!(sanitized.contains(r#"<span class="email-cid-chip">📎 Architecture Diagram</span>"#));
 }

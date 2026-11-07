@@ -542,7 +542,6 @@ impl Index {
                 "SELECT {key_expr} AS key, count(*) {where_sql} GROUP BY key ORDER BY {order} LIMIT ?"
             )
         };
-        let mut binds = binds;
         binds.push(Value::Integer(top.max(1) as i64));
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(binds), |r| {

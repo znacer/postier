@@ -601,12 +601,11 @@ impl EmailStatsTool {
         let described = describe_query(&parsed);
         let group_name = args
             .group_by
-            .map(|g| {
+            .and_then(|g| {
                 serde_json::to_value(g)
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_string))
             })
-            .flatten()
             .unwrap_or_else(|| "none".into());
         (shared.progress)(shared.language.agent_progress_stats(&group_name));
         let (total, buckets) = shared.db().email_stats(&parsed, args.group_by, top)?;
