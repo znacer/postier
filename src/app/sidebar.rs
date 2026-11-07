@@ -339,7 +339,7 @@ impl PstRagApp {
                 rsx! {
                     div {
                         style: "padding: 8px; border-radius: var(--radius-sm); background-color: var(--danger-subtle); border: 1px solid rgba(239, 68, 68, 0.3); display: flex; flex-direction: column; gap: 6px; margin-top: 4px;",
-                        span { style: "font-size: 11px; color: #fca5a5;", "{confirm_msg}" }
+                        span { style: "font-size: 11px; color: var(--contrast-error-color);", "{confirm_msg}" }
                         div {
                             style: "display: flex; flex-direction: row; gap: 6px;",
                             {cancel_btn}

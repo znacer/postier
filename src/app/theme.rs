@@ -20,22 +20,46 @@ pub(super) struct Color {
 
 impl Color {
     pub const fn from_rgb(r: f32, g: f32, b: f32) -> Self {
-        Self { r, g, b, a: 1.0, var: None }
+        Self {
+            r,
+            g,
+            b,
+            a: 1.0,
+            var: None,
+        }
     }
 
     pub const fn from_rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
-        Self { r, g, b, a, var: None }
+        Self {
+            r,
+            g,
+            b,
+            a,
+            var: None,
+        }
     }
 
     pub const fn from_hex(hex: u32) -> Self {
         let r = ((hex >> 16) & 0xFF) as f32 / 255.0;
         let g = ((hex >> 8) & 0xFF) as f32 / 255.0;
         let b = (hex & 0xFF) as f32 / 255.0;
-        Self { r, g, b, a: 1.0, var: None }
+        Self {
+            r,
+            g,
+            b,
+            a: 1.0,
+            var: None,
+        }
     }
 
     pub const fn from_var(var: &'static str) -> Self {
-        Self { r: 0.0, g: 0.0, b: 0.0, a: 1.0, var: Some(var) }
+        Self {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+            var: Some(var),
+        }
     }
 
     pub fn parse(hex: &str) -> Option<Self> {
@@ -555,7 +579,7 @@ html, body, #main {
     border-radius: 50%;
     background: linear-gradient(135deg, rgba(59, 130, 246, 0.28) 0%, rgba(29, 78, 216, 0.44) 100%);
     border: 1px solid rgba(96, 165, 250, 0.42);
-    color: #93c5fd;
+    color: var(--light, #1e3a8a) var(--dark, #93c5fd);
     font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.03em;
@@ -731,13 +755,13 @@ html, body, #main {
 
 .email-html-body a:hover,
 .email-html-body .email-link:hover {
-    color: #93c5fd;
-    text-decoration-color: #93c5fd;
+    color: var(--primary-hover);
+    text-decoration-color: var(--primary-hover);
 }
 
 .email-html-body .email-address-link {
     display: inline-block;
-    color: #93c5fd;
+    color: var(--text-accent);
     background-color: rgba(59, 130, 246, 0.12);
     border: 1px solid rgba(96, 165, 250, 0.24);
     padding: 0px 6px;
@@ -853,7 +877,7 @@ html, body, #main {
     max-width: 100%;
     margin: 10px 0 14px 0;
     font-size: 12.5px;
-    background-color: rgba(15, 23, 42, 0.42);
+    background-color: var(--bg-surface);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
     overflow: hidden;
@@ -876,7 +900,7 @@ html, body, #main {
 .email-html-body pre {
     font-family: var(--font-mono);
     font-size: 12px;
-    background-color: #090d16;
+    background-color: var(--bg-input);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
     padding: 10px 12px;
@@ -1105,11 +1129,18 @@ pub(super) fn card(content: Element) -> Element {
 
 pub(super) fn label_badge(name: &str, hex_color: &str, detail: Option<String>) -> Element {
     let base = parse_hex_color(hex_color);
-    let bg = Color {
+    let dark_bg = Color {
         r: base.r * 0.24,
         g: base.g * 0.24,
         b: base.b * 0.24,
         a: 0.92,
+        var: None,
+    };
+    let light_bg = Color {
+        r: base.r * 0.16 + 0.84,
+        g: base.g * 0.16 + 0.84,
+        b: base.b * 0.16 + 0.84,
+        a: 0.96,
         var: None,
     };
     let border_col = Color {
@@ -1124,7 +1155,7 @@ pub(super) fn label_badge(name: &str, hex_color: &str, detail: Option<String>) -
     rsx! {
         Badge {
             variant: BadgeVariant::Outline,
-            style: "display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; font-size: 11px; font-weight: 500; color: {bright}; background-color: {bg}; border: 1px solid {border_col}; border-radius: 9999px; white-space: nowrap;",
+            style: "display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; font-size: 11px; font-weight: 500; color: {bright}; background-color: var(--light, {light_bg}) var(--dark, {dark_bg}); border: 1px solid {border_col}; border-radius: 9999px; white-space: nowrap;",
             span {
                 style: "width: 6px; height: 6px; border-radius: 50%; background-color: {base}; flex-shrink: 0;"
             }
@@ -1238,7 +1269,7 @@ pub(super) fn reader_body_style() -> String {
     "background-color: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-sm);".into()
 }
 pub(super) fn code_block_style() -> String {
-    "background-color: #090d16; border: 1px solid var(--border-default); border-radius: var(--radius-sm);".into()
+    "background-color: var(--bg-input); border: 1px solid var(--border-default); border-radius: var(--radius-sm);".into()
 }
 pub(super) fn blockquote_style() -> String {
     "background-color: rgba(59, 130, 246, 0.07); border-left: 3px solid var(--border-focus); border-radius: 0 var(--radius-sm) var(--radius-sm) 0;".into()

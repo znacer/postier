@@ -367,7 +367,7 @@ impl PstRagApp {
     fn selection_action_bar(&self) -> Element {
         let tr = self.config.language;
         let muted_color = muted();
-        let on_prim = on_primary();
+        let bright = bright_text();
         let count = self.checked_message_ids.len();
 
         let mut manual_chips = Vec::new();
@@ -423,7 +423,7 @@ impl PstRagApp {
             div {
                 style: "width: 100%; padding: 8px 14px; display: flex; flex-direction: row; align-items: center; gap: 10px; flex-shrink: 0; {sb_style}",
                 span {
-                    style: "font-size: 12px; font-weight: 600; color: {on_prim}; white-space: nowrap;",
+                    style: "font-size: 12px; font-weight: 600; color: {bright}; white-space: nowrap;",
                     "{selected_count_lbl}"
                 }
                 {laya_batch_btn}
@@ -616,14 +616,10 @@ impl PstRagApp {
         let subj_trunc = truncate_str(subject, 64);
         let sender_trunc = truncate_str(sender, 36);
         let folder_trunc = truncate_str(folder, 24);
-        let subj_color = if is_selected || is_checked {
-            on_primary()
-        } else {
-            bright_text()
-        };
+        let subj_color = bright_text();
         let subj_weight = if is_selected { "600" } else { "500" };
         let sender_color = if is_selected {
-            on_primary()
+            bright_text()
         } else {
             muted_color
         };
