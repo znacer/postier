@@ -1,7 +1,7 @@
 use crate::{
     llm::{
-        build_context, clean_email_body, endpoint_for_log, linkify_citations, openai_base_url,
-        parse_judge_response, validate_endpoint,
+        build_context, clean_email_body, endpoint_for_log, extract_citation_ids, linkify_citations,
+        openai_base_url, parse_judge_response, strip_mail_links, validate_endpoint,
     },
     model::{AssignedLabel, SearchHit, default_label_definitions},
 };
@@ -66,6 +66,13 @@ fn cleans_email_body_disclaimers_and_deep_quotes() {
     assert!(cleaned.contains("[Legal disclaimer omitted]"));
     assert!(!cleaned.contains("CONFIDENTIALITY NOTICE"));
     assert!(cleaned.contains("---"));
+
+    let raw_fr = "Bonjour,\n\nVoici le rapport.\n\n\
+                  Ce message et toutes les pièces jointes sont confidentiels et établis à l'intention exclusive de ses destinataires.";
+    let cleaned_fr = clean_email_body(raw_fr);
+    assert!(cleaned_fr.contains("Voici le rapport."));
+    assert!(cleaned_fr.contains("[Legal disclaimer omitted]"));
+    assert!(!cleaned_fr.contains("intention exclusive"));
 }
 
 #[test]
@@ -138,11 +145,21 @@ fn build_context_includes_metadata_and_prevents_starvation() {
 fn linkify_citations_converts_known_ids_into_mail_urls() {
     use std::collections::HashSet;
     let known: HashSet<i64> = [42, 108].into_iter().collect();
-    let text = "Decided in [#42] and confirmed in [Email #108], but not [#999].";
+    let text = "Decided in [#42] and confirmed in [Email #108], plus pre-linked [#42](mail://42), but not [#999] or [#999](mail://999).";
     let (linked, cited) = linkify_citations(text, &known);
     assert_eq!(
         linked,
-        "Decided in [#42](mail://42) and confirmed in [#108](mail://108), but not #999."
+        "Decided in [#42](mail://42) and confirmed in [#108](mail://108), plus pre-linked [#42](mail://42), but not #999 or #999."
     );
     assert_eq!(cited, vec![42, 108]);
+}
+
+#[test]
+fn strips_mail_links_and_extracts_citation_ids() {
+    let msg = "See [#42](mail://42) and [#108](mail://108), plus [docs](https://example.test).";
+    assert_eq!(
+        strip_mail_links(msg),
+        "See [#42] and [#108], plus [docs](https://example.test)."
+    );
+    assert_eq!(extract_citation_ids(msg), vec![42, 108]);
 }

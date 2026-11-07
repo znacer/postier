@@ -38,7 +38,7 @@ pub struct SearchFilters {
     pub date_to: Option<String>,
     /// Substring of the folder path.
     pub folder: Option<String>,
-    /// Exact label name (case-insensitive).
+    /// Label name or substring (case-insensitive).
     pub label: Option<String>,
     pub has_attachment: Option<bool>,
 }
@@ -350,7 +350,7 @@ pub fn push_filter_sql(filters: &SearchFilters, sql: &mut String, binds: &mut Ve
             " AND EXISTS (SELECT 1 FROM message_labels ml
                           WHERE ml.message_id = m.id AND ml.label LIKE ? ESCAPE '\\')",
         );
-        binds.push(Value::Text(like_escape(&label)));
+        binds.push(Value::Text(like_contains(&label)));
     }
     match filters.has_attachment {
         Some(true) => sql.push_str(" AND m.attachment_names <> ''"),
@@ -595,9 +595,12 @@ impl Index {
         Ok((total, all))
     }
 
+    /// Looks up a single email hit by id, respecting enabled source and folder settings.
     pub fn get_hit(&self, id: i64) -> Result<Option<SearchHit>> {
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {HIT_COLUMNS} FROM messages m WHERE m.id = ?1"
+            "SELECT {HIT_COLUMNS} FROM messages m
+             JOIN indexed_sources s ON s.source_key = m.source_key
+             WHERE m.id = ?1 AND {ENABLED_SOURCES}"
         ))?;
         let mut rows = stmt.query_map([id], |r| map_hit(r, 0.0))?;
         let Some(hit) = rows.next().transpose()? else {

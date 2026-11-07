@@ -18,7 +18,7 @@ Research method:
 5. Snippets are partial. Read an email with read_email before relying on it. For discussions, decisions or status questions use get_thread: the latest messages usually hold the outcome.
 6. For how-many, who-most, since-when or trend questions use email_stats instead of counting search results.
 7. Stop researching once the evidence is sufficient, and never repeat an identical search.
-8. Earlier answers in this conversation cite emails as [#id]: for follow-up questions, read those emails directly with read_email.
+8. Earlier answers in this conversation or the user's question may cite emails as [#id]: read those emails directly with read_email.
 
 Answer rules:
 - Base every statement strictly on emails seen through the tools. Never invent facts, names or dates.
@@ -45,7 +45,7 @@ Méthode de recherche :
 5. Les extraits sont partiels. Lisez un courriel avec read_email avant de vous appuyer dessus. Pour les discussions, décisions ou questions d'avancement, utilisez get_thread : les derniers messages contiennent généralement l'issue.
 6. Pour les questions de type combien, qui le plus, depuis quand ou tendance, utilisez email_stats au lieu de compter les résultats de recherche.
 7. Arrêtez la recherche dès que les preuves suffisent et ne répétez jamais une recherche identique.
-8. Les réponses précédentes de cette conversation citent les courriels sous la forme [#id] : pour une question de suivi, lisez directement ces courriels avec read_email.
+8. Les réponses précédentes de cette conversation ou la question de l'utilisateur peuvent citer des courriels sous la forme [#id] : lisez directement ces courriels avec read_email.
 
 Règles de réponse :
 - Fondez chaque affirmation strictement sur les courriels consultés via les outils. N'inventez jamais de faits, de noms ou de dates.
@@ -67,6 +67,27 @@ pub fn agent_system_prompt(lang: Language) -> &'static str {
 pub struct ChatTurn {
     pub role: String,
     pub content: String,
+}
+
+/// Strips `(mail://123)` link targets from assistant history messages so the LLM sees
+/// canonical `[#123]` citations in its conversation history.
+pub fn strip_mail_links(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(pos) = rest.find("](mail://") {
+        out.push_str(&rest[..=pos]);
+        let after = &rest[pos + 9..];
+        if let Some(close) = after.find(')')
+            && after[..close].chars().all(|c| c.is_ascii_digit())
+        {
+            rest = &after[close + 1..];
+        } else {
+            out.push_str("(mail://");
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 pub fn clean_email_body(raw: &str) -> String {
@@ -99,6 +120,10 @@ pub fn clean_email_body(raw: &str) -> String {
                 || lower.starts_with("privileged/confidential information")
                 || lower.starts_with("please consider the environment before printing")
                 || lower.starts_with("this message is for the designated recipient only")
+                || lower.starts_with("ce message et toutes les pièces jointes")
+                || lower.starts_with("ce courriel et toutes les pièces jointes")
+                || lower.starts_with("avis de confidentialité")
+                || lower.starts_with("confidentiel : ce message")
             {
                 out_lines.push("[Legal disclaimer omitted]".into());
                 break;

@@ -328,12 +328,12 @@ impl PstRagApp {
         if let Some(email) = self.selected_email() {
             self.question = match self.config.language {
                 crate::i18n::Language::English => format!(
-                    "Summarize the email \"{}\" from {} and list any concrete action items or decisions.",
-                    email.subject, email.sender
+                    "Summarize email [#{}] \"{}\" from {} and list any concrete action items or decisions.",
+                    email.id, email.subject, email.sender
                 ),
                 crate::i18n::Language::French => format!(
-                    "Résume le courriel « {} » de {} et liste les actions concrètes ou décisions éventuelles.",
-                    email.subject, email.sender
+                    "Résume le courriel [#{}] « {} » de {} et liste les actions concrètes ou décisions éventuelles.",
+                    email.id, email.subject, email.sender
                 ),
             };
             self.status = self.config.language.status_prepared_prompt_email().into();

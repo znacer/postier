@@ -25,8 +25,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::{
-    ChatTurn, LlmConfig, agent_system_prompt, build_context, clean_email_body, debug_log,
-    endpoint_for_log, openai_base_url, to_rig_history, validate_endpoint,
+    ChatTurn, LlmConfig, agent_system_prompt, build_context, build_http_client, clean_email_body,
+    debug_log, endpoint_for_log, openai_base_url, to_rig_history, validate_endpoint,
 };
 use crate::{
     db::{
@@ -199,7 +199,7 @@ fn filter_properties() -> Map<String, Value> {
     );
     props.insert(
         "label".into(),
-        json!({"type": "string", "description": "Exact label name, e.g. \"Urgent\" or \"Decision\"."}),
+        json!({"type": "string", "description": "Label name or substring, e.g. \"Urgent\" or \"Decision\"."}),
     );
     props.insert(
         "has_attachment".into(),
@@ -325,6 +325,10 @@ impl SearchEmailsTool {
                 let mut obj = hit_header(hit);
                 if hit.thread_matches > 1 {
                     obj.insert("thread_matches".into(), json!(hit.thread_matches));
+                    obj.insert(
+                        "thread_hint".into(),
+                        json!("Multiple matching messages in this thread; call get_thread to read the full conversation."),
+                    );
                 }
                 obj.insert(
                     "snippet".into(),
@@ -663,6 +667,33 @@ impl PortableTool for EmailStatsTool {
 // ---------------------------------------------------------------------------
 // citations
 
+/// Extracts all candidate email citation IDs (e.g. `[#123]`, `[#123, #456]`, `[Email #123]`)
+/// referenced in `answer`, including pre-linked `[#123](mail://123)`.
+pub fn extract_citation_ids(answer: &str) -> Vec<i64> {
+    let mut ids = Vec::new();
+    let mut rest = answer;
+    while let Some(open) = rest.find('[') {
+        let after = &rest[open + 1..];
+        let Some(close) = after
+            .find(']')
+            .filter(|&c| c <= 80 && !after[..c].contains('\n'))
+        else {
+            rest = after;
+            continue;
+        };
+        let inner = &after[..close];
+        if let Some(parsed) = parse_citation_list(inner) {
+            for id in parsed {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        rest = &after[close + 1..];
+    }
+    ids
+}
+
 /// Turns `[#123]` / `[#123, #456]` / `[Email #123]` citations of known emails into
 /// `[#123](mail://123)` links. Returns the rewritten text and cited ids in order.
 pub fn linkify_citations(answer: &str, known: &HashSet<i64>) -> (String, Vec<i64>) {
@@ -681,8 +712,19 @@ pub fn linkify_citations(answer: &str, known: &HashSet<i64>) -> (String, Vec<i64
             continue;
         };
         let inner = &after[..close];
-        let following = &after[close + 1..];
-        let ids = if following.starts_with('(') {
+        let mut following = &after[close + 1..];
+        let ids = if let Some(after_mail) = following.strip_prefix("(mail://") {
+            if let Some(paren_close) = after_mail.find(')')
+                && after_mail[..paren_close]
+                    .chars()
+                    .all(|c| c.is_ascii_digit())
+            {
+                following = &after_mail[paren_close + 1..];
+                parse_citation_list(inner)
+            } else {
+                None
+            }
+        } else if following.starts_with('(') {
             None
         } else {
             parse_citation_list(inner)
@@ -752,8 +794,15 @@ pub fn run_agent(
     cancel: Arc<AtomicBool>,
 ) -> Result<AgentAnswer> {
     let language = config.language;
+    let db = Index::open(db_path)?;
+    let configured_labels: Vec<String> = db
+        .label_definitions()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
     let shared = Arc::new(Shared {
-        db: Mutex::new(Index::open(db_path)?),
+        db: Mutex::new(db),
         language,
         default_limit: config.context_email_limit(),
         evidence: Mutex::new(Evidence::default()),
@@ -764,10 +813,7 @@ pub fn run_agent(
     let url = validate_endpoint(&config.endpoint)?;
     let endpoint_for_log = endpoint_for_log(&url);
     let base_url = openai_base_url(&url)?;
-    let http_client = reqwest::Client::builder()
-        .https_only(url.scheme() == "https")
-        .build()
-        .context("build secure HTTP client")?;
+    let http_client = build_http_client(&url)?;
     let client = openai::Client::builder()
         .api_key(config.bearer_token.clone())
         .base_url(base_url.as_str())
@@ -776,11 +822,26 @@ pub fn run_agent(
         .context("build Rig OpenAI-compatible client")?
         .completions_api();
 
+    let labels_note = if configured_labels.is_empty() {
+        String::new()
+    } else {
+        match language {
+            Language::English => format!(
+                "\nConfigured archive labels: {}.",
+                configured_labels.join(", ")
+            ),
+            Language::French => format!(
+                "\nÉtiquettes configurées dans l'archive : {}.",
+                configured_labels.join(", ")
+            ),
+        }
+    };
     let preamble = format!(
-        "{}\n\n{} {}.",
+        "{}\n\n{} {}.{}",
         agent_system_prompt(language),
         language.agent_today_label(),
-        chrono::Local::now().format("%Y-%m-%d (%A)")
+        chrono::Local::now().format("%Y-%m-%d (%A)"),
+        labels_note
     );
     let agent = client
         .agent(&config.model)
@@ -837,6 +898,20 @@ pub fn run_agent(
             );
         }
     };
+
+    // Resolve any cited email IDs from earlier conversation turns that exist in enabled sources
+    let candidate_ids = extract_citation_ids(&raw_answer);
+    for id in candidate_ids {
+        let already_known = shared
+            .evidence
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .hits
+            .contains_key(&id);
+        if !already_known && let Ok(Some(hit)) = shared.db().get_hit(id) {
+            shared.remember([hit], true);
+        }
+    }
 
     let evidence = shared.evidence.lock().unwrap_or_else(|e| e.into_inner());
     let (answer, cited) = linkify_citations(&raw_answer, &evidence.known_ids());

@@ -1,6 +1,8 @@
 mod agent;
 mod context;
 
+use std::time::Duration;
+
 use anyhow::{Context, Result, bail};
 use rig::{
     completion::{Chat, Prompt},
@@ -12,19 +14,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{AssignedLabel, EmailRecord, LabelDefinition, LabelerBackend};
 
-#[cfg(test)]
-pub(crate) use self::agent::linkify_citations;
 pub use self::agent::{ProgressFn, run_agent};
-pub(crate) use self::context::clean_email_body;
+#[cfg(test)]
+pub(crate) use self::agent::{extract_citation_ids, linkify_citations};
 #[allow(unused_imports)]
 pub use self::context::{
     AGENT_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT_FR, ChatTurn, agent_system_prompt, build_context,
 };
+pub(crate) use self::context::{clean_email_body, strip_mail_links};
 pub use crate::i18n::Language;
 
 /// Remote embeddings / hybrid search are hidden from the UI and disabled: retrieval is
 /// BM25-only. The code paths are kept so they can be re-enabled later.
 pub const EMBEDDINGS_ENABLED: bool = false;
+
+const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LlmConfig {
@@ -98,13 +103,23 @@ impl Default for LlmConfig {
     }
 }
 
+pub(crate) fn build_http_client(url: &url::Url) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .https_only(url.scheme() == "https")
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .timeout(HTTP_REQUEST_TIMEOUT)
+        .build()
+        .context("build secure HTTP client")
+}
+
 fn to_rig_history(history: &[ChatTurn]) -> Vec<rig::completion::Message> {
     let mut rig_messages = Vec::new();
     for turn in history {
         if turn.role.eq_ignore_ascii_case("user") {
             rig_messages.push(rig::completion::Message::user(&turn.content));
         } else if turn.role.eq_ignore_ascii_case("assistant") {
-            rig_messages.push(rig::completion::Message::assistant(&turn.content));
+            let cleaned = strip_mail_links(&turn.content);
+            rig_messages.push(rig::completion::Message::assistant(&cleaned));
         }
     }
     rig_messages
@@ -124,10 +139,7 @@ pub fn ask_with_history(
     let url = validate_endpoint(&config.endpoint)?;
     let endpoint_for_log = endpoint_for_log(&url);
     let base_url = openai_base_url(&url)?;
-    let http_client = reqwest::Client::builder()
-        .https_only(url.scheme() == "https")
-        .build()
-        .context("build secure HTTP client")?;
+    let http_client = build_http_client(&url)?;
     let client = openai::Client::builder()
         .api_key(config.bearer_token.clone())
         .base_url(base_url.as_str())
@@ -186,10 +198,7 @@ pub fn judge_labels(
     let url = validate_endpoint(&config.endpoint)?;
     let endpoint_for_log = endpoint_for_log(&url);
     let base_url = openai_base_url(&url)?;
-    let http_client = reqwest::Client::builder()
-        .https_only(url.scheme() == "https")
-        .build()
-        .context("build secure HTTP client")?;
+    let http_client = build_http_client(&url)?;
     let client = openai::Client::builder()
         .api_key(config.bearer_token.clone())
         .base_url(base_url.as_str())
@@ -303,10 +312,7 @@ pub fn embed(config: &LlmConfig, texts: Vec<String>) -> Result<Vec<Vec<f64>>> {
     }
     let url = validate_endpoint(&config.endpoint)?;
     let base_url = openai_base_url(&url)?;
-    let http_client = reqwest::Client::builder()
-        .https_only(url.scheme() == "https")
-        .build()
-        .context("build secure HTTP client")?;
+    let http_client = build_http_client(&url)?;
     let client = openai::CompletionsClient::builder()
         .api_key(config.bearer_token.clone())
         .base_url(base_url.as_str())

@@ -5,7 +5,7 @@ use crate::{
         Index,
         query::{StatsGroup, parse_query},
     },
-    model::Email,
+    model::{AssignedLabel, Email},
 };
 
 #[test]
@@ -163,4 +163,53 @@ fn get_thread_returns_chronological_messages_with_limit_preservation() {
     assert_eq!(messages[0].subject, "Discussion part 1");
     assert_eq!(messages[1].subject, "Discussion part 4");
     assert_eq!(messages[2].subject, "Discussion part 5");
+}
+
+#[test]
+fn get_hit_respects_enabled_sources_and_folders_and_label_filter_matches_substrings() {
+    let mut db = Index::open(Path::new(":memory:")).unwrap();
+    db.index_batch(&[Email {
+        source_key: "/archives/corp.pst".into(),
+        folder: "Mailbox/Confidential".into(),
+        subject: "Board Resolution".into(),
+        sender: "board@example.test".into(),
+        sent_at: Some("2026-06-01T12:00:00Z".into()),
+        body: "Approved the acquisition terms.".into(),
+        ..Default::default()
+    }])
+    .unwrap();
+
+    let hits = db.search("acquisition", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    let email_id = hits[0].id;
+
+    db.set_message_labels(
+        email_id,
+        &[AssignedLabel {
+            label: "Action Required".into(),
+            confidence: Some(0.95),
+            source: "laya".into(),
+        }],
+    )
+    .unwrap();
+
+    // Substring label filter ("Action" matches "Action Required")
+    let by_label = db.search_emails(&parse_query("label:Action"), 10).unwrap();
+    assert_eq!(by_label.len(), 1);
+    assert_eq!(by_label[0].id, email_id);
+
+    // Enabled source & folder -> get_hit returns Some
+    assert!(db.get_hit(email_id).unwrap().is_some());
+
+    // Disabled folder -> get_hit returns None
+    db.set_folder_enabled("/archives/corp.pst", "Mailbox/Confidential", false)
+        .unwrap();
+    assert!(db.get_hit(email_id).unwrap().is_none());
+    db.set_folder_enabled("/archives/corp.pst", "Mailbox/Confidential", true)
+        .unwrap();
+    assert!(db.get_hit(email_id).unwrap().is_some());
+
+    // Disabled source -> get_hit returns None
+    db.set_source_enabled("/archives/corp.pst", false).unwrap();
+    assert!(db.get_hit(email_id).unwrap().is_none());
 }
