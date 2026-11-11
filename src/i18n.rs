@@ -236,6 +236,20 @@ impl Language {
         }
     }
 
+    pub fn collapse_all_subdirectories(self) -> &'static str {
+        match self {
+            Self::English => "Collapse all subdirectories",
+            Self::French => "Replier tous les sous-dossiers",
+        }
+    }
+
+    pub fn expand_all_subdirectories(self) -> &'static str {
+        match self {
+            Self::English => "Expand all subdirectories",
+            Self::French => "Déplier tous les sous-dossiers",
+        }
+    }
+
     // Sidebar - Labels
     pub fn btn_all(self) -> &'static str {
         match self {

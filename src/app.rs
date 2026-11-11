@@ -38,7 +38,7 @@ use actions::load_config;
 use chat::{ChatPaneMessage, chat_question_input_id};
 use explorer::{ExplorerMessage, explorer_filter_input_id, reader_header_id};
 use markdown::{MdBlock, parse_markdown};
-use sidebar::SidebarMessage;
+use sidebar::{FolderContextMenu, SidebarMessage, collapsible_folder_paths_under};
 use theme::{APP_CSS, DX_COMPONENTS_CSS, DX_COMPONENTS_THEME_CSS, SplitAxis, page_style, splitter};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -248,6 +248,7 @@ pub struct PstRagApp {
     sources: Vec<IndexedSource>,
     pending_remove_source: Option<String>,
     collapsed_source_folders: HashSet<(String, String)>,
+    folder_context_menu: Option<FolderContextMenu>,
     collapsed_sections: [bool; 3],
     explorer_messages: Vec<EmailRecord>,
     selected_message_id: Option<i64>,
@@ -532,6 +533,7 @@ impl PstRagApp {
             sources,
             pending_remove_source: None,
             collapsed_source_folders: HashSet::new(),
+            folder_context_menu: None,
             collapsed_sections: [false, false, true],
             explorer_messages: vec![],
             selected_message_id: None,
@@ -684,6 +686,7 @@ impl PstRagApp {
         match message {
             SidebarMessage::ToggleSidebar => {
                 self.sidebar_open = !self.sidebar_open;
+                self.folder_context_menu = None;
                 AppTask::none()
             }
             SidebarMessage::ToggleSection(section) => {
@@ -715,6 +718,42 @@ impl PstRagApp {
                 let key = (source, folder);
                 if !self.collapsed_source_folders.remove(&key) {
                     self.collapsed_source_folders.insert(key);
+                }
+                AppTask::none()
+            }
+            SidebarMessage::OpenFolderContextMenu {
+                source_key,
+                folder_path,
+                position,
+            } => {
+                self.folder_context_menu = Some(FolderContextMenu {
+                    source_key,
+                    folder_path,
+                    position,
+                });
+                AppTask::none()
+            }
+            SidebarMessage::CloseFolderContextMenu => {
+                self.folder_context_menu = None;
+                AppTask::none()
+            }
+            SidebarMessage::CollapseAllSubdirectories(source_key, folder_prefix) => {
+                self.folder_context_menu = None;
+                if let Some(source) = self.sources.iter().find(|s| s.key == source_key) {
+                    for path in collapsible_folder_paths_under(&source.folders, &folder_prefix) {
+                        self.collapsed_source_folders
+                            .insert((source_key.clone(), path));
+                    }
+                }
+                AppTask::none()
+            }
+            SidebarMessage::ExpandAllSubdirectories(source_key, folder_prefix) => {
+                self.folder_context_menu = None;
+                if let Some(source) = self.sources.iter().find(|s| s.key == source_key) {
+                    for path in collapsible_folder_paths_under(&source.folders, &folder_prefix) {
+                        self.collapsed_source_folders
+                            .remove(&(source_key.clone(), path));
+                    }
                 }
                 AppTask::none()
             }
@@ -973,7 +1012,9 @@ impl PstRagApp {
             }
             KeyShortcut::FocusQuickFilter => AppTask::focus(explorer_filter_input_id()),
             KeyShortcut::ClearFilterOrSelection => {
-                if !self.filter_query.is_empty() {
+                if self.folder_context_menu.is_some() {
+                    self.folder_context_menu = None;
+                } else if !self.filter_query.is_empty() {
                     self.filter_query.clear();
                     self.refresh_explorer_messages();
                 } else if !self.checked_message_ids.is_empty() {

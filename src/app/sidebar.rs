@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use dioxus::prelude::*;
 use dioxus_primitives::checkbox::CheckboxState;
 
-use super::{DispatchMessage, PstRagApp, SidebarSection, theme::*};
+use super::{DispatchMessage, Point, PstRagApp, SidebarSection, theme::*};
 use crate::{
     components::{
         badge::{Badge, BadgeVariant},
@@ -25,6 +25,13 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
+pub(super) struct FolderContextMenu {
+    pub(super) source_key: String,
+    pub(super) folder_path: String,
+    pub(super) position: Point,
+}
+
+#[derive(Debug, Clone)]
 pub(super) enum SidebarMessage {
     ToggleSidebar,
     ToggleSection(SidebarSection),
@@ -36,6 +43,14 @@ pub(super) enum SidebarMessage {
     SourceEnabledChanged(String, bool),
     FolderTreeEnabledChanged(String, Vec<String>, bool),
     ToggleFolderTreeNode(String, String),
+    OpenFolderContextMenu {
+        source_key: String,
+        folder_path: String,
+        position: Point,
+    },
+    CloseFolderContextMenu,
+    CollapseAllSubdirectories(String, String),
+    ExpandAllSubdirectories(String, String),
     RemoveSourceRequested(String),
     ConfirmRemoveSource,
     CancelRemoveSource,
@@ -71,6 +86,62 @@ pub(crate) struct FolderTreeRow<'a> {
     enabled: bool,
     has_children: bool,
     pub(crate) collapsed: bool,
+}
+
+/// Returns all collapsible folder tree node paths at or under `folder_prefix`
+/// (or all collapsible folder tree nodes in `folders` when `folder_prefix` is empty).
+pub(crate) fn collapsible_folder_paths_under(
+    folders: &[IndexedFolder],
+    folder_prefix: &str,
+) -> Vec<String> {
+    let mut root = FolderTree::default();
+    for folder in folders {
+        let mut node = &mut root;
+        let mut found_segment = false;
+        for segment in folder.path.split('/').filter(|segment| !segment.is_empty()) {
+            found_segment = true;
+            node = node.children.entry(segment).or_default();
+        }
+        if found_segment {
+            node.folder = Some(folder);
+        }
+    }
+
+    fn collect_collapsible(
+        node: &FolderTree<'_>,
+        parent_path: &str,
+        prefix: &str,
+        out: &mut Vec<String>,
+    ) {
+        for (&name, child) in &node.children {
+            let path = if parent_path.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{parent_path}/{name}")
+            };
+            let matches_prefix = prefix.is_empty()
+                || path == prefix
+                || path
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('/'));
+            if matches_prefix && !child.children.is_empty() {
+                out.push(path.clone());
+            }
+            if prefix.is_empty()
+                || matches_prefix
+                || prefix
+                    .strip_prefix(&path)
+                    .is_some_and(|rest| rest.starts_with('/'))
+            {
+                collect_collapsible(child, &path, prefix, out);
+            }
+        }
+    }
+
+    let trimmed = folder_prefix.trim_matches('/');
+    let mut out = Vec::new();
+    collect_collapsible(&root, "", trimmed, &mut out);
+    out
 }
 
 pub(crate) fn folder_tree_rows<'a>(
@@ -219,6 +290,7 @@ impl PstRagApp {
         for source in &self.sources {
             let source_key = source.key.clone();
             let source_key_select = source.key.clone();
+            let source_key_ctx = source.key.clone();
             let is_source_selected =
                 matches!(&self.mail_scope, MailScope::Source(k) if k == &source.key);
             let source_nav_class = if is_source_selected {
@@ -241,8 +313,10 @@ impl PstRagApp {
             for tree_row in folder_tree_rows(&source.folders, &collapsed_paths) {
                 let sk_check = source.key.clone();
                 let sk_folder = source.key.clone();
+                let sk_ctx = source.key.clone();
                 let folder_paths = tree_row.folder_paths;
                 let row_path = tree_row.path.clone();
+                let row_path_ctx = tree_row.path.clone();
                 let is_folder_selected = matches!(
                     &self.mail_scope,
                     MailScope::Folder { source_key: sk, folder_prefix: fp }
@@ -268,62 +342,78 @@ impl PstRagApp {
 
                 folder_elements.push(rsx! {
                     SidebarMenuSubItem {
-                        style: "display: flex; flex-direction: row; align-items: center; gap: 6px; padding-left: {indent_px}px;",
-                        Checkbox {
-                            checked: row_checked,
-                            on_checked_change: move |state: CheckboxState| {
-                                SidebarMessage::FolderTreeEnabledChanged(
-                                    sk_check.clone(),
-                                    folder_paths.clone(),
-                                    matches!(state, CheckboxState::Checked),
-                                )
-                                .dispatch();
-                            }
-                        }
-                        Button {
-                            variant: ButtonVariant::Ghost,
-                            size: ButtonSize::Xs,
-                            class: "{folder_nav_class}",
-                            style: "flex: 1; min-width: 0; padding: 4px 8px; font-size: 11.5px; justify-content: space-between;",
-                            onclick: move |_| {
-                                SidebarMessage::SelectMailScope(MailScope::Folder {
-                                    source_key: sk_folder.clone(),
-                                    folder_prefix: row_path.clone(),
-                                })
-                                .dispatch();
+                        style: "padding-left: {indent_px}px;",
+                        div {
+                            style: "display: flex; flex-direction: row; align-items: center; gap: 6px; width: 100%;",
+                            oncontextmenu: move |evt: MouseEvent| {
+                                evt.prevent_default();
+                                evt.stop_propagation();
+                                if has_children {
+                                    let coords = evt.client_coordinates();
+                                    SidebarMessage::OpenFolderContextMenu {
+                                        source_key: sk_ctx.clone(),
+                                        folder_path: row_path_ctx.clone(),
+                                        position: Point::new(coords.x as f32, coords.y as f32),
+                                    }
+                                    .dispatch();
+                                }
                             },
-                            span {
-                                style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
-                                "{folder_name}"
-                            }
-                            span {
-                                style: "font-size: 10.5px; color: {muted_color}; font-variant-numeric: tabular-nums;",
-                                "{folder_count}"
-                            }
-                        }
-                        if has_children {
-                            Button {
-                                variant: ButtonVariant::Ghost,
-                                size: ButtonSize::IconXs,
-                                style: "padding: 2px; width: 20px; height: 20px; flex-shrink: 0;",
-                                onclick: move |_| {
-                                    SidebarMessage::ToggleFolderTreeNode(
-                                        sk_toggle.clone(),
-                                        folder_path_toggle.clone(),
+                            Checkbox {
+                                checked: row_checked,
+                                on_checked_change: move |state: CheckboxState| {
+                                    SidebarMessage::FolderTreeEnabledChanged(
+                                        sk_check.clone(),
+                                        folder_paths.clone(),
+                                        matches!(state, CheckboxState::Checked),
                                     )
                                     .dispatch();
+                                }
+                            }
+                            Button {
+                                variant: ButtonVariant::Ghost,
+                                size: ButtonSize::Xs,
+                                class: "{folder_nav_class}",
+                                style: "flex: 1; min-width: 0; padding: 4px 8px; font-size: 11.5px; justify-content: space-between;",
+                                onclick: move |_| {
+                                    SidebarMessage::SelectMailScope(MailScope::Folder {
+                                        source_key: sk_folder.clone(),
+                                        folder_prefix: row_path.clone(),
+                                    })
+                                    .dispatch();
                                 },
-                                svg {
-                                    width: "12",
-                                    height: "12",
-                                    view_box: "0 0 24 24",
-                                    fill: "none",
-                                    stroke: "{muted_color}",
-                                    stroke_width: "2",
-                                    stroke_linecap: "round",
-                                    stroke_linejoin: "round",
-                                    style: "transition: transform 0.14s ease; transform: rotate({chevron_rot});",
-                                    polyline { points: "6 9 12 15 18 9" }
+                                span {
+                                    style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                                    "{folder_name}"
+                                }
+                                span {
+                                    style: "font-size: 10.5px; color: {muted_color}; font-variant-numeric: tabular-nums;",
+                                    "{folder_count}"
+                                }
+                            }
+                            if has_children {
+                                Button {
+                                    variant: ButtonVariant::Ghost,
+                                    size: ButtonSize::IconXs,
+                                    style: "padding: 2px; width: 20px; height: 20px; flex-shrink: 0;",
+                                    onclick: move |_| {
+                                        SidebarMessage::ToggleFolderTreeNode(
+                                            sk_toggle.clone(),
+                                            folder_path_toggle.clone(),
+                                        )
+                                        .dispatch();
+                                    },
+                                    svg {
+                                        width: "12",
+                                        height: "12",
+                                        view_box: "0 0 24 24",
+                                        fill: "none",
+                                        stroke: "{muted_color}",
+                                        stroke_width: "2",
+                                        stroke_linecap: "round",
+                                        stroke_linejoin: "round",
+                                        style: "transition: transform 0.14s ease; transform: rotate({chevron_rot});",
+                                        polyline { points: "6 9 12 15 18 9" }
+                                    }
                                 }
                             }
                         }
@@ -377,12 +467,27 @@ impl PstRagApp {
             } else {
                 CheckboxState::Unchecked
             };
+            let source_has_collapsible =
+                !collapsible_folder_paths_under(&source.folders, "").is_empty();
 
             source_elements.push(rsx! {
                 SidebarMenuItem {
                     style: "padding: 4px 0px; display: flex; flex-direction: column; gap: 3px; border-bottom: 1px solid var(--border-subtle);",
                     div {
                         style: "display: flex; flex-direction: row; align-items: center; gap: 6px;",
+                        oncontextmenu: move |evt: MouseEvent| {
+                            evt.prevent_default();
+                            evt.stop_propagation();
+                            if source_has_collapsible {
+                                let coords = evt.client_coordinates();
+                                SidebarMessage::OpenFolderContextMenu {
+                                    source_key: source_key_ctx.clone(),
+                                    folder_path: String::new(),
+                                    position: Point::new(coords.x as f32, coords.y as f32),
+                                }
+                                .dispatch();
+                            }
+                        },
                         Checkbox {
                             checked: source_checked,
                             on_checked_change: move |state: CheckboxState| {
@@ -912,6 +1017,57 @@ impl PstRagApp {
             });
         }
 
+        let context_menu_el = self.folder_context_menu.as_ref().map(|menu| {
+            let menu_source = menu.source_key.clone();
+            let menu_source_exp = menu.source_key.clone();
+            let menu_folder = menu.folder_path.clone();
+            let menu_folder_exp = menu.folder_path.clone();
+            let collapse_lbl = tr.collapse_all_subdirectories();
+            let expand_lbl = tr.expand_all_subdirectories();
+            let left = menu.position.x.max(4.0);
+            let top = menu.position.y.max(4.0);
+            rsx! {
+                div {
+                    style: "position: fixed; inset: 0; z-index: 999;",
+                    onclick: move |_| SidebarMessage::CloseFolderContextMenu.dispatch(),
+                    oncontextmenu: move |evt: MouseEvent| {
+                        evt.prevent_default();
+                        SidebarMessage::CloseFolderContextMenu.dispatch();
+                    },
+                    div {
+                        class: "dx-dropdown-menu-content",
+                        "data-state": "open",
+                        style: "position: fixed; left: {left}px; top: {top}px; min-width: 210px; z-index: 1000; opacity: 1; transform: none; box-shadow: var(--shadow-lg);",
+                        onclick: move |evt: MouseEvent| evt.stop_propagation(),
+                        div {
+                            class: "dx-dropdown-menu-item",
+                            style: "font-size: 12px; padding: 6px 10px;",
+                            onclick: move |_| {
+                                SidebarMessage::CollapseAllSubdirectories(
+                                    menu_source.clone(),
+                                    menu_folder.clone(),
+                                )
+                                .dispatch();
+                            },
+                            "{collapse_lbl}"
+                        }
+                        div {
+                            class: "dx-dropdown-menu-item",
+                            style: "font-size: 12px; padding: 6px 10px;",
+                            onclick: move |_| {
+                                SidebarMessage::ExpandAllSubdirectories(
+                                    menu_source_exp.clone(),
+                                    menu_folder_exp.clone(),
+                                )
+                                .dispatch();
+                            },
+                            "{expand_lbl}"
+                        }
+                    }
+                }
+            }
+        });
+
         rsx! {
             aside {
                 style: "width: 285px; height: 100%; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; {sb_style}",
@@ -1058,6 +1214,9 @@ impl PstRagApp {
                             {sec}
                         }
                     }
+                }
+                if let Some(menu) = context_menu_el {
+                    {menu}
                 }
             }
         }

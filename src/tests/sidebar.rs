@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use crate::{app::sidebar::folder_tree_rows, model::IndexedFolder};
+use crate::{
+    app::sidebar::{collapsible_folder_paths_under, folder_tree_rows},
+    model::IndexedFolder,
+};
 
 fn folder(path: &str) -> IndexedFolder {
     IndexedFolder {
@@ -43,4 +46,46 @@ fn collapsed_folder_hides_all_descendants() {
     assert_eq!(rows[0].name, "Mailbox");
     assert!(rows[0].collapsed);
     assert_eq!(rows[0].folder_paths.len(), 2);
+}
+
+#[test]
+fn collapsible_folder_paths_under_finds_all_branch_nodes_in_subtree() {
+    let folders = [
+        folder("Mailbox/Projects/Alpha/Specs"),
+        folder("Mailbox/Projects/Beta"),
+        folder("Mailbox/Inbox"),
+        folder("Archive/2025/Q1"),
+    ];
+
+    assert_eq!(
+        collapsible_folder_paths_under(&folders, "Mailbox"),
+        vec![
+            "Mailbox".to_string(),
+            "Mailbox/Projects".to_string(),
+            "Mailbox/Projects/Alpha".to_string(),
+        ]
+    );
+
+    assert_eq!(
+        collapsible_folder_paths_under(&folders, "Mailbox/Projects"),
+        vec![
+            "Mailbox/Projects".to_string(),
+            "Mailbox/Projects/Alpha".to_string(),
+        ]
+    );
+
+    // Leaf folder has no collapsible subdirectories
+    assert!(collapsible_folder_paths_under(&folders, "Mailbox/Inbox").is_empty());
+
+    // Empty prefix returns all collapsible directories in the PST
+    assert_eq!(
+        collapsible_folder_paths_under(&folders, ""),
+        vec![
+            "Archive".to_string(),
+            "Archive/2025".to_string(),
+            "Mailbox".to_string(),
+            "Mailbox/Projects".to_string(),
+            "Mailbox/Projects/Alpha".to_string(),
+        ]
+    );
 }
