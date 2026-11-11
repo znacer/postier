@@ -977,6 +977,12 @@ html, body, #main {
 ::-webkit-scrollbar-thumb:hover {
     background: rgba(96, 165, 250, 0.48);
 }
+
+.brand-logo svg {
+    width: 24px;
+    height: 24px;
+    display: block;
+}
 "#;
 
 pub(super) const BUTTON_MAX_WIDTH: f32 = 240.0;
@@ -1295,7 +1301,7 @@ pub(super) fn source_style() -> String {
     "background-color: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-sm);".into()
 }
 pub(super) fn accent_tile_style() -> String {
-    "background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); border: 1px solid rgba(147, 197, 253, 0.35); border-radius: 9px; box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);".into()
+    "background-color: var(--bg-surface); border: 1px solid rgba(147, 197, 253, 0.35); border-radius: 9px;".into()
 }
 pub(super) fn user_avatar_style() -> String {
     panel(USER_BUBBLE, USER_BUBBLE, 999.0)

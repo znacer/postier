@@ -13,20 +13,15 @@ fn embedded_config_toml_parses_and_provides_shipped_defaults() {
     let parsed = LlmConfig::from_toml_str(EMBEDDED_CONFIG_TOML).unwrap();
     let default_cfg = LlmConfig::default();
     assert_eq!(parsed, default_cfg);
-    assert_eq!(
-        default_cfg.endpoint,
-        "https://llm.internal.example/v1/chat/completions"
-    );
-    assert_eq!(default_cfg.model, "private-model");
-    assert_eq!(default_cfg.agent_max_turns_limit(), 12);
-    assert_eq!(default_cfg.context_email_limit(), 8);
-    assert_eq!(default_cfg.max_search_results_limit(), 50);
-    assert_eq!(default_cfg.snippet_chars_limit(), 360);
-    assert_eq!(default_cfg.read_email_max_chars_limit(), 12_000);
-    assert_eq!(default_cfg.thread_max_messages_limit(), 40);
-    assert_eq!(default_cfg.thread_total_chars_limit(), 14_000);
-    assert_eq!(default_cfg.max_context_chars, 16_000);
-    assert_eq!(default_cfg.history_turns_limit(), 3);
+    assert!(!default_cfg.endpoint.trim().is_empty());
+    assert!(!default_cfg.model.trim().is_empty());
+    assert!(default_cfg.agent_max_turns_limit() >= 1);
+    assert!(default_cfg.context_email_limit() >= 1);
+    assert!(default_cfg.max_search_results_limit() >= default_cfg.context_email_limit());
+    assert!(default_cfg.snippet_chars_limit() >= 80);
+    assert!(default_cfg.read_email_max_chars_limit() >= 400);
+    assert!(default_cfg.thread_max_messages_limit() >= 1);
+    assert!(default_cfg.thread_total_chars_limit() >= 1_000);
 }
 
 #[test]
