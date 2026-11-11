@@ -47,6 +47,7 @@ Because the desktop UI is powered by `dioxus` (`0.7`, `desktop` feature) and `wr
 ## 2. Project Architecture
 
 ```text
+config.toml                 # Compile-time shipped defaults ([llm], [agent], [laya], [ui])
 assets/
 ├── logo.svg                # PoSTier vector logo
 ├── logo.jpg                # PoSTier high-resolution app icon
@@ -67,7 +68,7 @@ src/
 │   ├── ops.rs              # Tensor math primitives (matmul, RoPE, GeGLU, layer norm, attention)
 │   ├── packaged.rs         # Built-in offline packaged GGUF decision model generator
 │   └── tokenizer.rs        # BPE tokenizer loaded from GGUF metadata
-├── llm.rs                  # OpenAI-compatible client (Rig), LLM-as-a-Judge labeler, and endpoint validation
+├── llm.rs                  # OpenAI-compatible client (Rig), TOML config loader, LLM Judge, and endpoint validation
 ├── llm/
 │   ├── agent.rs            # Tool-calling research agent (search_emails, read_email, get_thread, email_stats)
 │   └── context.rs          # Bilingual agent prompts, email body cleaner, citation helpers, and context builder

@@ -1,0 +1,62 @@
+# Shipped default configuration for PoSTier (`pst-rag`).
+#
+# This file is embedded into the binary at compile time (`include_str!("../config.toml")`).
+# Edit these values before building to customize the shipped defaults for a specific
+# deployment or recipient. Runtime UI changes are persisted separately in
+# `<storage_dir>/credentials.json`.
+
+[llm]
+# OpenAI-compatible chat completions endpoint (must use https://, or http://127.0.0.1 for local LLMs).
+endpoint = "https://llm.internal.examples/v1/chat/completions"
+# Model identifier passed to the chat completions and LLM Judge API.
+model = "private-model"
+# Default Bearer API token (leave empty to require the user to enter one in Settings).
+bearer_token = ""
+# HTTP connection timeout in seconds.
+connect_timeout_secs = 15
+# HTTP request timeout in seconds (per LLM turn / request).
+request_timeout_secs = 180
+# Whether remote embeddings / hybrid search UI and code paths are enabled.
+embeddings_enabled = false
+# Whether remote embeddings are active by default when `embeddings_enabled = true`.
+use_remote_embeddings = false
+# Default remote embedding model name.
+embedding_model = ""
+
+[agent]
+# Maximum number of model calls (tool rounds + final answer) per user question.
+max_turns = 12
+# Default number of threads returned per `search_emails` tool call (adjustable in UI).
+max_context_emails = 8
+# Hard upper limit on results returned by a single `search_emails` call or local search.
+max_search_results = 50
+# Maximum character length of the matching passage snippet per search result.
+snippet_chars = 360
+# Maximum character length of an email body returned by `read_email`.
+read_email_max_chars = 12000
+# Maximum number of messages returned by `get_thread`.
+thread_max_messages = 40
+# Total character budget shared across all messages returned by `get_thread`.
+thread_total_chars = 14000
+# Maximum character budget for the fallback context when `max_turns` is exhausted.
+max_context_chars = 16000
+# Number of previous user/assistant exchanges included as conversation history.
+history_turns = 3
+
+[laya]
+# Default email labeler backend ("Laya" or "LlmJudge").
+labeler_backend = "Laya"
+# Optional default path to an external Laya `.gguf` weights file.
+laya_gguf_path = ""
+# Maximum email excerpt length (in chars) sent to the LLM Judge per email.
+judge_email_excerpt_chars = 3500
+# Maximum number of visible emails labeled in a single batch action.
+batch_label_limit = 50
+
+[ui]
+# Default interface and agent prompt language ("French" or "English").
+language = "French"
+# Whether dark theme is enabled by default.
+dark_mode = true
+# Maximum number of messages loaded in the explorer table at once.
+explorer_message_limit = 300

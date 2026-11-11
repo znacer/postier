@@ -68,7 +68,9 @@ pub fn default_label_definitions() -> Vec<LabelDefinition> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LabelerBackend {
     #[default]
+    #[serde(alias = "laya")]
     Laya,
+    #[serde(alias = "llm_judge", alias = "llm-judge", alias = "llmjudge")]
     LlmJudge,
 }
 

@@ -81,7 +81,8 @@ impl PstRagApp {
             self.status = self.config.language.status_labeling_no_visible().into();
             return AppTask::none();
         }
-        let batch: Vec<EmailRecord> = self.explorer_messages.iter().take(50).cloned().collect();
+        let limit = self.config.batch_label_limit.max(1);
+        let batch: Vec<EmailRecord> = self.explorer_messages.iter().take(limit).cloned().collect();
         self.run_labeling_job(batch, self.config.labeler_backend)
     }
 

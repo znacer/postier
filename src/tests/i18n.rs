@@ -22,6 +22,7 @@ fn config_serializes_and_deserializes_with_language() {
         laya_gguf_path: String::new(),
         language: Language::French,
         dark_mode: true,
+        ..LlmConfig::default()
     };
 
     let serialized = serde_json::to_string(&config).expect("serialize config");

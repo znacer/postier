@@ -1,10 +1,108 @@
 use crate::{
+    i18n::Language,
     llm::{
-        build_context, clean_email_body, endpoint_for_log, extract_citation_ids, linkify_citations,
-        openai_base_url, parse_judge_response, strip_mail_links, validate_endpoint,
+        EMBEDDED_CONFIG_TOML, LlmConfig, build_context, clean_email_body, endpoint_for_log,
+        extract_citation_ids, linkify_citations, openai_base_url, parse_judge_response,
+        strip_mail_links, validate_endpoint,
     },
-    model::{AssignedLabel, SearchHit, default_label_definitions},
+    model::{AssignedLabel, LabelerBackend, SearchHit, default_label_definitions},
 };
+
+#[test]
+fn embedded_config_toml_parses_and_provides_shipped_defaults() {
+    let parsed = LlmConfig::from_toml_str(EMBEDDED_CONFIG_TOML).unwrap();
+    let default_cfg = LlmConfig::default();
+    assert_eq!(parsed, default_cfg);
+    assert_eq!(
+        default_cfg.endpoint,
+        "https://llm.internal.example/v1/chat/completions"
+    );
+    assert_eq!(default_cfg.model, "private-model");
+    assert_eq!(default_cfg.agent_max_turns_limit(), 12);
+    assert_eq!(default_cfg.context_email_limit(), 8);
+    assert_eq!(default_cfg.max_search_results_limit(), 50);
+    assert_eq!(default_cfg.snippet_chars_limit(), 360);
+    assert_eq!(default_cfg.read_email_max_chars_limit(), 12_000);
+    assert_eq!(default_cfg.thread_max_messages_limit(), 40);
+    assert_eq!(default_cfg.thread_total_chars_limit(), 14_000);
+    assert_eq!(default_cfg.max_context_chars, 16_000);
+    assert_eq!(default_cfg.history_turns_limit(), 3);
+}
+
+#[test]
+fn custom_toml_overrides_llm_agent_laya_and_ui_settings() {
+    let custom = r#"
+        [llm]
+        endpoint = "https://custom.api.example/v1/chat/completions"
+        model = "custom-model"
+        bearer_token = "sk-shipped-token"
+        connect_timeout_secs = 25
+        request_timeout_secs = 240
+
+        [agent]
+        max_turns = 20
+        max_context_emails = 15
+        max_search_results = 80
+        snippet_chars = 500
+        read_email_max_chars = 18000
+        thread_max_messages = 60
+        thread_total_chars = 20000
+        max_context_chars = 24000
+        history_turns = 5
+
+        [laya]
+        labeler_backend = "LlmJudge"
+        judge_email_excerpt_chars = 5000
+        batch_label_limit = 100
+
+        [ui]
+        language = "English"
+        dark_mode = false
+        explorer_message_limit = 500
+    "#;
+    let cfg = LlmConfig::from_toml_str(custom).unwrap();
+    assert_eq!(
+        cfg.endpoint,
+        "https://custom.api.example/v1/chat/completions"
+    );
+    assert_eq!(cfg.model, "custom-model");
+    assert_eq!(cfg.bearer_token, "sk-shipped-token");
+    assert_eq!(cfg.connect_timeout_secs, 25);
+    assert_eq!(cfg.request_timeout_secs, 240);
+    assert_eq!(cfg.agent_max_turns_limit(), 20);
+    assert_eq!(cfg.context_email_limit(), 15);
+    assert_eq!(cfg.max_search_results_limit(), 80);
+    assert_eq!(cfg.snippet_chars_limit(), 500);
+    assert_eq!(cfg.read_email_max_chars_limit(), 18_000);
+    assert_eq!(cfg.thread_max_messages_limit(), 60);
+    assert_eq!(cfg.thread_total_chars_limit(), 20_000);
+    assert_eq!(cfg.max_context_chars, 24_000);
+    assert_eq!(cfg.history_turns_limit(), 5);
+    assert_eq!(cfg.labeler_backend, LabelerBackend::LlmJudge);
+    assert_eq!(cfg.judge_email_excerpt_chars, 5_000);
+    assert_eq!(cfg.batch_label_limit, 100);
+    assert_eq!(cfg.language, Language::English);
+    assert!(!cfg.dark_mode);
+    assert_eq!(cfg.explorer_message_limit, 500);
+
+    // Partial JSON (such as an existing `credentials.json`) inherits shipped defaults for omitted fields
+    let partial_json =
+        r#"{"endpoint":"https://override.example/v1/chat/completions","bearer_token":"sk-user"}"#;
+    let from_json: LlmConfig = serde_json::from_str(partial_json).unwrap();
+    assert_eq!(
+        from_json.endpoint,
+        "https://override.example/v1/chat/completions"
+    );
+    assert_eq!(from_json.bearer_token, "sk-user");
+    assert_eq!(
+        from_json.agent_max_turns,
+        LlmConfig::default().agent_max_turns
+    );
+    assert_eq!(
+        from_json.max_search_results,
+        LlmConfig::default().max_search_results
+    );
+}
 
 #[test]
 fn permits_http_only_for_exact_ipv4_loopback() {

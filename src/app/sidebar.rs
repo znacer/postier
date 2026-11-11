@@ -784,7 +784,7 @@ impl PstRagApp {
         let ctx_emails_hint = tr.context_emails_hint();
         let ctx_emails_val = self.config.context_email_limit();
         let ctx_emails_min = crate::llm::MIN_CONTEXT_EMAILS;
-        let ctx_emails_max = crate::llm::MAX_CONTEXT_EMAILS;
+        let ctx_emails_max = self.config.max_search_results_limit();
         let https_notice = tr.https_required_notice();
 
         let llm_card = card(rsx! {
@@ -853,7 +853,7 @@ impl PstRagApp {
                         }
                     }
                 }
-                if crate::llm::EMBEDDINGS_ENABLED {
+                if self.config.embeddings_feature_enabled() {
                     Separator {}
                     div {
                         style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0;",

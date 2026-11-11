@@ -279,10 +279,11 @@ impl PstRagApp {
                 idx += 1;
             }
         }
+        let history_turns = self.config.history_turns_limit();
         let history: Vec<llm::ChatTurn> = completed_pairs
             .into_iter()
             .rev()
-            .take(3)
+            .take(history_turns)
             .collect::<Vec<_>>()
             .into_iter()
             .rev()
@@ -354,6 +355,7 @@ impl PstRagApp {
             return AppTask::none();
         }
         let query = self.question.trim().to_owned();
+        let limit = self.config.max_search_results_limit();
         self.chat_open = true;
         self.messages.push(ChatMessage::user(query.clone()));
         self.question.clear();
@@ -363,7 +365,7 @@ impl PstRagApp {
         self.status = self.config.language.status_searching_locally().into();
         spawn_worker(move |_tx| {
             let result = Index::open(&db_path)
-                .and_then(|db| db.search(&query, 50))
+                .and_then(|db| db.search(&query, limit))
                 .map(Arc::new)
                 .map_err(|error| format!("{error:#}"));
             WorkerResult::Searched(result)
@@ -406,13 +408,14 @@ impl PstRagApp {
         let Some(db) = self.db.as_ref() else {
             return;
         };
+        let limit = self.config.explorer_message_limit.max(1);
         let messages = db
             .list_messages(
                 &self.mail_scope,
                 &self.label_filter,
                 &self.filter_query,
                 self.mail_sort,
-                300,
+                limit,
             )
             .unwrap_or_default();
         self.explorer_messages = messages;

@@ -375,7 +375,7 @@ fn execute_task(task: AppTask) {
 }
 
 pub fn run() {
-    let initial_title = crate::i18n::Language::default().app_title().to_owned();
+    let initial_title = LlmConfig::default().language.app_title().to_owned();
     let window = WindowBuilder::new()
         .with_title(initial_title)
         .with_inner_size(LogicalSize::new(1440.0, 860.0))
@@ -819,7 +819,7 @@ impl PstRagApp {
                 if let Ok(count) = value.trim().parse::<usize>() {
                     self.config.max_context_emails = count.clamp(
                         crate::llm::MIN_CONTEXT_EMAILS,
-                        crate::llm::MAX_CONTEXT_EMAILS,
+                        self.config.max_search_results_limit(),
                     );
                 }
                 AppTask::none()

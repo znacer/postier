@@ -1,7 +1,7 @@
 mod agent;
 mod context;
 
-use std::time::Duration;
+use std::{sync::OnceLock, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use rig::{
@@ -24,90 +24,373 @@ pub use self::context::{
 pub(crate) use self::context::{clean_email_body, strip_mail_links};
 pub use crate::i18n::Language;
 
-/// Remote embeddings / hybrid search are hidden from the UI and disabled: retrieval is
-/// BM25-only. The code paths are kept so they can be re-enabled later.
+/// Compile-time shipped configuration loaded from the repository root `config.toml`.
+pub const EMBEDDED_CONFIG_TOML: &str = include_str!("../config.toml");
+
+/// Remote embeddings / hybrid search are hidden from the UI and disabled by default:
+/// retrieval is BM25-only unless enabled via `embeddings_enabled` in `config.toml`.
 pub const EMBEDDINGS_ENABLED: bool = false;
-
-const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LlmConfig {
-    pub endpoint: String,
-    pub model: String,
-    #[serde(default)]
-    pub use_remote_embeddings: bool,
-    #[serde(default)]
-    pub embedding_model: String,
-    #[serde(default)]
-    pub bearer_token: String,
-    #[serde(default = "default_context_chars")]
-    pub max_context_chars: usize,
-    /// Number of emails retrieved from the index per chat question (before thread expansion).
-    #[serde(default = "default_context_emails")]
-    pub max_context_emails: usize,
-    #[serde(default)]
-    pub labeler_backend: LabelerBackend,
-    #[serde(default)]
-    pub laya_gguf_path: String,
-    #[serde(default)]
-    pub language: Language,
-    #[serde(default = "default_true")]
-    pub dark_mode: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_context_chars() -> usize {
-    16_000
-}
 
 pub const MIN_CONTEXT_EMAILS: usize = 1;
 pub const MAX_CONTEXT_EMAILS: usize = 100;
 
-fn default_context_emails() -> usize {
-    8
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LlmConfig {
+    pub endpoint: String,
+    pub model: String,
+    pub use_remote_embeddings: bool,
+    pub embedding_model: String,
+    pub bearer_token: String,
+    pub connect_timeout_secs: u64,
+    pub request_timeout_secs: u64,
+    pub embeddings_enabled: bool,
+    pub max_context_chars: usize,
+    /// Number of emails retrieved from the index per chat question (before thread expansion).
+    pub max_context_emails: usize,
+    /// Maximum number of model calls (tool rounds + final answer) per user question.
+    #[serde(alias = "max_turns")]
+    pub agent_max_turns: usize,
+    /// Hard upper limit on results returned by a single `search_emails` call or local search.
+    pub max_search_results: usize,
+    /// Maximum character length of the matching passage snippet per search result.
+    pub snippet_chars: usize,
+    /// Maximum character length of an email body returned by `read_email`.
+    pub read_email_max_chars: usize,
+    /// Maximum number of messages returned by `get_thread`.
+    pub thread_max_messages: usize,
+    /// Total character budget shared across all messages returned by `get_thread`.
+    pub thread_total_chars: usize,
+    /// Number of previous user/assistant exchanges included as conversation history.
+    pub history_turns: usize,
+    pub labeler_backend: LabelerBackend,
+    pub laya_gguf_path: String,
+    /// Maximum email excerpt length (in chars) sent to the LLM Judge per email.
+    pub judge_email_excerpt_chars: usize,
+    /// Maximum number of visible emails labeled in a single batch action.
+    pub batch_label_limit: usize,
+    pub language: Language,
+    pub dark_mode: bool,
+    /// Maximum number of messages loaded in the explorer table at once.
+    pub explorer_message_limit: usize,
+}
+
+#[derive(Default, Deserialize)]
+struct TomlLlmSection {
+    endpoint: Option<String>,
+    model: Option<String>,
+    bearer_token: Option<String>,
+    connect_timeout_secs: Option<u64>,
+    request_timeout_secs: Option<u64>,
+    embeddings_enabled: Option<bool>,
+    use_remote_embeddings: Option<bool>,
+    embedding_model: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct TomlAgentSection {
+    #[serde(alias = "agent_max_turns", alias = "max_model_calls")]
+    max_turns: Option<usize>,
+    #[serde(alias = "default_search_results")]
+    max_context_emails: Option<usize>,
+    max_search_results: Option<usize>,
+    snippet_chars: Option<usize>,
+    read_email_max_chars: Option<usize>,
+    thread_max_messages: Option<usize>,
+    thread_total_chars: Option<usize>,
+    max_context_chars: Option<usize>,
+    history_turns: Option<usize>,
+}
+
+#[derive(Default, Deserialize)]
+struct TomlLayaSection {
+    labeler_backend: Option<LabelerBackend>,
+    laya_gguf_path: Option<String>,
+    judge_email_excerpt_chars: Option<usize>,
+    batch_label_limit: Option<usize>,
+}
+
+#[derive(Default, Deserialize)]
+struct TomlUiSection {
+    language: Option<Language>,
+    dark_mode: Option<bool>,
+    explorer_message_limit: Option<usize>,
+}
+
+#[derive(Default, Deserialize)]
+struct TomlConfig {
+    #[serde(default)]
+    llm: TomlLlmSection,
+    #[serde(default)]
+    agent: TomlAgentSection,
+    #[serde(default)]
+    laya: TomlLayaSection,
+    #[serde(default)]
+    ui: TomlUiSection,
+    // Also support top-level flat keys in `config.toml`
+    endpoint: Option<String>,
+    model: Option<String>,
+    bearer_token: Option<String>,
+    connect_timeout_secs: Option<u64>,
+    request_timeout_secs: Option<u64>,
+    embeddings_enabled: Option<bool>,
+    use_remote_embeddings: Option<bool>,
+    embedding_model: Option<String>,
+    #[serde(alias = "max_turns", alias = "max_model_calls")]
+    agent_max_turns: Option<usize>,
+    #[serde(alias = "default_search_results")]
+    max_context_emails: Option<usize>,
+    max_search_results: Option<usize>,
+    snippet_chars: Option<usize>,
+    read_email_max_chars: Option<usize>,
+    thread_max_messages: Option<usize>,
+    thread_total_chars: Option<usize>,
+    max_context_chars: Option<usize>,
+    history_turns: Option<usize>,
+    labeler_backend: Option<LabelerBackend>,
+    laya_gguf_path: Option<String>,
+    judge_email_excerpt_chars: Option<usize>,
+    batch_label_limit: Option<usize>,
+    language: Option<Language>,
+    dark_mode: Option<bool>,
+    explorer_message_limit: Option<usize>,
 }
 
 impl LlmConfig {
+    const fn builtin_defaults() -> Self {
+        Self {
+            endpoint: String::new(),
+            model: String::new(),
+            use_remote_embeddings: false,
+            embedding_model: String::new(),
+            bearer_token: String::new(),
+            connect_timeout_secs: 15,
+            request_timeout_secs: 180,
+            embeddings_enabled: EMBEDDINGS_ENABLED,
+            max_context_chars: 16_000,
+            max_context_emails: 8,
+            agent_max_turns: agent::MAX_MODEL_CALLS,
+            max_search_results: 50,
+            snippet_chars: 360,
+            read_email_max_chars: 12_000,
+            thread_max_messages: 40,
+            thread_total_chars: 14_000,
+            history_turns: 3,
+            labeler_backend: LabelerBackend::Laya,
+            laya_gguf_path: String::new(),
+            judge_email_excerpt_chars: 3_500,
+            batch_label_limit: 50,
+            language: Language::French,
+            dark_mode: true,
+            explorer_message_limit: 300,
+        }
+    }
+
+    /// Parses a TOML configuration string (supporting `[llm]`, `[agent]`, `[laya]`, `[ui]`
+    /// sections as well as top-level flat keys) over the built-in fallback defaults.
+    pub fn from_toml_str(raw: &str) -> Result<Self> {
+        let parsed: TomlConfig = toml::from_str(raw).context("parse TOML configuration")?;
+        let mut cfg = Self {
+            endpoint: "https://llm.internal.example/v1/chat/completions".into(),
+            model: "private-model".into(),
+            ..Self::builtin_defaults()
+        };
+
+        macro_rules! apply {
+            ($field:ident, $section_val:expr, $flat_val:expr) => {
+                if let Some(v) = $flat_val.or($section_val) {
+                    cfg.$field = v;
+                }
+            };
+        }
+
+        apply!(endpoint, parsed.llm.endpoint, parsed.endpoint);
+        apply!(model, parsed.llm.model, parsed.model);
+        apply!(bearer_token, parsed.llm.bearer_token, parsed.bearer_token);
+        apply!(
+            connect_timeout_secs,
+            parsed.llm.connect_timeout_secs,
+            parsed.connect_timeout_secs
+        );
+        apply!(
+            request_timeout_secs,
+            parsed.llm.request_timeout_secs,
+            parsed.request_timeout_secs
+        );
+        apply!(
+            embeddings_enabled,
+            parsed.llm.embeddings_enabled,
+            parsed.embeddings_enabled
+        );
+        apply!(
+            use_remote_embeddings,
+            parsed.llm.use_remote_embeddings,
+            parsed.use_remote_embeddings
+        );
+        apply!(
+            embedding_model,
+            parsed.llm.embedding_model,
+            parsed.embedding_model
+        );
+
+        apply!(
+            agent_max_turns,
+            parsed.agent.max_turns,
+            parsed.agent_max_turns
+        );
+        apply!(
+            max_context_emails,
+            parsed.agent.max_context_emails,
+            parsed.max_context_emails
+        );
+        apply!(
+            max_search_results,
+            parsed.agent.max_search_results,
+            parsed.max_search_results
+        );
+        apply!(
+            snippet_chars,
+            parsed.agent.snippet_chars,
+            parsed.snippet_chars
+        );
+        apply!(
+            read_email_max_chars,
+            parsed.agent.read_email_max_chars,
+            parsed.read_email_max_chars
+        );
+        apply!(
+            thread_max_messages,
+            parsed.agent.thread_max_messages,
+            parsed.thread_max_messages
+        );
+        apply!(
+            thread_total_chars,
+            parsed.agent.thread_total_chars,
+            parsed.thread_total_chars
+        );
+        apply!(
+            max_context_chars,
+            parsed.agent.max_context_chars,
+            parsed.max_context_chars
+        );
+        apply!(
+            history_turns,
+            parsed.agent.history_turns,
+            parsed.history_turns
+        );
+
+        apply!(
+            labeler_backend,
+            parsed.laya.labeler_backend,
+            parsed.labeler_backend
+        );
+        apply!(
+            laya_gguf_path,
+            parsed.laya.laya_gguf_path,
+            parsed.laya_gguf_path
+        );
+        apply!(
+            judge_email_excerpt_chars,
+            parsed.laya.judge_email_excerpt_chars,
+            parsed.judge_email_excerpt_chars
+        );
+        apply!(
+            batch_label_limit,
+            parsed.laya.batch_label_limit,
+            parsed.batch_label_limit
+        );
+
+        apply!(language, parsed.ui.language, parsed.language);
+        apply!(dark_mode, parsed.ui.dark_mode, parsed.dark_mode);
+        apply!(
+            explorer_message_limit,
+            parsed.ui.explorer_message_limit,
+            parsed.explorer_message_limit
+        );
+
+        Ok(cfg)
+    }
+
     /// Default number of results (one per thread) returned by each agent search,
     /// clamped to a sane range.
     pub fn context_email_limit(&self) -> usize {
         self.max_context_emails
-            .clamp(MIN_CONTEXT_EMAILS, MAX_CONTEXT_EMAILS)
+            .clamp(MIN_CONTEXT_EMAILS, self.max_search_results_limit())
     }
 
-    /// Whether remote embeddings should be used (always false while they are disabled).
+    /// Maximum number of results returned by a single search call, clamped to a sane range.
+    pub fn max_search_results_limit(&self) -> usize {
+        self.max_search_results.clamp(MIN_CONTEXT_EMAILS, MAX_CONTEXT_EMAILS.max(500))
+    }
+
+    /// Maximum number of model turns per agent question.
+    pub fn agent_max_turns_limit(&self) -> usize {
+        self.agent_max_turns.clamp(1, 100)
+    }
+
+    /// Maximum passage snippet length in characters per search hit.
+    pub fn snippet_chars_limit(&self) -> usize {
+        self.snippet_chars.max(80)
+    }
+
+    /// Maximum email body length in characters returned by `read_email`.
+    pub fn read_email_max_chars_limit(&self) -> usize {
+        self.read_email_max_chars.max(400)
+    }
+
+    /// Maximum number of thread messages returned by `get_thread`.
+    pub fn thread_max_messages_limit(&self) -> usize {
+        self.thread_max_messages.clamp(1, 200)
+    }
+
+    /// Total character budget across a thread in `get_thread`.
+    pub fn thread_total_chars_limit(&self) -> usize {
+        self.thread_total_chars.max(400)
+    }
+
+    /// Number of prior conversation pairs sent as chat history.
+    pub fn history_turns_limit(&self) -> usize {
+        self.history_turns.min(50)
+    }
+
+    /// HTTP connection timeout.
+    pub fn connect_timeout(&self) -> Duration {
+        Duration::from_secs(self.connect_timeout_secs.max(1))
+    }
+
+    /// HTTP request timeout.
+    pub fn request_timeout(&self) -> Duration {
+        Duration::from_secs(self.request_timeout_secs.max(1))
+    }
+
+    /// Whether remote embeddings UI / code paths are enabled.
+    pub fn embeddings_feature_enabled(&self) -> bool {
+        EMBEDDINGS_ENABLED || self.embeddings_enabled
+    }
+
+    /// Whether remote embeddings should be used for indexing/queries.
     pub fn embeddings_active(&self) -> bool {
-        EMBEDDINGS_ENABLED && self.use_remote_embeddings
+        self.embeddings_feature_enabled() && self.use_remote_embeddings
     }
 }
 
 impl Default for LlmConfig {
     fn default() -> Self {
-        Self {
-            endpoint: "https://llm.internal.example/v1/chat/completions".into(),
-            model: "private-model".into(),
-            use_remote_embeddings: false,
-            embedding_model: String::new(),
-            bearer_token: String::new(),
-            max_context_chars: default_context_chars(),
-            max_context_emails: default_context_emails(),
-            labeler_backend: LabelerBackend::Laya,
-            laya_gguf_path: String::new(),
-            language: Language::default(),
-            dark_mode: true,
-        }
+        static SHIPPED_CONFIG: OnceLock<LlmConfig> = OnceLock::new();
+        SHIPPED_CONFIG
+            .get_or_init(|| {
+                Self::from_toml_str(EMBEDDED_CONFIG_TOML)
+                    .expect("embedded config.toml must be valid TOML")
+            })
+            .clone()
     }
 }
 
-pub(crate) fn build_http_client(url: &url::Url) -> Result<reqwest::Client> {
+pub(crate) fn build_http_client(url: &url::Url, config: &LlmConfig) -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .https_only(url.scheme() == "https")
-        .connect_timeout(HTTP_CONNECT_TIMEOUT)
-        .timeout(HTTP_REQUEST_TIMEOUT)
+        .connect_timeout(config.connect_timeout())
+        .timeout(config.request_timeout())
         .build()
         .context("build secure HTTP client")
 }
@@ -139,7 +422,7 @@ pub fn ask_with_history(
     let url = validate_endpoint(&config.endpoint)?;
     let endpoint_for_log = endpoint_for_log(&url);
     let base_url = openai_base_url(&url)?;
-    let http_client = build_http_client(&url)?;
+    let http_client = build_http_client(&url, config)?;
     let client = openai::Client::builder()
         .api_key(config.bearer_token.clone())
         .base_url(base_url.as_str())
@@ -198,7 +481,7 @@ pub fn judge_labels(
     let url = validate_endpoint(&config.endpoint)?;
     let endpoint_for_log = endpoint_for_log(&url);
     let base_url = openai_base_url(&url)?;
-    let http_client = build_http_client(&url)?;
+    let http_client = build_http_client(&url, config)?;
     let client = openai::Client::builder()
         .api_key(config.bearer_token.clone())
         .base_url(base_url.as_str())
@@ -211,6 +494,7 @@ pub fn judge_labels(
     for def in definitions {
         rubric.push_str(&format!("- {}: {}\n", def.name, def.description));
     }
+    let excerpt_chars = config.judge_email_excerpt_chars.max(200);
     let prompt = format!(
         "{rubric}\nEmail to evaluate:\nDate: {}\nFrom: {}\nTo: {}\nFolder: {}\nSubject: {}\nBody:\n{}\n\n\
          Respond ONLY with JSON in the exact format: {{\"labels\": [{{\"label\": \"<exact label name>\", \"confidence\": 0.92}}]}} \
@@ -220,7 +504,7 @@ pub fn judge_labels(
         email.recipients,
         email.folder,
         email.subject,
-        email.excerpt(3_500)
+        email.excerpt(excerpt_chars)
     );
 
     let agent = client
@@ -312,7 +596,7 @@ pub fn embed(config: &LlmConfig, texts: Vec<String>) -> Result<Vec<Vec<f64>>> {
     }
     let url = validate_endpoint(&config.endpoint)?;
     let base_url = openai_base_url(&url)?;
-    let http_client = build_http_client(&url)?;
+    let http_client = build_http_client(&url, config)?;
     let client = openai::CompletionsClient::builder()
         .api_key(config.bearer_token.clone())
         .base_url(base_url.as_str())

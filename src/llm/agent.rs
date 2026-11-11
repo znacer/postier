@@ -38,13 +38,8 @@ use crate::{
     text,
 };
 
-/// Total model calls per question (each tool round costs one call, plus the answer).
+/// Default total model calls per question (each tool round costs one call, plus the answer).
 pub const MAX_MODEL_CALLS: usize = 12;
-const MAX_SEARCH_RESULTS: usize = 50;
-const READ_EMAIL_MAX_CHARS: usize = 12_000;
-const THREAD_MAX_MESSAGES: usize = 40;
-const THREAD_TOTAL_CHARS: usize = 14_000;
-const SNIPPET_CHARS: usize = 360;
 
 pub type ProgressFn = Arc<dyn Fn(String) + Send + Sync>;
 
@@ -133,6 +128,11 @@ struct Shared {
     db: Mutex<Index>,
     language: Language,
     default_limit: usize,
+    max_search_results: usize,
+    snippet_chars: usize,
+    read_email_max_chars: usize,
+    thread_max_messages: usize,
+    thread_total_chars: usize,
     evidence: Mutex<Evidence>,
     trace: Mutex<Vec<String>>,
     progress: ProgressFn,
@@ -313,7 +313,7 @@ impl SearchEmailsTool {
             .and_then(parse_id)
             .map(|n| n.max(1) as usize)
             .unwrap_or(shared.default_limit)
-            .min(MAX_SEARCH_RESULTS);
+            .min(shared.max_search_results);
         let described = describe_query(&parsed);
         (shared.progress)(shared.language.agent_progress_search(&described));
 
@@ -335,7 +335,7 @@ impl SearchEmailsTool {
                     json!(text::best_passages(
                         &indexed_text(hit),
                         &tokens,
-                        SNIPPET_CHARS
+                        shared.snippet_chars
                     )),
                 );
                 Value::Object(obj)
@@ -395,7 +395,7 @@ impl PortableTool for SearchEmailsTool {
         );
         props.insert(
             "limit".into(),
-            json!({"type": "integer", "description": format!("Maximum number of threads to return (default {}, max {MAX_SEARCH_RESULTS}).", self.0.default_limit)}),
+            json!({"type": "integer", "description": format!("Maximum number of threads to return (default {}, max {}).", self.0.default_limit, self.0.max_search_results)}),
         );
         json!({"type": "object", "properties": props})
     }
@@ -431,7 +431,7 @@ impl ReadEmailTool {
             "body".into(),
             json!(text::truncate_chars(
                 &clean_email_body(&hit.body),
-                READ_EMAIL_MAX_CHARS
+                shared.read_email_max_chars
             )),
         );
         shared.record(format!("read_email #{id} → \"{}\"", hit.subject));
@@ -499,7 +499,7 @@ impl GetThreadTool {
                 }
             }
         } else {
-            db.get_thread(&thread_id, THREAD_MAX_MESSAGES)?
+            db.get_thread(&thread_id, shared.thread_max_messages)?
         };
         drop(db);
         (shared.progress)(shared.language.agent_progress_thread(total));
@@ -507,7 +507,7 @@ impl GetThreadTool {
             shared.record(format!("get_thread {thread_id} → not found"));
             return Ok(json!({"error": format!("No thread with id {thread_id}.")}));
         }
-        let per_message = (THREAD_TOTAL_CHARS / messages.len()).max(400);
+        let per_message = (shared.thread_total_chars / messages.len()).max(400);
         let items: Vec<Value> = messages
             .iter()
             .map(|hit| {
@@ -805,6 +805,11 @@ pub fn run_agent(
         db: Mutex::new(db),
         language,
         default_limit: config.context_email_limit(),
+        max_search_results: config.max_search_results_limit(),
+        snippet_chars: config.snippet_chars_limit(),
+        read_email_max_chars: config.read_email_max_chars_limit(),
+        thread_max_messages: config.thread_max_messages_limit(),
+        thread_total_chars: config.thread_total_chars_limit(),
         evidence: Mutex::new(Evidence::default()),
         trace: Mutex::new(Vec::new()),
         progress: progress.clone(),
@@ -813,7 +818,7 @@ pub fn run_agent(
     let url = validate_endpoint(&config.endpoint)?;
     let endpoint_for_log = endpoint_for_log(&url);
     let base_url = openai_base_url(&url)?;
-    let http_client = build_http_client(&url)?;
+    let http_client = build_http_client(&url, config)?;
     let client = openai::Client::builder()
         .api_key(config.bearer_token.clone())
         .base_url(base_url.as_str())
@@ -852,8 +857,9 @@ pub fn run_agent(
         .tool(EmailStatsTool(shared.clone()))
         .build();
 
+    let max_turns = config.agent_max_turns_limit();
     debug_log(format_args!(
-        "Agent request: POST {endpoint_for_log}; model={:?}; history_turns={}; question_bytes={}",
+        "Agent request: POST {endpoint_for_log}; model={:?}; max_turns={max_turns}; history_turns={}; question_bytes={}",
         config.model,
         history.len(),
         question.len()
@@ -868,7 +874,7 @@ pub fn run_agent(
         let request = agent
             .prompt(question)
             .history(to_rig_history(history))
-            .max_turns(MAX_MODEL_CALLS);
+            .max_turns(max_turns);
         tokio::select! {
             result = request.into_future() => Some(result),
             _ = wait_for_cancel(&cancel) => None,

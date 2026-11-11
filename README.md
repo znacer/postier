@@ -18,7 +18,7 @@ Portable, local-first desktop mail explorer (3-pane web-standard layout built wi
   - **Right Collapsible & Resizable RAG Chat Pane**: Collapse into a `42px` rail or drag-resize the width (`310px` to window bounds). Includes suggested starter prompts, `Avatar`-badged message bubbles with Markdown-formatted assistant responses, clickable `[#id](mail://id)` inline citations that open the referenced email in the reader, expandable tool-call trace inspection (`Checkbox` + `Label`), and collapsible cited evidence cards (`Collapsible` + `ItemGroup` / `Item` components) with one-click `Open Mail` navigation.
 - **Tool-Calling RAG Research Agent (`src/llm/agent.rs`, `src/llm/context.rs`)**:
   - Built on `rig-core` with four local archive tools (`search_emails`, `read_email`, `get_thread`, `email_stats`) so the model iteratively searches, inspects full emails or conversation threads, and computes aggregate counts/groupings before answering.
-  - Enforces grounded `[#id]` citations verified against retrieved evidence, strips legal disclaimers and deep quote chains to maximize context density, preserves multi-turn conversation history, and falls back to water-filling context synthesis if the tool-call budget (`MAX_MODEL_CALLS = 12`) is exhausted.
+  - Enforces grounded `[#id]` citations verified against retrieved evidence, strips legal disclaimers and deep quote chains to maximize context density, preserves multi-turn conversation history, and falls back to water-filling context synthesis if the tool-call budget (`max_turns` in `config.toml`) is exhausted.
 - **Email Labeling (`Laya-GGUF` or `LLM as a Judge`)**:
   - **Laya Decision Model (`ggml-org/Laya-GGUF`)**: In-process pure-Rust GGUF v3 reader and ModernBERT + Laya Decision Head inference engine (`F32`, `F16`, `BF16`, `Q8_0` tensors, BPE tokenizer from `tokenizer.ggml.*` metadata, `[CLS] choice question: ... [SEP] [MASK] opt ... [SEP] state [SEP]` prompt formatting, and temperature scaling). Ships with a packaged in-process GGUF decision model that works offline out of the box, and can load local `Laya-bf16.gguf` / `Laya-Q8_0.gguf` weights from [`ggml-org/Laya-GGUF`](https://huggingface.co/ggml-org/Laya-GGUF).
   - **LLM as a Judge**: Structured JSON classification against user-defined label definitions (`name`, `description`/criteria, `color`) using the configured OpenAI-compatible endpoint.
@@ -76,7 +76,11 @@ When started in development mode (`dx serve`), debug builds print sanitized Rig 
 
 The release profile enables LTO, stripping, size optimization, and abort-on-panic. SQLite is compiled into the executable (`rusqlite` bundled) and HTTP uses `rustls`, so no external database or TLS runtime is required.
 
-Runtime data defaults to `data/` beside the executable. The storage directory can be changed in the UI and the selection is remembered in `storage-directory.txt`; the selected directory contains `index.sqlite` and `credentials.json`.
+### Shipped Defaults (`config.toml`) & Runtime Storage
+
+Default application, LLM, agent, Laya, and UI parameters are gathered in [`config.toml`](config.toml) and embedded into the binary at compile time (`include_str!("../config.toml")`). Before building for a specific deployment, edit `config.toml` to customize defaults such as `endpoint`, `model`, `bearer_token`, `max_turns`, `max_context_emails`, `max_search_results`, character budgets, language, and theme.
+
+Runtime data defaults to `data/` beside the executable. The storage directory can be changed in the UI and the selection is remembered in `storage-directory.txt`; the selected directory contains `index.sqlite` and runtime UI overrides in `credentials.json`.
 
 ## Fixture Example
 
