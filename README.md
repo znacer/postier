@@ -4,7 +4,7 @@
   <img src="assets/logo.svg" alt="PoSTier Logo" width="110" height="110" />
 </p>
 
-Portable, local-first desktop mail explorer (3-pane web-standard layout built with **Dioxus 0.7 Desktop** and **Dioxus Components** / `dioxus-primitives`) for browsing Outlook PST archives, rendering HTML and plain-text emails, labeling messages with **Laya-GGUF** or an **LLM Judge**, and querying a collapsible/resizable RAG Chat pane backed by an OpenAI-compatible private LLM endpoint.
+Portable, local-first desktop mail explorer (3-pane web-standard layout built with **Dioxus 0.7 Desktop** and **Dioxus Components** / `dioxus-primitives`) for browsing Outlook PST archives, rendering HTML and plain-text emails, labeling messages with **Laya-GGUF** or an **LLM Judge**, and querying a collapsible/resizable RAG Chat pane powered by a tool-calling research agent over the local BM25 index.
 
 ## Features
 
@@ -15,13 +15,16 @@ Portable, local-first desktop mail explorer (3-pane web-standard layout built wi
     - **Structured Envelope Header**: Displays sender `Avatar` / `AvatarFallback` initials, parsed `From` (`De`), `To` (`À`), and `Cc` (`Cc`) contact pills (display name + `<email@domain>`), localized human-readable date and time badges (`chrono`), folder path pill, attachment `Badge` chips, and manual/automatic label controls.
     - **Rich HTML & Plain-Text Email Rendering**: Sanitizes raw HTML emails (stripping scripts, trackers, external images, unsafe attributes, and light-mode-only inline color overrides while preserving tables, lists, headings, blockquotes, and links) and upgrades plain-text emails into semantic HTML with structured reply/forward header cards, nested blockquotes, clickable URLs/emails, signatures, and legal disclaimer blocks inside a `ScrollArea`.
     - **Draggable Splitters**: Smoothly resize the message table height, mail header height, and chat pane width directly with the mouse.
-  - **Right Collapsible & Resizable RAG Chat Pane**: Collapse into a `42px` rail or drag-resize the width (`310px` to window bounds). Includes suggested starter prompts, `Avatar`-badged message bubbles with Markdown-formatted assistant responses, expandable LLM context inspection (`Checkbox` + `Label`), and collapsible cited evidence cards (`Collapsible` + `ItemGroup` / `Item` components) with one-click `Open Mail` navigation.
+  - **Right Collapsible & Resizable RAG Chat Pane**: Collapse into a `42px` rail or drag-resize the width (`310px` to window bounds). Includes suggested starter prompts, `Avatar`-badged message bubbles with Markdown-formatted assistant responses, clickable `[#id](mail://id)` inline citations that open the referenced email in the reader, expandable tool-call trace inspection (`Checkbox` + `Label`), and collapsible cited evidence cards (`Collapsible` + `ItemGroup` / `Item` components) with one-click `Open Mail` navigation.
+- **Tool-Calling RAG Research Agent (`src/llm/agent.rs`, `src/llm/context.rs`)**:
+  - Built on `rig-core` with four local archive tools (`search_emails`, `read_email`, `get_thread`, `email_stats`) so the model iteratively searches, inspects full emails or conversation threads, and computes aggregate counts/groupings before answering.
+  - Enforces grounded `[#id]` citations verified against retrieved evidence, strips legal disclaimers and deep quote chains to maximize context density, preserves multi-turn conversation history, and falls back to water-filling context synthesis if the tool-call budget (`MAX_MODEL_CALLS = 12`) is exhausted.
 - **Email Labeling (`Laya-GGUF` or `LLM as a Judge`)**:
   - **Laya Decision Model (`ggml-org/Laya-GGUF`)**: In-process pure-Rust GGUF v3 reader and ModernBERT + Laya Decision Head inference engine (`F32`, `F16`, `BF16`, `Q8_0` tensors, BPE tokenizer from `tokenizer.ggml.*` metadata, `[CLS] choice question: ... [SEP] [MASK] opt ... [SEP] state [SEP]` prompt formatting, and temperature scaling). Ships with a packaged in-process GGUF decision model that works offline out of the box, and can load local `Laya-bf16.gguf` / `Laya-Q8_0.gguf` weights from [`ggml-org/Laya-GGUF`](https://huggingface.co/ggml-org/Laya-GGUF).
   - **LLM as a Judge**: Structured JSON classification against user-defined label definitions (`name`, `description`/criteria, `color`) using the configured OpenAI-compatible endpoint.
   - Label a single email, a multi-checked selection, or batch-label the current filtered explorer view with background progress and cancellation support.
 - **PST & Search Infrastructure**:
-  - Pure-Rust read-only PST extraction (`outlook-pst`), streaming batch ingestion, sender & `To`/`Cc` recipient resolution, conversation thread and attachment extraction from MAPI properties, multi-PST index management, bundled SQLite with FTS5/BM25, content-hash deduplication, optional remote email embeddings with hybrid retrieval, and an isolated mail-source interface.
+  - Pure-Rust read-only PST extraction (`outlook-pst`), streaming batch ingestion (`250` messages per batch), sender & `To`/`Cc` recipient resolution, conversation thread and attachment extraction from MAPI properties, multi-PST index management, bundled SQLite with FTS5/BM25 and English/French Snowball stemming, structured search operators (`from:`, `to:`, `after:`, `before:`, `folder:`, `label:`, `has:attachment`), thread-collapsed ranking, content-hash deduplication, and an isolated mail-source interface.
 
 For safe end-to-end development, the file picker also accepts `.jsonl` fixtures with one `Email` object per line.
 
@@ -69,7 +72,7 @@ dx build --platform desktop --release
 dx bundle --platform desktop --release
 ```
 
-When started in development mode (`dx serve`), debug builds print sanitized Rig request diagnostics and errors to the terminal. They include the HTTP method, endpoint path, model, authentication presence, and payload sizes, but never the bearer token, question, or email context.
+When started in development mode (`dx serve`), debug builds print sanitized Rig request diagnostics and tool-call logs to the terminal. They include the HTTP method, endpoint path, model, authentication presence, and payload sizes, but never the bearer token, question, or email bodies.
 
 The release profile enables LTO, stripping, size optimization, and abort-on-panic. SQLite is compiled into the executable (`rusqlite` bundled) and HTTP uses `rustls`, so no external database or TLS runtime is required.
 
@@ -83,9 +86,9 @@ Runtime data defaults to `data/` beside the executable. The storage directory ca
 
 ## Security Boundary
 
-- BM25 retrieval, ranking, indexing, HTML email sanitization, and Laya-GGUF decision labeling run 100% locally.
-- Remote embedding indexing and LLM-as-a-Judge labeling are opt-in and send bounded email plain text (with HTML tags and legal disclaimers stripped) to the configured OpenAI-compatible endpoint.
+- BM25 retrieval, ranking, indexing, English/French stemming, HTML email sanitization, and Laya-GGUF decision labeling run 100% locally.
+- The explicitly local `Search only` action runs FTS5/BM25 queries directly against SQLite without contacting any LLM endpoint.
+- RAG chat and LLM-as-a-Judge labeling are user-initiated and send only character-bounded tool outputs or email plain text (with HTML tags, deep quote chains, and legal disclaimers stripped) to the configured OpenAI-compatible endpoint.
 - The application requires HTTPS except for an endpoint whose host is exactly `127.0.0.1`; local loopback LLMs may use HTTP.
-- In BM25-only mode, only the visible, character-bounded context plus the current question is sent.
 
 See [`docs/architecture.md`](docs/architecture.md) for architecture details and [`CONTRIBUTING.md`](CONTRIBUTING.md) for development guidelines.

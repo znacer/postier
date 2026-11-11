@@ -54,11 +54,24 @@ assets/
 src/
 ├── main.rs                 # Application entry point
 ├── model.rs                # Shared domain models (Email, EmailRecord, SearchHit, LabelDefinition, etc.)
-├── pst.rs                  # Outlook PST archive & JSONL fixture reader (MAPI sender, To/Cc recipients, body)
-├── db.rs                   # SQLite + FTS5/BM25 index, vector embeddings store, and label persistence
+├── pst.rs                  # Streaming Outlook PST archive & JSONL fixture reader (MAPI sender, To/Cc, body)
+├── text.rs                 # Plain-text indexing, EN/FR Snowball stemming, and best-passage snippet extraction
+├── db.rs                   # SQLite + FTS5/BM25 schema, migrations, and message/source persistence
+├── db/
+│   ├── query.rs            # Structured query parser, FTS5/BM25 search, thread collapsing, and email_stats
+│   ├── labels.rs           # Label definitions and message-label assignment persistence
+│   └── search.rs           # Optional vector embedding storage and reciprocal-rank hybrid search
 ├── laya.rs                 # Pure-Rust GGUF v3 reader & ModernBERT + Laya Decision Head inference engine
-├── llm.rs                  # OpenAI-compatible RAG client (Rig), LLM-as-a-Judge labeler, and body cleaner
-├── i18n.rs                 # French and English UI translations and system prompts
+├── laya/
+│   ├── gguf.rs             # GGUF v3 binary parser and tensor dequantization
+│   ├── ops.rs              # Tensor math primitives (matmul, RoPE, GeGLU, layer norm, attention)
+│   ├── packaged.rs         # Built-in offline packaged GGUF decision model generator
+│   └── tokenizer.rs        # BPE tokenizer loaded from GGUF metadata
+├── llm.rs                  # OpenAI-compatible client (Rig), LLM-as-a-Judge labeler, and endpoint validation
+├── llm/
+│   ├── agent.rs            # Tool-calling research agent (search_emails, read_email, get_thread, email_stats)
+│   └── context.rs          # Bilingual agent prompts, email body cleaner, citation helpers, and context builder
+├── i18n.rs                 # French and English UI translations and agent status strings
 ├── components/             # Styled Dioxus UI component library (dioxus-primitives + dioxus-icons)
 │   ├── mod.rs              # Exports Button, Badge, Avatar, Checkbox, Collapsible, Input, Item,
 │   │                       # Label, ScrollArea, Separator, Sidebar, Switch, ToggleGroup, Toolbar, etc.
@@ -66,14 +79,18 @@ src/
 ├── app.rs                  # Dioxus 0.7 desktop root component, state management, resize & worker tasks
 ├── app/
 │   ├── actions.rs          # State transitions, async workers, file pickers, and DB queries
+│   ├── actions/
+│   │   └── labeling.rs     # Single, selection, and batch email labeling workers (Laya & LLM Judge)
 │   ├── theme.rs            # Global CSS design system (DX_COMPONENTS_THEME_CSS + APP_CSS), palette overrides,
 │   │                       # splitters, and reusable component wrappers
 │   ├── sidebar.rs          # Left collapsible sidebar (Sidebar*, Collapsible, ToggleGroup, Checkbox, Switch, Input)
 │   ├── explorer.rs         # Center mail table, Toolbar, structured envelope header (Avatar, Badge), and reader
 │   ├── email_html.rs       # HTML email sanitizer, plain-text-to-HTML formatter, participant & date parsers
-│   ├── chat.rs             # Right RAG chat pane, Avatar bubbles, and Collapsible ItemGroup evidence cards
-│   └── markdown.rs         # Lightweight Markdown parser and renderer for assistant responses
-└── tests/                  # Unit and integration tests by module
+│   ├── chat.rs             # Right RAG chat pane, Avatar bubbles, mail:// links, and Collapsible evidence cards
+│   ├── markdown.rs         # Markdown block renderer for assistant responses
+│   └── markdown/
+│       └── parser.rs       # Lightweight Markdown block and inline link parser
+└── tests/                  # Unit and integration tests by module (db, query, llm, laya, text, email_html, i18n, etc.)
 ```
 
 ---
@@ -109,13 +126,13 @@ dx bundle --platform desktop --release
    - **Safe HTML rendering**: Any HTML rendered in the email reader (`dangerous_inner_html`) must pass through `email_html::format_email_body_html` / `sanitize_html_email`. Never allow `<script>`, `<iframe>`, `<object>`, inline `on*` event attributes, `javascript:` URLs, or external tracking pixels.
 
 2. **Bilingual Support (`Français` & `English`)**:
-   - All user-facing strings belong in `src/i18n.rs` on the `Language` enum.
+   - All user-facing strings belong in `src/i18n.rs` on the `Language` enum (and bilingual agent prompts in `src/llm/context.rs`).
    - When adding a new UI label, button, or status message, provide both `Language::French` and `Language::English` translations and update `src/tests/i18n.rs`.
 
 3. **UI Components & Styling (`Dioxus 0.7` + `src/components/`)**:
    - Build UI views using the styled components in `src/components/` (`Button`, `Badge`, `Avatar`, `Checkbox`, `Collapsible`, `Input`, `Item`, `Label`, `ScrollArea`, `Separator`, `Sidebar*`, `Switch`, `ToggleGroup`, `Toolbar`, etc.) rather than raw unstyled HTML primitives where a component exists.
    - Global theme tokens and dark-palette overrides for `--primary-color-*`, `--secondary-color-*`, and `--bg-*` are defined in `src/app/theme.rs` (`DX_COMPONENTS_THEME_CSS` and `APP_CSS`).
-   - Keep long-running operations (PST indexing, Laya inference, LLM queries) off the UI thread by dispatching `AppTask::Worker` tasks and reporting progress via `WorkerEvent::Progress`.
+   - Keep long-running operations (PST indexing, Laya inference, LLM agent queries) off the UI thread by dispatching `AppTask::Worker` tasks and reporting progress via `WorkerEvent::Progress`.
 
 4. **Preserve Documentation**:
    - Keep existing doc comments and module documentation accurate when refactoring or extending APIs.
@@ -139,7 +156,7 @@ dx build --platform desktop
 ```
 
 ### Adding Tests
-- Place unit tests in the corresponding file under `src/tests/` (e.g., `src/tests/email_html.rs`, `src/tests/db.rs`, `src/tests/llm.rs`, `src/tests/i18n.rs`) or component/view tests in `src/app/theme.rs`.
+- Place unit tests in the corresponding file under `src/tests/` (e.g., `src/tests/email_html.rs`, `src/tests/db.rs`, `src/tests/query.rs`, `src/tests/llm.rs`, `src/tests/i18n.rs`) or component/view tests in `src/app/theme.rs`.
 - Use `.jsonl` fixtures or in-memory/temporary SQLite databases rather than committing real or personal `.pst` archives.
 
 ---
