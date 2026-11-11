@@ -374,10 +374,19 @@ fn execute_task(task: AppTask) {
     }
 }
 
+pub(crate) fn load_app_icon() -> Option<tao::window::Icon> {
+    let img = image::load_from_memory(include_bytes!("../assets/logo.png"))
+        .ok()?
+        .into_rgba8();
+    let (width, height) = img.dimensions();
+    tao::window::Icon::from_rgba(img.into_raw(), width, height).ok()
+}
+
 pub fn run() {
     let initial_title = LlmConfig::default().language.app_title().to_owned();
     let window = WindowBuilder::new()
         .with_title(initial_title)
+        .with_window_icon(load_app_icon())
         .with_inner_size(LogicalSize::new(1440.0, 860.0))
         .with_always_on_top(false);
     let config = Config::new()

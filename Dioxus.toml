@@ -4,4 +4,4 @@ name = "PoSTier"
 [bundle]
 identifier = "com.postier"
 publisher = "S4080"
-icon = ["assets/logo.svg"]
+icon = ["assets/logo.png", "assets/logo.ico"]

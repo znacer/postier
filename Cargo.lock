@@ -6825,6 +6825,7 @@ dependencies = [
  "dioxus-icons",
  "dioxus-primitives",
  "dioxus-ssr",
+ "image",
  "outlook-pst",
  "reqwest 0.13.5",
  "rfd 0.15.4",
