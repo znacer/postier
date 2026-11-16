@@ -9,6 +9,7 @@ use std::{
     io::{BufReader, Read},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
+    time::SystemTime,
 };
 
 use anyhow::{Context, Result, bail};
@@ -26,7 +27,7 @@ use self::{
 pub const HF_LAYA_REPO: &str = "https://huggingface.co/ggml-org/Laya-GGUF";
 pub const DEFAULT_LAYA_FILENAME: &str = "Laya-Q8_0.gguf";
 
-type CachedLayaModel = (PathBuf, Arc<LayaModel>);
+type CachedLayaModel = (PathBuf, Option<SystemTime>, u64, Arc<LayaModel>);
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,16 +118,21 @@ static EMBEDDED_MODEL: OnceLock<Arc<LayaModel>> = OnceLock::new();
 impl LayaModel {
     pub fn load_or_embedded(gguf_path: Option<&Path>) -> Result<Arc<Self>> {
         if let Some(path) = gguf_path.filter(|p| p.is_file()) {
+            let meta = std::fs::metadata(path).ok();
+            let modified = meta.as_ref().and_then(|m| m.modified().ok());
+            let len = meta.as_ref().map_or(0, |m| m.len());
             let cache = MODEL_CACHE.get_or_init(|| Mutex::new(None));
             if let Ok(guard) = cache.lock()
-                && let Some((cached_path, model)) = guard.as_ref()
+                && let Some((cached_path, cached_mod, cached_len, model)) = guard.as_ref()
                 && cached_path == path
+                && *cached_mod == modified
+                && *cached_len == len
             {
                 return Ok(model.clone());
             }
             let loaded = Arc::new(Self::from_file(path)?);
             if let Ok(mut guard) = cache.lock() {
-                *guard = Some((path.to_path_buf(), loaded.clone()));
+                *guard = Some((path.to_path_buf(), modified, len, loaded.clone()));
             }
             return Ok(loaded);
         }
@@ -249,9 +255,37 @@ impl LayaModel {
             Ok(out)
         };
 
+        let check_vec = |name: &str, v: &[f32], expected: usize| -> Result<()> {
+            if v.len() != expected {
+                bail!(
+                    "{name} length {} does not match expected {expected}",
+                    v.len()
+                );
+            }
+            Ok(())
+        };
+        let check_mat = |name: &str, wt: &WeightTensor, ne0: usize, ne1: usize| -> Result<()> {
+            if wt.ne0 != ne0 || wt.ne1 != ne1 {
+                bail!(
+                    "{name} shape [{}x{}] does not match expected [{ne0}x{ne1}]",
+                    wt.ne0,
+                    wt.ne1
+                );
+            }
+            Ok(())
+        };
+
         let tok_embd = load_weight_tensor(bytes, data_offset, &tensors, "token_embd.weight")?;
+        if tok_embd.ne0 != n_embd {
+            bail!(
+                "token_embd.weight width {} does not match n_embd={n_embd}",
+                tok_embd.ne0
+            );
+        }
         let tok_norm = load_vec("token_embd_norm.weight")?;
+        check_vec("token_embd_norm.weight", &tok_norm, n_embd)?;
         let output_norm = load_vec("output_norm.weight")?;
+        check_vec("output_norm.weight", &output_norm, n_embd)?;
         let type_embd = load_vec("token_types.weight")?;
         if type_embd.len() < 3 * n_embd {
             bail!(
@@ -297,6 +331,32 @@ impl LayaModel {
                 &format!("blk.{il}.ffn_down.weight"),
             )?;
             let n_ff = ff_lengths.get(il).copied().unwrap_or(ffn_down.ne0);
+            if n_ff == 0 {
+                bail!("encoder layer {il} has zero feed-forward length");
+            }
+            if let Some(ref an) = attn_norm {
+                check_vec(&format!("blk.{il}.attn_norm.weight"), an, n_embd)?;
+            }
+            check_mat(
+                &format!("blk.{il}.attn_qkv.weight"),
+                &wqkv,
+                n_embd,
+                3 * n_embd,
+            )?;
+            check_mat(&format!("blk.{il}.attn_output.weight"), &wo, n_embd, n_embd)?;
+            check_vec(&format!("blk.{il}.ffn_norm.weight"), &ffn_norm, n_embd)?;
+            check_mat(
+                &format!("blk.{il}.ffn_up.weight"),
+                &ffn_up,
+                n_embd,
+                2 * n_ff,
+            )?;
+            check_mat(
+                &format!("blk.{il}.ffn_down.weight"),
+                &ffn_down,
+                n_ff,
+                n_embd,
+            )?;
             encoder_layers.push(EncoderLayer {
                 attn_norm,
                 wqkv,
@@ -343,6 +403,31 @@ impl LayaModel {
             )?;
             let ffn_down_b = load_vec(&format!("blk.{il}.ffn_down.bias"))?;
             let n_ff = ff_lengths.get(il).copied().unwrap_or(ffn_up.ne1);
+            if n_ff == 0 {
+                bail!("decision head layer {il} has zero feed-forward length");
+            }
+            check_vec(&format!("blk.{il}.attn_norm.weight"), &attn_norm, n_embd)?;
+            check_vec(&format!("blk.{il}.attn_norm.bias"), &attn_norm_b, n_embd)?;
+            check_mat(
+                &format!("blk.{il}.attn_qkv.weight"),
+                &wqkv,
+                n_embd,
+                3 * n_embd,
+            )?;
+            check_vec(&format!("blk.{il}.attn_qkv.bias"), &wqkv_b, 3 * n_embd)?;
+            check_mat(&format!("blk.{il}.attn_output.weight"), &wo, n_embd, n_embd)?;
+            check_vec(&format!("blk.{il}.attn_output.bias"), &wo_b, n_embd)?;
+            check_vec(&format!("blk.{il}.ffn_norm.weight"), &ffn_norm, n_embd)?;
+            check_vec(&format!("blk.{il}.ffn_norm.bias"), &ffn_norm_b, n_embd)?;
+            check_mat(&format!("blk.{il}.ffn_up.weight"), &ffn_up, n_embd, n_ff)?;
+            check_vec(&format!("blk.{il}.ffn_up.bias"), &ffn_up_b, n_ff)?;
+            check_mat(
+                &format!("blk.{il}.ffn_down.weight"),
+                &ffn_down,
+                n_ff,
+                n_embd,
+            )?;
+            check_vec(&format!("blk.{il}.ffn_down.bias"), &ffn_down_b, n_embd)?;
             head_layers.push(DecisionHeadLayer {
                 attn_norm,
                 attn_norm_b,
@@ -361,10 +446,15 @@ impl LayaModel {
         }
 
         let cls_norm = load_vec("cls.norm.weight")?;
+        check_vec("cls.norm.weight", &cls_norm, n_embd)?;
         let cls_norm_b = load_vec("cls.norm.bias")?;
+        check_vec("cls.norm.bias", &cls_norm_b, n_embd)?;
         let cls_weight = load_weight_tensor(bytes, data_offset, &tensors, "cls.weight")?;
+        check_mat("cls.weight", &cls_weight, n_embd, n_embd)?;
         let cls_bias = load_vec("cls.bias")?;
+        check_vec("cls.bias", &cls_bias, n_embd)?;
         let cls_out_weight = load_weight_tensor(bytes, data_offset, &tensors, "cls.output.weight")?;
+        check_mat("cls.output.weight", &cls_out_weight, n_embd, 1)?;
         let cls_out_bias = *load_vec("cls.output.bias")?.first().unwrap_or(&0.0);
 
         Ok(Self {

@@ -225,8 +225,7 @@ impl PstRagApp {
         if !self.sidebar_open {
             let open_label = tr.btn_open();
             return rsx! {
-                aside {
-                    style: "width: 42px; height: 100%; flex-shrink: 0; {sb_style}",
+                aside { style: "width: 42px; height: 100%; flex-shrink: 0; {sb_style}",
                     Button {
                         variant: ButtonVariant::Ghost,
                         title: "{open_label}",
@@ -241,11 +240,21 @@ impl PstRagApp {
                             stroke_width: "2",
                             stroke_linecap: "round",
                             stroke_linejoin: "round",
-                            rect { x: "3", y: "3", width: "18", height: "18", rx: "2" }
-                            line { x1: "9", y1: "3", x2: "9", y2: "21" }
+                            rect {
+                                x: "3",
+                                y: "3",
+                                width: "18",
+                                height: "18",
+                                rx: "2",
+                            }
+                            line {
+                                x1: "9",
+                                y1: "3",
+                                x2: "9",
+                                y2: "21",
+                            }
                         }
-                        span {
-                            style: "writing-mode: vertical-rl; text-orientation: mixed; font-size: 10px; font-weight: 600; letter-spacing: 0.12em; color: {muted_color}; text-transform: uppercase;",
+                        span { style: "writing-mode: vertical-rl; text-orientation: mixed; font-size: 10px; font-weight: 600; letter-spacing: 0.12em; color: {muted_color}; text-transform: uppercase;",
                             "MAIL"
                         }
                     }
@@ -339,9 +348,11 @@ impl PstRagApp {
                 let sk_toggle = source.key.clone();
                 let folder_path_toggle = tree_row.path;
                 let chevron_rot = if tree_row.collapsed { "-90deg" } else { "0deg" };
+                let folder_row_key = format!("{}::{}", source.key, folder_path_toggle);
 
                 folder_elements.push(rsx! {
                     SidebarMenuSubItem {
+                        key: "{folder_row_key}",
                         style: "padding-left: {indent_px}px;",
                         div {
                             style: "display: flex; flex-direction: row; align-items: center; gap: 6px; width: 100%;",
@@ -355,19 +366,19 @@ impl PstRagApp {
                                         folder_path: row_path_ctx.clone(),
                                         position: Point::new(coords.x as f32, coords.y as f32),
                                     }
-                                    .dispatch();
+                                        .dispatch();
                                 }
                             },
                             Checkbox {
                                 checked: row_checked,
                                 on_checked_change: move |state: CheckboxState| {
                                     SidebarMessage::FolderTreeEnabledChanged(
-                                        sk_check.clone(),
-                                        folder_paths.clone(),
-                                        matches!(state, CheckboxState::Checked),
-                                    )
-                                    .dispatch();
-                                }
+                                            sk_check.clone(),
+                                            folder_paths.clone(),
+                                            matches!(state, CheckboxState::Checked),
+                                        )
+                                        .dispatch();
+                                },
                             }
                             Button {
                                 variant: ButtonVariant::Ghost,
@@ -376,17 +387,15 @@ impl PstRagApp {
                                 style: "flex: 1; min-width: 0; padding: 4px 8px; font-size: 11.5px; justify-content: space-between;",
                                 onclick: move |_| {
                                     SidebarMessage::SelectMailScope(MailScope::Folder {
-                                        source_key: sk_folder.clone(),
-                                        folder_prefix: row_path.clone(),
-                                    })
-                                    .dispatch();
+                                            source_key: sk_folder.clone(),
+                                            folder_prefix: row_path.clone(),
+                                        })
+                                        .dispatch();
                                 },
-                                span {
-                                    style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                                span { style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                                     "{folder_name}"
                                 }
-                                span {
-                                    style: "font-size: 10.5px; color: {muted_color}; font-variant-numeric: tabular-nums;",
+                                span { style: "font-size: 10.5px; color: {muted_color}; font-variant-numeric: tabular-nums;",
                                     "{folder_count}"
                                 }
                             }
@@ -397,10 +406,10 @@ impl PstRagApp {
                                     style: "padding: 2px; width: 20px; height: 20px; flex-shrink: 0;",
                                     onclick: move |_| {
                                         SidebarMessage::ToggleFolderTreeNode(
-                                            sk_toggle.clone(),
-                                            folder_path_toggle.clone(),
-                                        )
-                                        .dispatch();
+                                                sk_toggle.clone(),
+                                                folder_path_toggle.clone(),
+                                            )
+                                            .dispatch();
                                     },
                                     svg {
                                         width: "12",
@@ -427,11 +436,11 @@ impl PstRagApp {
                     small_button(tr.btn_cancel(), Some(SidebarMessage::CancelRemoveSource));
                 let confirm_lbl = tr.btn_remove();
                 rsx! {
-                    div {
-                        style: "padding: 8px; border-radius: var(--radius-sm); background-color: var(--danger-subtle); border: 1px solid rgba(239, 68, 68, 0.3); display: flex; flex-direction: column; gap: 6px; margin-top: 4px;",
-                        span { style: "font-size: 11px; color: var(--contrast-error-color);", "{confirm_msg}" }
-                        div {
-                            style: "display: flex; flex-direction: row; gap: 6px;",
+                    div { style: "padding: 8px; border-radius: var(--radius-sm); background-color: var(--danger-subtle); border: 1px solid rgba(239, 68, 68, 0.3); display: flex; flex-direction: column; gap: 6px; margin-top: 4px;",
+                        span { style: "font-size: 11px; color: var(--contrast-error-color);",
+                            "{confirm_msg}"
+                        }
+                        div { style: "display: flex; flex-direction: row; gap: 6px;",
                             {cancel_btn}
                             Button {
                                 variant: ButtonVariant::Destructive,
@@ -448,8 +457,7 @@ impl PstRagApp {
                 let sk_rem = source.key.clone();
                 let is_busy = self.busy;
                 rsx! {
-                    div {
-                        style: "padding-left: 20px; margin-top: 2px;",
+                    div { style: "padding-left: 20px; margin-top: 2px;",
                         Button {
                             variant: ButtonVariant::Ghost,
                             size: ButtonSize::Xs,
@@ -470,8 +478,11 @@ impl PstRagApp {
             let source_has_collapsible =
                 !collapsible_folder_paths_under(&source.folders, "").is_empty();
 
+            let source_row_key = source.key.clone();
+
             source_elements.push(rsx! {
                 SidebarMenuItem {
+                    key: "{source_row_key}",
                     style: "padding: 4px 0px; display: flex; flex-direction: column; gap: 3px; border-bottom: 1px solid var(--border-subtle);",
                     div {
                         style: "display: flex; flex-direction: row; align-items: center; gap: 6px;",
@@ -485,45 +496,38 @@ impl PstRagApp {
                                     folder_path: String::new(),
                                     position: Point::new(coords.x as f32, coords.y as f32),
                                 }
-                                .dispatch();
+                                    .dispatch();
                             }
                         },
                         Checkbox {
                             checked: source_checked,
                             on_checked_change: move |state: CheckboxState| {
                                 SidebarMessage::SourceEnabledChanged(
-                                    source_key.clone(),
-                                    matches!(state, CheckboxState::Checked),
-                                )
-                                .dispatch();
-                            }
+                                        source_key.clone(),
+                                        matches!(state, CheckboxState::Checked),
+                                    )
+                                    .dispatch();
+                            },
                         }
-                        div {
-                            style: "position: relative; flex: 1; min-width: 0;",
+                        div { style: "position: relative; flex: 1; min-width: 0;",
                             Button {
                                 variant: ButtonVariant::Ghost,
                                 size: ButtonSize::Sm,
                                 class: "{source_nav_class}",
                                 style: "width: 100%; justify-content: flex-start; padding-right: 36px;",
                                 onclick: move |_| {
-                                    SidebarMessage::SelectMailScope(MailScope::Source(
-                                        source_key_select.clone(),
-                                    ))
-                                    .dispatch();
+                                    SidebarMessage::SelectMailScope(MailScope::Source(source_key_select.clone()))
+                                        .dispatch();
                                 },
-                                span {
-                                    style: "font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                                span { style: "font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                                     "{source_name}"
                                 }
                             }
-                            SidebarMenuBadge {
-                                "{source_count}"
-                            }
+                            SidebarMenuBadge { "{source_count}" }
                         }
                     }
                     if !folder_elements.is_empty() {
-                        SidebarMenuSub {
-                            style: "margin: 0 0 0 10px; padding: 2px 0 2px 8px;",
+                        SidebarMenuSub { style: "margin: 0 0 0 10px; padding: 2px 0 2px 8px;",
                             for fe in folder_elements {
                                 {fe}
                             }
@@ -537,8 +541,7 @@ impl PstRagApp {
         let no_pst_msg = tr.no_pst_indexed();
         let sources_empty = self.sources.is_empty();
         let mailboxes_card = card(rsx! {
-            div {
-                style: "display: flex; flex-direction: column; gap: 8px;",
+            div { style: "display: flex; flex-direction: column; gap: 8px;",
                 SidebarMenu {
                     SidebarMenuItem {
                         Button {
@@ -549,30 +552,21 @@ impl PstRagApp {
                             onclick: move |_| SidebarMessage::SelectMailScope(MailScope::AllMessages).dispatch(),
                             span { style: "font-weight: 600;", "{all_messages_label}" }
                         }
-                        SidebarMenuBadge {
-                            "{total_count}"
-                        }
+                        SidebarMenuBadge { "{total_count}" }
                     }
                 }
                 Separator {}
-                div {
-                    style: "padding: 8px; border-radius: var(--radius-sm); background-color: var(--bg-input); border: 1px dashed var(--border-strong); display: flex; flex-direction: column; gap: 8px;",
-                    span {
-                        style: "font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                div { style: "padding: 8px; border-radius: var(--radius-sm); background-color: var(--bg-input); border: 1px dashed var(--border-strong); display: flex; flex-direction: column; gap: 8px;",
+                    span { style: "font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                         "{import_text}"
                     }
-                    div {
-                        style: "display: flex; flex-direction: row; gap: 6px; flex-wrap: wrap;",
+                    div { style: "display: flex; flex-direction: row; gap: 6px; flex-wrap: wrap;",
                         {choose}
                         {index}
                     }
                 }
                 if sources_empty {
-                    span {
-                        class: "form-hint",
-                        style: "padding: 4px 2px;",
-                        "{no_pst_msg}"
-                    }
+                    span { class: "form-hint", style: "padding: 4px 2px;", "{no_pst_msg}" }
                 } else {
                     SidebarMenu {
                         for se in source_elements {
@@ -609,8 +603,10 @@ impl PstRagApp {
             };
             let badge = label_badge(&def.name, &def.color, Some(count.to_string()));
             let del_title = tr.btn_delete();
+            let label_row_key = def.name.clone();
             label_rows.push(rsx! {
                 SidebarMenuItem {
+                    key: "{label_row_key}",
                     style: "display: flex; flex-direction: row; align-items: center; gap: 4px;",
                     Button {
                         variant: ButtonVariant::Ghost,
@@ -618,10 +614,8 @@ impl PstRagApp {
                         class: "{nav_class}",
                         style: "flex: 1; min-width: 0; padding: 4px 6px; justify-content: flex-start;",
                         onclick: move |_| {
-                            SidebarMessage::SelectLabelFilter(LabelFilter::Labeled(
-                                label_name.clone(),
-                            ))
-                            .dispatch();
+                            SidebarMessage::SelectLabelFilter(LabelFilter::Labeled(label_name.clone()))
+                                .dispatch();
                         },
                         {badge}
                     }
@@ -649,8 +643,7 @@ impl PstRagApp {
         );
 
         let labels_card = card(rsx! {
-            div {
-                style: "display: flex; flex-direction: column; gap: 8px;",
+            div { style: "display: flex; flex-direction: column; gap: 8px;",
                 ToggleGroup {
                     horizontal: true,
                     allow_multiple_pressed: false,
@@ -701,14 +694,16 @@ impl PstRagApp {
                         if evt.key() == Key::Enter && can_add_label {
                             SidebarMessage::SaveLabelDefinition.dispatch();
                         }
-                    }
+                    },
                 }
                 Input {
                     r#type: "text",
                     placeholder: "{desc_placeholder}",
                     value: "{cur_label_desc}",
                     style: "width: 100%; font-size: 12px;",
-                    oninput: move |evt: FormEvent| SidebarMessage::NewLabelDescriptionChanged(evt.value()).dispatch(),
+                    oninput: move |evt: FormEvent| {
+                        SidebarMessage::NewLabelDescriptionChanged(evt.value()).dispatch()
+                    },
                     onkeydown: move |evt: KeyboardEvent| {
                         if evt.key() != Key::Escape {
                             evt.stop_propagation();
@@ -716,7 +711,7 @@ impl PstRagApp {
                         if evt.key() == Key::Enter && can_add_label {
                             SidebarMessage::SaveLabelDefinition.dispatch();
                         }
-                    }
+                    },
                 }
                 {save_label_btn}
             }
@@ -736,14 +731,17 @@ impl PstRagApp {
         let laya_exp = tr.laya_explanation();
 
         let laya_card = card(rsx! {
-            div {
-                style: "display: flex; flex-direction: column; gap: 8px;",
-                div {
-                    style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between;",
-                    span { style: "font-size: 12px; font-weight: 600; color: {bright};", "ggml-org/Laya-GGUF" }
-                    Badge {
-                        variant: BadgeVariant::Secondary,
-                        if external_gguf.is_some() { "GGUF" } else { "Built-in" }
+            div { style: "display: flex; flex-direction: column; gap: 8px;",
+                div { style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between;",
+                    span { style: "font-size: 12px; font-weight: 600; color: {bright};",
+                        "ggml-org/Laya-GGUF"
+                    }
+                    Badge { variant: BadgeVariant::Secondary,
+                        if external_gguf.is_some() {
+                            "GGUF"
+                        } else {
+                            "Built-in"
+                        }
                     }
                 }
                 span { class: "form-hint", style: "word-break: break-all;", "{laya_status}" }
@@ -757,10 +755,9 @@ impl PstRagApp {
                         if evt.key() != Key::Escape {
                             evt.stop_propagation();
                         }
-                    }
+                    },
                 }
-                div {
-                    style: "display: flex; flex-direction: row; gap: 6px; flex-wrap: wrap;",
+                div { style: "display: flex; flex-direction: row; gap: 6px; flex-wrap: wrap;",
                     {choose_gguf_btn}
                 }
                 span { class: "form-hint", "{laya_exp}" }
@@ -796,10 +793,8 @@ impl PstRagApp {
         let https_notice = tr.https_required_notice();
 
         let llm_card = card(rsx! {
-            div {
-                style: "display: flex; flex-direction: column; gap: 8px;",
-                div {
-                    style: "display: flex; flex-direction: column; gap: 3px;",
+            div { style: "display: flex; flex-direction: column; gap: 8px;",
+                div { style: "display: flex; flex-direction: column; gap: 3px;",
                     Label {
                         html_for: "llm-endpoint-input",
                         style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
@@ -816,11 +811,10 @@ impl PstRagApp {
                             if evt.key() != Key::Escape {
                                 evt.stop_propagation();
                             }
-                        }
+                        },
                     }
                 }
-                div {
-                    style: "display: flex; flex-direction: column; gap: 3px;",
+                div { style: "display: flex; flex-direction: column; gap: 3px;",
                     Label {
                         html_for: "llm-model-input",
                         style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
@@ -837,11 +831,10 @@ impl PstRagApp {
                             if evt.key() != Key::Escape {
                                 evt.stop_propagation();
                             }
-                        }
+                        },
                     }
                 }
-                div {
-                    style: "display: flex; flex-direction: column; gap: 3px;",
+                div { style: "display: flex; flex-direction: column; gap: 3px;",
                     Label {
                         html_for: "llm-token-input",
                         style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
@@ -858,13 +851,12 @@ impl PstRagApp {
                             if evt.key() != Key::Escape {
                                 evt.stop_propagation();
                             }
-                        }
+                        },
                     }
                 }
                 if self.config.embeddings_feature_enabled() {
                     Separator {}
-                    div {
-                        style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0;",
+                    div { style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0;",
                         Label {
                             html_for: "remote-emb-switch",
                             style: "font-size: 11.5px; cursor: pointer;",
@@ -875,8 +867,7 @@ impl PstRagApp {
                             on_checked_change: move |checked: bool| SidebarMessage::RemoteEmbeddingsChanged(checked).dispatch(),
                         }
                     }
-                    div {
-                        style: "display: flex; flex-direction: column; gap: 3px;",
+                    div { style: "display: flex; flex-direction: column; gap: 3px;",
                         Label {
                             html_for: "llm-emb-model-input",
                             style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
@@ -893,13 +884,12 @@ impl PstRagApp {
                                 if evt.key() != Key::Escape {
                                     evt.stop_propagation();
                                 }
-                            }
+                            },
                         }
                     }
                 }
                 Separator {}
-                div {
-                    style: "display: flex; flex-direction: column; gap: 3px;",
+                div { style: "display: flex; flex-direction: column; gap: 3px;",
                     Label {
                         html_for: "llm-context-emails-input",
                         style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
@@ -918,12 +908,11 @@ impl PstRagApp {
                             if evt.key() != Key::Escape {
                                 evt.stop_propagation();
                             }
-                        }
+                        },
                     }
                     span { class: "form-hint", "{ctx_emails_hint}" }
                 }
-                div {
-                    style: "display: flex; flex-direction: column; gap: 3px;",
+                div { style: "display: flex; flex-direction: column; gap: 3px;",
                     Label {
                         html_for: "llm-max-tokens-input",
                         style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
@@ -936,12 +925,14 @@ impl PstRagApp {
                         step: "256",
                         value: "{max_tokens_val}",
                         style: "width: 100%; font-size: 12px;",
-                        oninput: move |evt: FormEvent| SidebarMessage::MaxContextTokensChanged(evt.value()).dispatch(),
+                        oninput: move |evt: FormEvent| {
+                            SidebarMessage::MaxContextTokensChanged(evt.value()).dispatch()
+                        },
                         onkeydown: move |evt: KeyboardEvent| {
                             if evt.key() != Key::Escape {
                                 evt.stop_propagation();
                             }
-                        }
+                        },
                     }
                     span { class: "form-hint", "{max_tokens_hint}" }
                 }
@@ -953,10 +944,8 @@ impl PstRagApp {
         let storage_dir_str = self.storage_dir.display().to_string();
         let storage_notice = tr.storage_notice();
         let storage_card = card(rsx! {
-            div {
-                style: "display: flex; flex-direction: column; gap: 8px;",
-                div {
-                    style: "padding: 6px 8px; border-radius: var(--radius-xs); background-color: var(--bg-input); border: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 10.5px; color: {bright}; word-break: break-all;",
+            div { style: "display: flex; flex-direction: column; gap: 8px;",
+                div { style: "padding: 6px 8px; border-radius: var(--radius-xs); background-color: var(--bg-input); border: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 10.5px; color: {bright}; word-break: break-all;",
                     "{storage_dir_str}"
                 }
                 span { class: "form-hint", "{storage_notice}" }
@@ -968,28 +957,21 @@ impl PstRagApp {
         let laya_sub_lbl = tr.section_laya();
         let storage_sub_lbl = tr.section_storage();
         let settings_body = rsx! {
-            div {
-                style: "display: flex; flex-direction: column; gap: 10px;",
-                div {
-                    style: "display: flex; flex-direction: column; gap: 4px;",
-                    span {
-                        style: "font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: {muted_color}; text-transform: uppercase; padding: 0 2px;",
+            div { style: "display: flex; flex-direction: column; gap: 10px;",
+                div { style: "display: flex; flex-direction: column; gap: 4px;",
+                    span { style: "font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: {muted_color}; text-transform: uppercase; padding: 0 2px;",
                         "{ai_sub_lbl}"
                     }
                     {llm_card}
                 }
-                div {
-                    style: "display: flex; flex-direction: column; gap: 4px;",
-                    span {
-                        style: "font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: {muted_color}; text-transform: uppercase; padding: 0 2px;",
+                div { style: "display: flex; flex-direction: column; gap: 4px;",
+                    span { style: "font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: {muted_color}; text-transform: uppercase; padding: 0 2px;",
                         "{laya_sub_lbl}"
                     }
                     {laya_card}
                 }
-                div {
-                    style: "display: flex; flex-direction: column; gap: 4px;",
-                    span {
-                        style: "font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: {muted_color}; text-transform: uppercase; padding: 0 2px;",
+                div { style: "display: flex; flex-direction: column; gap: 4px;",
+                    span { style: "font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: {muted_color}; text-transform: uppercase; padding: 0 2px;",
                         "{storage_sub_lbl}"
                     }
                     {storage_card}
@@ -1025,22 +1007,18 @@ impl PstRagApp {
                 settings_body,
             ),
         ] {
-            let collapsed = self.collapsed_sections[section.index()];
-            let header_el =
-                collapsible_section_label(label, collapsed, SidebarMessage::ToggleSection(section));
+            let section_idx = section.index();
+            let collapsed = self.collapsed_sections[section_idx];
+            let header_el = collapsible_section_label(label, collapsed);
             sections.push(rsx! {
-                SidebarGroup {
-                    style: "padding: 0;",
+                SidebarGroup { key: "{section_idx}", style: "padding: 0;",
                     Collapsible {
                         open: !collapsed,
                         on_open_change: move |_| SidebarMessage::ToggleSection(section).dispatch(),
-                        div {
-                            style: "display: flex; flex-direction: column; gap: 6px;",
+                        div { style: "display: flex; flex-direction: column; gap: 6px;",
                             {header_el}
                             CollapsibleContent {
-                                SidebarGroupContent {
-                                    {body}
-                                }
+                                SidebarGroupContent { {body} }
                             }
                         }
                     }
@@ -1075,10 +1053,10 @@ impl PstRagApp {
                             style: "font-size: 12px; padding: 6px 10px;",
                             onclick: move |_| {
                                 SidebarMessage::CollapseAllSubdirectories(
-                                    menu_source.clone(),
-                                    menu_folder.clone(),
-                                )
-                                .dispatch();
+                                        menu_source.clone(),
+                                        menu_folder.clone(),
+                                    )
+                                    .dispatch();
                             },
                             "{collapse_lbl}"
                         }
@@ -1087,10 +1065,10 @@ impl PstRagApp {
                             style: "font-size: 12px; padding: 6px 10px;",
                             onclick: move |_| {
                                 SidebarMessage::ExpandAllSubdirectories(
-                                    menu_source_exp.clone(),
-                                    menu_folder_exp.clone(),
-                                )
-                                .dispatch();
+                                        menu_source_exp.clone(),
+                                        menu_folder_exp.clone(),
+                                    )
+                                    .dispatch();
                             },
                             "{expand_lbl}"
                         }
@@ -1100,27 +1078,28 @@ impl PstRagApp {
         });
 
         rsx! {
-            aside {
-                style: "width: 285px; height: 100%; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; {sb_style}",
-                SidebarHeader {
-                    style: "padding: 14px 14px 8px 14px; gap: 10px;",
-                    div {
-                        style: "display: flex; flex-direction: row; align-items: center; gap: 10px;",
+            aside { style: "width: 285px; height: 100%; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; {sb_style}",
+                SidebarHeader { style: "padding: 14px 14px 8px 14px; gap: 10px;",
+                    div { style: "display: flex; flex-direction: row; align-items: center; gap: 10px;",
                         div {
                             class: "brand-logo",
                             style: "width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; {tile_style}",
                             dangerous_inner_html: include_str!("../../assets/logo.svg"),
                         }
-                        div {
-                            style: "flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;",
-                            span { style: "font-size: 14px; color: {bright}; font-weight: 700; letter-spacing: -0.01em;", "PoSTier" }
-                            span { style: "font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", "{brand_sub}" }
+                        div { style: "flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;",
+                            span { style: "font-size: 14px; color: {bright}; font-weight: 700; letter-spacing: -0.01em;",
+                                "PoSTier"
+                            }
+                            span { style: "font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                                "{brand_sub}"
+                            }
                         }
                         {hide_sb_btn}
                     }
-                    div {
-                        style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px;",
-                        span { style: "font-size: 11.5px; color: {muted_color}; font-weight: 500;", "{lang_lbl}" }
+                    div { style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px;",
+                        span { style: "font-size: 11.5px; color: {muted_color}; font-weight: 500;",
+                            "{lang_lbl}"
+                        }
                         ToggleGroup {
                             horizontal: true,
                             allow_multiple_pressed: false,
@@ -1144,11 +1123,11 @@ impl PstRagApp {
                             }
                         }
                     }
-                    div {
-                        style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px;",
-                        span { style: "font-size: 11.5px; color: {muted_color}; font-weight: 500;", "{theme_lbl}" }
-                        div {
-                            style: "display: flex; flex-direction: row; align-items: center; gap: 6px;",
+                    div { style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px;",
+                        span { style: "font-size: 11.5px; color: {muted_color}; font-weight: 500;",
+                            "{theme_lbl}"
+                        }
+                        div { style: "display: flex; flex-direction: row; align-items: center; gap: 6px;",
                             svg {
                                 width: "13",
                                 height: "13",
@@ -1159,17 +1138,56 @@ impl PstRagApp {
                                 stroke_linecap: "round",
                                 stroke_linejoin: "round",
                                 circle { cx: "12", cy: "12", r: "5" }
-                                line { x1: "12", y1: "1", x2: "12", y2: "3" }
-                                line { x1: "12", y1: "21", x2: "12", y2: "23" }
-                                line { x1: "4.22", y1: "4.22", x2: "5.64", y2: "5.64" }
-                                line { x1: "18.36", y1: "18.36", x2: "19.78", y2: "19.78" }
-                                line { x1: "1", y1: "12", x2: "3", y2: "12" }
-                                line { x1: "21", y1: "12", x2: "23", y2: "12" }
-                                line { x1: "4.22", y1: "19.78", x2: "5.64", y2: "18.36" }
-                                line { x1: "18.36", y1: "5.64", x2: "19.78", y2: "4.22" }
+                                line {
+                                    x1: "12",
+                                    y1: "1",
+                                    x2: "12",
+                                    y2: "3",
+                                }
+                                line {
+                                    x1: "12",
+                                    y1: "21",
+                                    x2: "12",
+                                    y2: "23",
+                                }
+                                line {
+                                    x1: "4.22",
+                                    y1: "4.22",
+                                    x2: "5.64",
+                                    y2: "5.64",
+                                }
+                                line {
+                                    x1: "18.36",
+                                    y1: "18.36",
+                                    x2: "19.78",
+                                    y2: "19.78",
+                                }
+                                line {
+                                    x1: "1",
+                                    y1: "12",
+                                    x2: "3",
+                                    y2: "12",
+                                }
+                                line {
+                                    x1: "21",
+                                    y1: "12",
+                                    x2: "23",
+                                    y2: "12",
+                                }
+                                line {
+                                    x1: "4.22",
+                                    y1: "19.78",
+                                    x2: "5.64",
+                                    y2: "18.36",
+                                }
+                                line {
+                                    x1: "18.36",
+                                    y1: "5.64",
+                                    x2: "19.78",
+                                    y2: "4.22",
+                                }
                             }
-                            span {
-                                style: if !is_dark { "font-size: 11px; color: var(--text-accent); font-weight: 600;" } else { "font-size: 11px; color: var(--text-muted); font-weight: 400;" },
+                            span { style: if !is_dark { "font-size: 11px; color: var(--text-accent); font-weight: 600;" } else { "font-size: 11px; color: var(--text-muted); font-weight: 400;" },
                                 "{theme_light_lbl}"
                             }
                             Switch {
@@ -1178,8 +1196,7 @@ impl PstRagApp {
                                     SidebarMessage::ThemeChanged(dark).dispatch();
                                 },
                             }
-                            span {
-                                style: if is_dark { "font-size: 11px; color: var(--text-accent); font-weight: 600;" } else { "font-size: 11px; color: var(--text-muted); font-weight: 400;" },
+                            span { style: if is_dark { "font-size: 11px; color: var(--text-accent); font-weight: 600;" } else { "font-size: 11px; color: var(--text-muted); font-weight: 400;" },
                                 "{theme_dark_lbl}"
                             }
                             svg {
@@ -1197,10 +1214,8 @@ impl PstRagApp {
                     }
                 }
                 Separator {}
-                ScrollArea {
-                    style: "flex: 1; min-height: 0; width: 100%;",
-                    SidebarContent {
-                        style: "padding: 10px 14px 14px 14px; gap: 12px;",
+                ScrollArea { style: "flex: 1; min-height: 0; width: 100%;",
+                    SidebarContent { style: "padding: 10px 14px 14px 14px; gap: 12px;",
                         for sec in sections {
                             {sec}
                         }

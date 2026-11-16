@@ -1,6 +1,5 @@
 mod actions;
 mod chat;
-pub(crate) mod email_html;
 mod explorer;
 pub(crate) mod markdown;
 pub(crate) mod sidebar;
@@ -36,7 +35,10 @@ use crate::{
 };
 use actions::load_config;
 use chat::{ChatPaneMessage, chat_question_input_id};
-use explorer::{ExplorerMessage, explorer_filter_input_id, reader_header_id};
+use explorer::{
+    CachedExplorerRow, CachedReaderView, ExplorerMessage, explorer_filter_input_id,
+    reader_header_id,
+};
 use markdown::{MdBlock, parse_markdown};
 use sidebar::{FolderContextMenu, SidebarMessage, collapsible_folder_paths_under};
 use theme::{APP_CSS, DX_COMPONENTS_CSS, DX_COMPONENTS_THEME_CSS, SplitAxis, page_style, splitter};
@@ -116,6 +118,7 @@ enum WorkerEvent {
         labels: Vec<AssignedLabel>,
     },
     Finished(WorkerResult),
+    Panicked(String),
 }
 
 #[derive(Debug, Clone)]
@@ -251,7 +254,10 @@ pub struct PstRagApp {
     folder_context_menu: Option<FolderContextMenu>,
     collapsed_sections: [bool; 3],
     explorer_messages: Vec<EmailRecord>,
+    cached_explorer_rows: Vec<CachedExplorerRow>,
     selected_message_id: Option<i64>,
+    selected_message: Option<EmailRecord>,
+    cached_reader: Option<CachedReaderView>,
     range_anchor_id: Option<i64>,
     checked_message_ids: HashSet<i64>,
     mail_scope: MailScope,
@@ -363,8 +369,26 @@ fn execute_task(task: AppTask) {
             spawn(async move {
                 let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WorkerEvent>();
                 std::thread::spawn(move || {
-                    let result = work(&tx);
-                    let _ = tx.send(WorkerEvent::Finished(result));
+                    let tx_work = tx.clone();
+                    let outcome =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                            work(&tx_work)
+                        }));
+                    match outcome {
+                        Ok(result) => {
+                            let _ = tx.send(WorkerEvent::Finished(result));
+                        }
+                        Err(payload) => {
+                            let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                                (*s).to_string()
+                            } else if let Some(s) = payload.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "unexpected background worker panic".to_string()
+                            };
+                            let _ = tx.send(WorkerEvent::Panicked(msg));
+                        }
+                    }
                 });
                 while let Some(event) = rx.recv().await {
                     dispatch_message(Message::Worker(event));
@@ -397,21 +421,34 @@ pub fn run() {
     LaunchBuilder::desktop().with_cfg(config).launch(app_root);
 }
 
+#[component]
+fn AppStyles() -> Element {
+    rsx! {
+        style { dangerous_inner_html: DX_COMPONENTS_THEME_CSS }
+        style { dangerous_inner_html: DX_COMPONENTS_CSS }
+        style { dangerous_inner_html: APP_CSS }
+    }
+}
+
 fn app_root() -> Element {
     let app_signal = use_signal(PstRagApp::new);
     APP_SIGNAL.with(|cell| cell.set(Some(app_signal)));
 
     let window_ctx = use_window();
-    let current_title = app_signal.read().title();
-    window_ctx.set_title(&current_title);
+    let language = use_memo(move || app_signal.read().config.language);
+    let title_window = window_ctx.clone();
+    use_effect(move || {
+        title_window.set_title(language().app_title());
+    });
 
+    let resize_window = window_ctx;
     use_wry_event_handler(move |event, _| {
         if let tao::event::Event::WindowEvent {
             event: WindowEvent::Resized(physical_size),
             ..
         } = event
         {
-            let scale = use_window().scale_factor();
+            let scale = resize_window.scale_factor();
             let logical = physical_size.to_logical::<f64>(scale);
             dispatch_message(Message::Resize(ResizeEvent::WindowResized(Size::new(
                 logical.width as f32,
@@ -424,12 +461,9 @@ fn app_root() -> Element {
     let is_dark = app_signal.read().config.dark_mode;
     let theme_name = if is_dark { "dark" } else { "light" };
 
+    let dark_mode = use_memo(move || app_signal.read().config.dark_mode);
     use_effect(move || {
-        let theme = if app_signal.read().config.dark_mode {
-            "dark"
-        } else {
-            "light"
-        };
+        let theme = if dark_mode() { "dark" } else { "light" };
         let js = format!("document.documentElement.setAttribute('data-theme', '{theme}');");
         let _ = document::eval(&js);
     });
@@ -438,9 +472,7 @@ fn app_root() -> Element {
     let bg_style = page_style();
 
     rsx! {
-        style { "{DX_COMPONENTS_THEME_CSS}" }
-        style { "{DX_COMPONENTS_CSS}" }
-        style { "{APP_CSS}" }
+        AppStyles {}
         div {
             tabindex: "0",
             "data-theme": "{theme_name}",
@@ -465,20 +497,26 @@ fn app_root() -> Element {
                         })
                     }
                     Key::Escape => Some(KeyShortcut::ClearFilterOrSelection),
-                    Key::Character(ref ch) => match ch.as_str() {
-                        "k" | "K" => Some(KeyShortcut::SelectPrevEmail {
-                            extend_range: shift,
-                        }),
-                        "j" | "J" => Some(KeyShortcut::SelectNextEmail {
-                            extend_range: shift,
-                        }),
-                        " " | "x" => Some(KeyShortcut::ToggleCheckSelected),
-                        "/" => {
-                            evt.prevent_default();
-                            Some(KeyShortcut::FocusQuickFilter)
+                    Key::Character(ref ch) => {
+                        match ch.as_str() {
+                            "k" | "K" => {
+                                Some(KeyShortcut::SelectPrevEmail {
+                                    extend_range: shift,
+                                })
+                            }
+                            "j" | "J" => {
+                                Some(KeyShortcut::SelectNextEmail {
+                                    extend_range: shift,
+                                })
+                            }
+                            " " | "x" => Some(KeyShortcut::ToggleCheckSelected),
+                            "/" => {
+                                evt.prevent_default();
+                                Some(KeyShortcut::FocusQuickFilter)
+                            }
+                            _ => None,
                         }
-                        _ => None,
-                    },
+                    }
                     _ => None,
                 };
                 if let Some(sc) = shortcut {
@@ -488,10 +526,11 @@ fn app_root() -> Element {
             onmousemove: move |evt| {
                 if is_dragging {
                     let coords = evt.client_coordinates();
-                    dispatch_message(Message::Resize(ResizeEvent::Moved(Point::new(
-                        coords.x as f32,
-                        coords.y as f32,
-                    ))));
+                    dispatch_message(
+                        Message::Resize(
+                            ResizeEvent::Moved(Point::new(coords.x as f32, coords.y as f32)),
+                        ),
+                    );
                 }
             },
             onmouseup: move |_| {
@@ -505,10 +544,6 @@ fn app_root() -> Element {
 }
 
 impl PstRagApp {
-    fn title(&self) -> String {
-        self.config.language.app_title().to_owned()
-    }
-
     fn new() -> Self {
         let base = std::env::current_exe()
             .ok()
@@ -520,13 +555,55 @@ impl PstRagApp {
             .map(|path| PathBuf::from(path.trim()))
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or_else(|| base.join("data"));
+        Self::new_with_paths(storage_location_path, storage_dir)
+    }
+
+    #[cfg(test)]
+    pub(super) fn new_with_storage_dir(storage_dir: PathBuf) -> Self {
+        let storage_location_path = storage_dir.join("storage-directory.txt");
+        Self::new_with_paths(storage_location_path, storage_dir)
+    }
+
+    fn new_with_paths(storage_location_path: PathBuf, storage_dir: PathBuf) -> Self {
         let db_path = storage_dir.join("index.sqlite");
-        let config = load_config(&storage_dir).unwrap_or_default();
-        let db = Index::open(&db_path).ok();
-        let (count, sources) = db
-            .as_ref()
-            .map(|d| (d.count().unwrap_or(0), d.sources().unwrap_or_default()))
-            .unwrap_or_default();
+        let mut startup_error: Option<String> = None;
+        let config = match load_config(&storage_dir) {
+            Ok(cfg) => cfg,
+            Err(error) => {
+                let default_cfg = LlmConfig::default();
+                startup_error = Some(
+                    default_cfg
+                        .language
+                        .status_config_load_err(&format!("{error:#}")),
+                );
+                default_cfg
+            }
+        };
+        let db = match Index::open(&db_path) {
+            Ok(db) => Some(db),
+            Err(error) => {
+                if startup_error.is_none() {
+                    startup_error = Some(config.language.status_db_open_err(&format!("{error:#}")));
+                }
+                None
+            }
+        };
+        let (count, sources) = match db.as_ref() {
+            Some(d) => match (d.count(), d.sources()) {
+                (Ok(c), Ok(s)) => (c, s),
+                (Err(err), _) | (_, Err(err)) => {
+                    if startup_error.is_none() {
+                        startup_error =
+                            Some(config.language.status_db_query_err(&format!("{err:#}")));
+                    }
+                    (0, vec![])
+                }
+            },
+            None => (0, vec![]),
+        };
+        let initial_status = startup_error
+            .clone()
+            .unwrap_or_else(|| config.language.status_ready().into());
         let mut app = Self {
             storage_location_path,
             storage_dir,
@@ -538,7 +615,7 @@ impl PstRagApp {
             hits: vec![],
             show_sources: false,
             expanded_hit: None,
-            status: config.language.status_ready().into(),
+            status: initial_status,
             count,
             sources,
             pending_remove_source: None,
@@ -546,7 +623,10 @@ impl PstRagApp {
             folder_context_menu: None,
             collapsed_sections: [false, false, true],
             explorer_messages: vec![],
+            cached_explorer_rows: vec![],
             selected_message_id: None,
+            selected_message: None,
+            cached_reader: None,
             range_anchor_id: None,
             checked_message_ids: HashSet::new(),
             mail_scope: MailScope::AllMessages,
@@ -569,7 +649,9 @@ impl PstRagApp {
             config,
             cancel_flag: None,
         };
-        app.refresh_explorer();
+        if app.db.is_some() {
+            app.refresh_explorer();
+        }
         app
     }
 
@@ -854,15 +936,24 @@ impl PstRagApp {
     fn set_theme_mode(&mut self, dark_mode: bool) {
         if self.config.dark_mode != dark_mode {
             self.config.dark_mode = dark_mode;
-            let _ = actions::save_config(&self.storage_dir, &self.config);
+            if let Err(error) = actions::save_config(&self.storage_dir, &self.config) {
+                self.status = self
+                    .config
+                    .language
+                    .status_settings_save_err(&format!("{error:#}"));
+            }
         }
     }
 
     fn set_language(&mut self, language: crate::i18n::Language) {
         if self.config.language != language {
             self.config.language = language;
-            let _ = actions::save_config(&self.storage_dir, &self.config);
-            self.status = language.status_language_changed().to_string();
+            self.rebuild_explorer_row_cache();
+            self.rebuild_reader_cache();
+            self.status = match actions::save_config(&self.storage_dir, &self.config) {
+                Ok(()) => language.status_language_changed().to_string(),
+                Err(error) => language.status_settings_save_err(&format!("{error:#}")),
+            };
         }
     }
 
@@ -1048,29 +1139,41 @@ impl PstRagApp {
                 self.status = status;
             }
             WorkerEvent::EmailLabeled { message_id, labels } => {
+                let merge_labels = |existing: &[AssignedLabel]| {
+                    let mut merged: Vec<AssignedLabel> = existing
+                        .iter()
+                        .filter(|l| l.source == "manual")
+                        .cloned()
+                        .collect();
+                    for assigned in &labels {
+                        if !merged.iter().any(|l| l.label == assigned.label) {
+                            merged.push(assigned.clone());
+                        }
+                    }
+                    merged
+                };
                 if let Some(email) = self
                     .explorer_messages
                     .iter_mut()
                     .find(|m| m.id == message_id)
                 {
-                    let mut merged: Vec<AssignedLabel> = email
-                        .labels
-                        .iter()
-                        .filter(|l| l.source == "manual")
-                        .cloned()
-                        .collect();
-                    for assigned in labels {
-                        if !merged.iter().any(|l| l.label == assigned.label) {
-                            merged.push(assigned);
-                        }
-                    }
-                    email.labels = merged;
+                    email.labels = merge_labels(&email.labels);
+                }
+                if let Some(selected) = self.selected_message.as_mut()
+                    && selected.id == message_id
+                {
+                    selected.labels = merge_labels(&selected.labels);
                 }
             }
             WorkerEvent::Finished(result) => {
                 self.busy = false;
                 self.cancel_flag = None;
                 self.handle_worker_result(result);
+            }
+            WorkerEvent::Panicked(message) => {
+                self.busy = false;
+                self.cancel_flag = None;
+                self.status = self.config.language.worker_panicked(&message);
             }
         }
     }
@@ -1153,8 +1256,7 @@ impl PstRagApp {
         let cp = self.chat_pane();
 
         rsx! {
-            div {
-                style: "width: 100%; height: 100%; display: flex; flex-direction: row; overflow: hidden;",
+            div { style: "width: 100%; height: 100%; display: flex; flex-direction: row; overflow: hidden;",
                 {sb}
                 {exp}
                 if let Some(sp) = chat_splitter {

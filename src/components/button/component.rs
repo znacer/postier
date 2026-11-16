@@ -83,6 +83,12 @@ pub fn Button(
     });
     let merged = merge_attributes(vec![base, attributes]);
 
+    if onclick.is_none() && onmousedown.is_none() && onmouseup.is_none() && onkeydown.is_none() {
+        return rsx! {
+            button { ..merged,{children} }
+        };
+    }
+
     rsx! {
         button {
             onclick: move |event| {

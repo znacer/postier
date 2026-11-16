@@ -71,6 +71,6 @@ pub fn ToolbarGroup(
     let merged = merge_attributes(vec![base, attributes]);
 
     rsx! {
-        div { ..merged, {children} }
+        div { ..merged,{children} }
     }
 }

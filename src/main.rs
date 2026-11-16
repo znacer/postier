@@ -4,6 +4,7 @@ mod app;
 #[allow(dead_code, unused_imports)]
 mod components;
 mod db;
+mod email_html;
 mod i18n;
 mod laya;
 mod llm;

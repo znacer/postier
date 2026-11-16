@@ -1598,4 +1598,43 @@ impl Language {
             Self::French => "### Journal de recherche",
         }
     }
+
+    pub fn btn_use(self) -> &'static str {
+        match self {
+            Self::English => "Use →",
+            Self::French => "Utiliser →",
+        }
+    }
+
+    pub fn worker_panicked(self, error: &str) -> String {
+        match self {
+            Self::English => format!("Background task crashed unexpectedly: {error}"),
+            Self::French => {
+                format!("La tâche en arrière-plan a échoué de manière inattendue : {error}")
+            }
+        }
+    }
+
+    pub fn status_db_open_err(self, error: &str) -> String {
+        match self {
+            Self::English => format!("Could not open SQLite index: {error}"),
+            Self::French => format!("Impossible d'ouvrir l'index SQLite : {error}"),
+        }
+    }
+
+    pub fn status_db_query_err(self, error: &str) -> String {
+        match self {
+            Self::English => format!("Database query failed: {error}"),
+            Self::French => format!("Échec de la requête base de données : {error}"),
+        }
+    }
+
+    pub fn status_config_load_err(self, error: &str) -> String {
+        match self {
+            Self::English => format!("Could not load settings, using defaults: {error}"),
+            Self::French => format!(
+                "Impossible de charger les paramètres, valeurs par défaut utilisées : {error}"
+            ),
+        }
+    }
 }

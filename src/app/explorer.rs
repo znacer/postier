@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::HashSet};
+use std::{borrow::Cow, cell::Cell, collections::HashSet};
 
 use dioxus::prelude::*;
 use dioxus_primitives::checkbox::CheckboxState;
@@ -15,21 +15,135 @@ use crate::{
         toggle_group::{ToggleGroup, ToggleItem},
         toolbar::{Toolbar, ToolbarGroup, ToolbarSeparator},
     },
+    email_html::{
+        ContactEntry, FormattedEmailDate, format_email_body_html, format_email_datetime,
+        parse_contact, parse_email_participants, repair_text_encoding,
+    },
     i18n::Language,
     model::{EmailRecord, LabelFilter, LabelerBackend, MailScope, MailSort},
 };
 
-use super::{
-    DispatchMessage, PstRagApp,
-    email_html::{
-        ContactEntry, format_email_body_html, format_email_datetime, parse_contact,
-        parse_email_participants, repair_text_encoding,
-    },
-    theme::*,
-};
+use super::{DispatchMessage, PstRagApp, theme::*};
 
 thread_local! {
     static CHECKBOX_SHIFT_HELD: Cell<bool> = const { Cell::new(false) };
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct CachedExplorerRow {
+    pub(super) subject: String,
+    pub(super) sender: String,
+    pub(super) folder: String,
+    pub(super) date_short: String,
+}
+
+impl CachedExplorerRow {
+    pub(super) fn from_record(email: &EmailRecord, tr: Language) -> Self {
+        let repaired_subject = repair_text_encoding(&email.subject);
+        let subject = if repaired_subject.trim().is_empty() {
+            tr.no_subject()
+        } else {
+            repaired_subject.as_str()
+        };
+        let repaired_sender = repair_text_encoding(&email.sender);
+        let sender_contact = if repaired_sender.trim().is_empty() {
+            None
+        } else {
+            Some(parse_contact(&repaired_sender))
+        };
+        let sender = sender_contact
+            .as_ref()
+            .map(ContactEntry::display_primary)
+            .unwrap_or_else(|| tr.unknown_sender());
+        let repaired_folder = repair_text_encoding(&email.folder);
+        let folder = if repaired_folder.trim().is_empty() {
+            tr.root_folder()
+        } else {
+            repaired_folder.as_str()
+        };
+        let date_short = format_email_datetime(email.sent_at.as_deref(), tr)
+            .map(|dt| dt.table_short)
+            .unwrap_or_else(|| tr.unknown_date().to_owned());
+
+        Self {
+            subject: truncate_str(subject, 64),
+            sender: truncate_str(sender, 36),
+            folder: truncate_str(folder, 24),
+            date_short,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct CachedReaderView {
+    pub(super) subject: String,
+    pub(super) archive_folder_meta: String,
+    pub(super) avatar_initials: String,
+    pub(super) from: Option<ContactEntry>,
+    pub(super) to: Vec<ContactEntry>,
+    pub(super) cc: Vec<ContactEntry>,
+    pub(super) formatted_dt: Option<FormattedEmailDate>,
+    pub(super) attachment_chips: Vec<String>,
+    pub(super) is_body_empty: bool,
+    pub(super) formatted_html: String,
+}
+
+impl CachedReaderView {
+    pub(super) fn from_email(email: &EmailRecord, tr: Language) -> Self {
+        let repaired_subject = repair_text_encoding(&email.subject);
+        let subject = if repaired_subject.trim().is_empty() {
+            tr.no_subject().to_owned()
+        } else {
+            repaired_subject
+        };
+        let source_name = std::path::Path::new(&email.source_key)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&email.source_key);
+        let repaired_folder = repair_text_encoding(&email.folder);
+        let folder_display = if repaired_folder.trim().is_empty() {
+            tr.root_folder()
+        } else {
+            repaired_folder.as_str()
+        };
+        let archive_folder_meta = format!("{source_name} / {folder_display}");
+
+        let participants = parse_email_participants(&email.sender, &email.recipients, &email.body);
+        let avatar_initials = participants
+            .from
+            .as_ref()
+            .map(ContactEntry::initials)
+            .unwrap_or_else(|| "?".to_string());
+        let formatted_dt = format_email_datetime(email.sent_at.as_deref(), tr);
+
+        let repaired_attachments = repair_text_encoding(&email.attachment_names);
+        let attachment_chips: Vec<String> = repaired_attachments
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
+
+        let is_body_empty = email.body.trim().is_empty();
+        let formatted_html = if is_body_empty {
+            String::new()
+        } else {
+            format_email_body_html(&email.body)
+        };
+
+        Self {
+            subject,
+            archive_folder_meta,
+            avatar_initials,
+            from: participants.from,
+            to: participants.to,
+            cc: participants.cc,
+            formatted_dt,
+            attachment_chips,
+            is_body_empty,
+            formatted_html,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -88,11 +202,9 @@ impl PstRagApp {
         let st_style = status_style();
 
         let status_bar = rsx! {
-            div {
-                style: "width: 100%; padding: 6px 14px; display: flex; flex-direction: row; align-items: center; gap: 10px; flex-shrink: 0; {st_style}",
+            div { style: "width: 100%; padding: 6px 14px; display: flex; flex-direction: row; align-items: center; gap: 10px; flex-shrink: 0; {st_style}",
                 span { class: "{dot_class}" }
-                span {
-                    style: "font-size: 11.5px; color: {muted_color}; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                span { style: "font-size: 11.5px; color: {muted_color}; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                     "{status_text}"
                 }
                 if has_cancel {
@@ -104,8 +216,7 @@ impl PstRagApp {
                         "{stop_lbl}"
                     }
                 }
-                span {
-                    style: "font-size: 11px; color: {muted_color}; white-space: nowrap; font-variant-numeric: tabular-nums;",
+                span { style: "font-size: 11px; color: {muted_color}; white-space: nowrap; font-variant-numeric: tabular-nums;",
                     "{showing_text}"
                 }
             }
@@ -127,15 +238,13 @@ impl PstRagApp {
         let reading_pane = self.reading_pane();
 
         rsx! {
-            main {
-                style: "flex: 1; min-width: 0; height: 100%; padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow: hidden;",
+            main { style: "flex: 1; min-width: 0; height: 100%; padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow: hidden;",
                 {toolbar}
                 if let Some(bar) = selection_bar {
                     {bar}
                 }
                 {status_bar}
-                div {
-                    style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; overflow: hidden;",
+                div { style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; overflow: hidden;",
                     {message_table}
                     {table_splitter}
                     {reading_pane}
@@ -177,8 +286,7 @@ impl PstRagApp {
                     Some(ExplorerMessage::SelectLabelFilter(LabelFilter::Any)),
                 );
                 Some(rsx! {
-                    div {
-                        style: "display: flex; flex-direction: row; align-items: center; gap: 6px;",
+                    div { style: "display: flex; flex-direction: row; align-items: center; gap: 6px;",
                         {badge}
                         {all_btn}
                     }
@@ -191,8 +299,7 @@ impl PstRagApp {
                     Some(ExplorerMessage::SelectLabelFilter(LabelFilter::Any)),
                 );
                 Some(rsx! {
-                    div {
-                        style: "display: flex; flex-direction: row; align-items: center; gap: 6px;",
+                    div { style: "display: flex; flex-direction: row; align-items: center; gap: 6px;",
                         {badge}
                         {all_btn}
                     }
@@ -260,24 +367,24 @@ impl PstRagApp {
         let tb_style = toolbar_style();
 
         rsx! {
-            header {
-                style: "width: 100%; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; {tb_style}",
-                div {
-                    style: "display: flex; flex-direction: row; align-items: center; gap: 10px; flex-wrap: wrap;",
+            header { style: "width: 100%; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; {tb_style}",
+                div { style: "display: flex; flex-direction: row; align-items: center; gap: 10px; flex-wrap: wrap;",
                     if let Some(sb_btn) = show_sb_btn {
                         {sb_btn}
                     }
-                    div {
-                        style: "display: flex; flex-direction: column; gap: 1px;",
-                        span { style: "font-size: 15px; color: {bright}; font-weight: 700; letter-spacing: -0.01em;", "{scope_title}" }
-                        span { style: "font-size: 11px; color: {muted_color}; font-variant-numeric: tabular-nums;", "{in_view_text}" }
+                    div { style: "display: flex; flex-direction: column; gap: 1px;",
+                        span { style: "font-size: 15px; color: {bright}; font-weight: 700; letter-spacing: -0.01em;",
+                            "{scope_title}"
+                        }
+                        span { style: "font-size: 11px; color: {muted_color}; font-variant-numeric: tabular-nums;",
+                            "{in_view_text}"
+                        }
                     }
                     if let Some(badge) = label_filter_badge {
                         {badge}
                     }
                     div { style: "flex: 1;" }
-                    div {
-                        style: "position: relative; display: flex; align-items: center;",
+                    div { style: "position: relative; display: flex; align-items: center;",
                         svg {
                             width: "14",
                             height: "14",
@@ -289,7 +396,12 @@ impl PstRagApp {
                             stroke_linejoin: "round",
                             style: "position: absolute; left: 10px; z-index: 2; pointer-events: none;",
                             circle { cx: "11", cy: "11", r: "8" }
-                            line { x1: "21", y1: "21", x2: "16.65", y2: "16.65" }
+                            line {
+                                x1: "21",
+                                y1: "21",
+                                x2: "16.65",
+                                y2: "16.65",
+                            }
                         }
                         Input {
                             id: "{filter_id}",
@@ -302,7 +414,7 @@ impl PstRagApp {
                                 if evt.key() != Key::Escape {
                                     evt.stop_propagation();
                                 }
-                            }
+                            },
                         }
                         if has_filter {
                             Button {
@@ -324,11 +436,11 @@ impl PstRagApp {
                     {chat_toggle_btn}
                 }
                 Separator {}
-                Toolbar {
-                    style: "width: 100%; padding: 0; box-shadow: none; justify-content: flex-start; gap: 10px;",
-                    ToolbarGroup {
-                        style: "align-items: center; gap: 8px;",
-                        span { style: "font-size: 11.5px; color: {muted_color}; font-weight: 500;", "{engine_lbl}" }
+                Toolbar { style: "width: 100%; padding: 0; box-shadow: none; justify-content: flex-start; gap: 10px;",
+                    ToolbarGroup { style: "align-items: center; gap: 8px;",
+                        span { style: "font-size: 11.5px; color: {muted_color}; font-weight: 500;",
+                            "{engine_lbl}"
+                        }
                         ToggleGroup {
                             horizontal: true,
                             allow_multiple_pressed: false,
@@ -353,8 +465,7 @@ impl PstRagApp {
                         }
                     }
                     ToolbarSeparator { horizontal: false }
-                    ToolbarGroup {
-                        style: "align-items: center; gap: 8px; flex-wrap: wrap;",
+                    ToolbarGroup { style: "align-items: center; gap: 8px; flex-wrap: wrap;",
                         {label_action_btn}
                         {label_view_btn}
                         {select_unlabeled_btn}
@@ -392,15 +503,20 @@ impl PstRagApp {
                 ButtonVariant::Outline
             };
             let label_name = def.name.clone();
-            manual_chips.push(constrain_button(rsx! {
-                Button {
-                    variant: chip_variant,
-                    size: ButtonSize::Xs,
-                    style: "font-size: 10.5px; padding: 3px 9px; border-radius: var(--radius-full);",
-                    onclick: move |_| ExplorerMessage::ToggleManualLabelOnChecked(label_name.clone()).dispatch(),
-                    "{chip_label}"
+            let chip_key = def.name.clone();
+            manual_chips.push(rsx! {
+                div {
+                    key: "chip-{chip_key}",
+                    style: "max-width: {BUTTON_MAX_WIDTH}px; max-height: {BUTTON_MAX_HEIGHT}px; overflow: hidden; display: inline-flex; flex-shrink: 0;",
+                    Button {
+                        variant: chip_variant,
+                        size: ButtonSize::Xs,
+                        style: "font-size: 10.5px; padding: 3px 9px; border-radius: var(--radius-full);",
+                        onclick: move |_| ExplorerMessage::ToggleManualLabelOnChecked(label_name.clone()).dispatch(),
+                        "{chip_label}"
+                    }
                 }
-            }));
+            });
         }
 
         let batch_lbl = tr.batch_label_label();
@@ -420,21 +536,17 @@ impl PstRagApp {
         let sb_style = selection_bar_style();
 
         rsx! {
-            div {
-                style: "width: 100%; padding: 8px 14px; display: flex; flex-direction: row; align-items: center; gap: 10px; flex-shrink: 0; {sb_style}",
-                span {
-                    style: "font-size: 12px; font-weight: 600; color: {bright}; white-space: nowrap;",
+            div { style: "width: 100%; padding: 8px 14px; display: flex; flex-direction: row; align-items: center; gap: 10px; flex-shrink: 0; {sb_style}",
+                span { style: "font-size: 12px; font-weight: 600; color: {bright}; white-space: nowrap;",
                     "{selected_count_lbl}"
                 }
                 {laya_batch_btn}
                 {llm_batch_btn}
-                Separator {
-                    horizontal: false,
-                    style: "height: 18px;",
-                }
-                div {
-                    style: "flex: 1; display: flex; flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap;",
-                    span { style: "font-size: 11px; color: {muted_color}; font-weight: 500;", "{batch_lbl}" }
+                Separator { horizontal: false, style: "height: 18px;" }
+                div { style: "flex: 1; display: flex; flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap;",
+                    span { style: "font-size: 11px; color: {muted_color}; font-weight: 500;",
+                        "{batch_lbl}"
+                    }
                     for chip in manual_chips {
                         {chip}
                     }
@@ -483,13 +595,13 @@ impl PstRagApp {
         let folder_hdr = tr.table_header_folder();
 
         let header = rsx! {
-            div {
-                class: "mail-table-header",
+            div { class: "mail-table-header",
                 Checkbox {
                     checked: all_visible_checked,
                     on_checked_change: move |state: CheckboxState| {
-                        ExplorerMessage::ToggleCheckAllVisible(matches!(state, CheckboxState::Checked)).dispatch();
-                    }
+                        ExplorerMessage::ToggleCheckAllVisible(matches!(state, CheckboxState::Checked))
+                            .dispatch();
+                    },
                 }
                 Button {
                     variant: ButtonVariant::Ghost,
@@ -498,10 +610,7 @@ impl PstRagApp {
                     onclick: move |_| ExplorerMessage::SetMailSort(MailSort::SubjectAsc).dispatch(),
                     "{sort_subj_label}"
                 }
-                span {
-                    style: "flex: 3;",
-                    "{labels_hdr}"
-                }
+                span { style: "flex: 3;", "{labels_hdr}" }
                 Button {
                     variant: ButtonVariant::Ghost,
                     size: ButtonSize::Xs,
@@ -509,10 +618,7 @@ impl PstRagApp {
                     onclick: move |_| ExplorerMessage::SetMailSort(MailSort::SenderAsc).dispatch(),
                     "{sort_from_label}"
                 }
-                span {
-                    style: "flex: 2;",
-                    "{folder_hdr}"
-                }
+                span { style: "flex: 2;", "{folder_hdr}" }
                 Button {
                     variant: ButtonVariant::Ghost,
                     size: ButtonSize::Xs,
@@ -533,21 +639,19 @@ impl PstRagApp {
         let rows: Vec<Element> = self
             .explorer_messages
             .iter()
-            .map(|email| self.message_row(email))
+            .enumerate()
+            .map(|(idx, email)| self.message_row(email, self.cached_explorer_rows.get(idx)))
             .collect();
 
         let table_height = self.table_height;
         let rb_style = reader_body_style();
 
         rsx! {
-            section {
-                style: "width: 100%; height: {table_height}px; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; {rb_style}",
+            section { style: "width: 100%; height: {table_height}px; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; {rb_style}",
                 {header}
-                ScrollArea {
-                    style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column;",
+                ScrollArea { style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column;",
                     if is_empty {
-                        div {
-                            style: "width: 100%; height: 100%; padding: 32px 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;",
+                        div { style: "width: 100%; height: 100%; padding: 32px 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;",
                             svg {
                                 width: "28",
                                 height: "28",
@@ -561,7 +665,9 @@ impl PstRagApp {
                                 polyline { points: "22 12 16 12 14 15 10 15 8 12 2 12" }
                                 path { d: "M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" }
                             }
-                            span { style: "font-size: 12.5px; color: {muted_color};", "{empty_msg}" }
+                            span { style: "font-size: 12.5px; color: {muted_color};",
+                                "{empty_msg}"
+                            }
                         }
                     } else {
                         for r in rows {
@@ -573,37 +679,20 @@ impl PstRagApp {
         }
     }
 
-    fn message_row(&self, email: &EmailRecord) -> Element {
+    fn message_row(&self, email: &EmailRecord, cached: Option<&CachedExplorerRow>) -> Element {
         let tr = self.config.language;
         let muted_color = muted();
         let is_selected = self.selected_message_id == Some(email.id);
         let is_checked = self.checked_message_ids.contains(&email.id);
         let email_id = email.id;
-        let repaired_subject = repair_text_encoding(&email.subject);
-        let subject = if repaired_subject.trim().is_empty() {
-            tr.no_subject()
-        } else {
-            repaired_subject.as_str()
+        let cached = match cached {
+            Some(row) => Cow::Borrowed(row),
+            None => Cow::Owned(CachedExplorerRow::from_record(email, tr)),
         };
-        let repaired_sender = repair_text_encoding(&email.sender);
-        let sender_contact = if repaired_sender.trim().is_empty() {
-            None
-        } else {
-            Some(parse_contact(&repaired_sender))
-        };
-        let sender = sender_contact
-            .as_ref()
-            .map(ContactEntry::display_primary)
-            .unwrap_or_else(|| tr.unknown_sender());
-        let repaired_folder = repair_text_encoding(&email.folder);
-        let folder = if repaired_folder.trim().is_empty() {
-            tr.root_folder()
-        } else {
-            repaired_folder.as_str()
-        };
-        let date_short = format_email_datetime(email.sent_at.as_deref(), tr)
-            .map(|dt| dt.table_short)
-            .unwrap_or_else(|| tr.unknown_date().to_owned());
+        let subj_trunc = &cached.subject;
+        let sender_trunc = &cached.sender;
+        let folder_trunc = &cached.folder;
+        let date_short = &cached.date_short;
 
         let mut label_badges = Vec::new();
         let no_labels = email.labels.is_empty();
@@ -616,9 +705,6 @@ impl PstRagApp {
             }
         }
 
-        let subj_trunc = truncate_str(subject, 64);
-        let sender_trunc = truncate_str(sender, 36);
-        let folder_trunc = truncate_str(folder, 24);
         let subj_color = bright_text();
         let subj_weight = if is_selected { "600" } else { "500" };
         let sender_color = if is_selected {
@@ -638,9 +724,7 @@ impl PstRagApp {
         };
 
         rsx! {
-            div {
-                key: "{email_id}",
-                class: "{row_class}",
+            div { key: "{email_id}", class: "{row_class}",
                 div {
                     style: "display: inline-flex; align-items: center;",
                     onmousedown: move |evt: MouseEvent| {
@@ -654,12 +738,12 @@ impl PstRagApp {
                                 ExplorerMessage::SelectRangeTo(email_id).dispatch();
                             } else {
                                 ExplorerMessage::ToggleCheckEmail(
-                                    email_id,
-                                    matches!(state, CheckboxState::Checked),
-                                )
-                                .dispatch();
+                                        email_id,
+                                        matches!(state, CheckboxState::Checked),
+                                    )
+                                    .dispatch();
                             }
-                        }
+                        },
                     }
                 }
                 Button {
@@ -672,30 +756,27 @@ impl PstRagApp {
                             ExplorerMessage::SelectEmail(email_id).dispatch();
                         }
                     },
-                    span {
-                        style: "flex: 4; text-align: left; font-size: 12.5px; font-weight: {subj_weight}; color: {subj_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                    span { style: "flex: 4; text-align: left; font-size: 12.5px; font-weight: {subj_weight}; color: {subj_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                         "{subj_trunc}"
                     }
-                    div {
-                        style: "flex: 3; display: flex; flex-direction: row; align-items: center; gap: 4px; overflow: hidden;",
+                    div { style: "flex: 3; display: flex; flex-direction: row; align-items: center; gap: 4px; overflow: hidden;",
                         if no_labels {
-                            span { style: "font-size: 10.5px; color: {muted_color}; opacity: 0.6;", "{none_lbl}" }
+                            span { style: "font-size: 10.5px; color: {muted_color}; opacity: 0.6;",
+                                "{none_lbl}"
+                            }
                         } else {
                             for b in label_badges {
                                 {b}
                             }
                         }
                     }
-                    span {
-                        style: "flex: 3; text-align: left; font-size: 11.5px; color: {sender_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                    span { style: "flex: 3; text-align: left; font-size: 11.5px; color: {sender_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                         "{sender_trunc}"
                     }
-                    span {
-                        style: "flex: 2; text-align: left; font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                    span { style: "flex: 2; text-align: left; font-size: 11px; color: {muted_color}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                         "{folder_trunc}"
                     }
-                    span {
-                        style: "flex: 2; text-align: left; font-size: 11px; color: {muted_color}; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                    span { style: "flex: 2; text-align: left; font-size: 11px; color: {muted_color}; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
                         "{date_short}"
                     }
                 }
@@ -713,8 +794,7 @@ impl PstRagApp {
             let no_msg = tr.no_message_selected();
             let no_msg_hint = tr.no_message_selected_hint();
             return rsx! {
-                div {
-                    style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; {rb_style}",
+                div { style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; {rb_style}",
                     svg {
                         width: "32",
                         height: "32",
@@ -725,32 +805,30 @@ impl PstRagApp {
                         stroke_linecap: "round",
                         stroke_linejoin: "round",
                         style: "opacity: 0.45;",
-                        rect { x: "2", y: "4", width: "20", height: "16", rx: "2" }
+                        rect {
+                            x: "2",
+                            y: "4",
+                            width: "20",
+                            height: "16",
+                            rx: "2",
+                        }
                         path { d: "m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" }
                     }
-                    span { style: "font-size: 15px; font-weight: 600; color: {bright};", "{no_msg}" }
+                    span { style: "font-size: 15px; font-weight: 600; color: {bright};",
+                        "{no_msg}"
+                    }
                     span { style: "font-size: 12px; color: {muted_color};", "{no_msg_hint}" }
                 }
             };
         };
 
-        let repaired_subject = repair_text_encoding(&email.subject);
-        let subject = if repaired_subject.trim().is_empty() {
-            tr.no_subject().to_owned()
-        } else {
-            repaired_subject
+        let cached = match &self.cached_reader {
+            Some(view) => Cow::Borrowed(view),
+            None => Cow::Owned(CachedReaderView::from_email(email, tr)),
         };
-        let source_name = std::path::Path::new(&email.source_key)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&email.source_key);
-        let repaired_folder = repair_text_encoding(&email.folder);
-        let folder_display = if repaired_folder.trim().is_empty() {
-            tr.root_folder()
-        } else {
-            repaired_folder.as_str()
-        };
-        let archive_folder_meta = format!("{source_name} / {folder_display}");
+
+        let subject = &cached.subject;
+        let archive_folder_meta = &cached.archive_folder_meta;
 
         let labels_hdr = tr.labels_heading();
         let none_assigned_lbl = tr.none_assigned();
@@ -784,8 +862,10 @@ impl PstRagApp {
             };
             let msg_id = email.id;
             let label_name = def.name.clone();
+            let toggle_key = def.name.clone();
             quick_toggle_buttons.push(rsx! {
                 Button {
+                    key: "toggle-{toggle_key}",
                     variant: btn_variant,
                     size: ButtonSize::Xs,
                     style: "font-size: 10.5px; padding: 3px 9px; border-radius: var(--radius-full);",
@@ -808,12 +888,7 @@ impl PstRagApp {
             Some(ExplorerMessage::AskAboutEmail(email.id)),
         );
 
-        let participants = parse_email_participants(&email.sender, &email.recipients, &email.body);
-        let avatar_initials = participants
-            .from
-            .as_ref()
-            .map(ContactEntry::initials)
-            .unwrap_or_else(|| "?".to_string());
+        let avatar_initials = &cached.avatar_initials;
 
         let (from_lbl, to_lbl, cc_lbl, unknown_rcpt_lbl) = match tr {
             Language::French => ("De", "À", "Cc", "(Destinataire inconnu)"),
@@ -821,37 +896,34 @@ impl PstRagApp {
         };
         let unknown_sender_lbl = tr.unknown_sender();
 
-        let from_pill = match &participants.from {
-            Some(c) => render_contact_pill(c, true),
+        let from_pill = match &cached.from {
+            Some(c) => render_contact_pill("from-0", c, true),
             None => rsx! {
-                span { style: "font-size: 11.5px; color: {muted_color}; font-style: italic;", "{unknown_sender_lbl}" }
+                span { style: "font-size: 11.5px; color: {muted_color}; font-style: italic;",
+                    "{unknown_sender_lbl}"
+                }
             },
         };
 
-        let to_pills: Vec<Element> = participants
+        let to_pills: Vec<Element> = cached
             .to
             .iter()
-            .map(|c| render_contact_pill(c, false))
+            .enumerate()
+            .map(|(idx, c)| render_contact_pill(&format!("to-{idx}"), c, false))
             .collect();
         let has_to = !to_pills.is_empty();
 
-        let cc_pills: Vec<Element> = participants
+        let cc_pills: Vec<Element> = cached
             .cc
             .iter()
-            .map(|c| render_contact_pill(c, false))
+            .enumerate()
+            .map(|(idx, c)| render_contact_pill(&format!("cc-{idx}"), c, false))
             .collect();
         let has_cc = !cc_pills.is_empty();
 
-        let formatted_dt = format_email_datetime(email.sent_at.as_deref(), tr);
+        let formatted_dt = &cached.formatted_dt;
         let unknown_date_lbl = tr.unknown_date_full();
-
-        let repaired_attachments = repair_text_encoding(&email.attachment_names);
-        let attachment_chips: Vec<String> = repaired_attachments
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
-            .collect();
+        let attachment_chips = &cached.attachment_chips;
 
         let rh_id = reader_header_id();
         let rh_style = reader_header_style();
@@ -864,13 +936,9 @@ impl PstRagApp {
             None => format!("height: auto; max-height: {max_hdr}px;"),
         };
 
-        let is_body_empty = email.body.trim().is_empty();
-        let empty_body_text = tr.empty_body().to_owned();
-        let formatted_html = if is_body_empty {
-            String::new()
-        } else {
-            format_email_body_html(&email.body)
-        };
+        let is_body_empty = cached.is_body_empty;
+        let empty_body_text = tr.empty_body();
+        let formatted_html = &cached.formatted_html;
 
         let header_splitter = splitter(
             SplitAxis::Horizontal,
@@ -879,26 +947,21 @@ impl PstRagApp {
         );
 
         rsx! {
-            article {
-                style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; overflow: hidden;",
+            article { style: "flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; overflow: hidden;",
                 div {
                     id: "{rh_id}",
                     class: "selectable-text",
                     style: "width: 100%; flex-shrink: 0; overflow-y: auto; {header_height_style} {rh_style}",
-                    div {
-                        style: "padding: 12px 16px; width: 100%; display: flex; flex-direction: column; gap: 9px;",
-                        div {
-                            style: "display: flex; flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap;",
-                            span {
-                                style: "flex: 1; font-size: 16px; color: {bright}; font-weight: 700; letter-spacing: -0.01em;",
+                    div { style: "padding: 12px 16px; width: 100%; display: flex; flex-direction: column; gap: 9px;",
+                        div { style: "display: flex; flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap;",
+                            span { style: "flex: 1; font-size: 16px; color: {bright}; font-weight: 700; letter-spacing: -0.01em;",
                                 "{subject}"
                             }
                             {btn_laya}
                             {btn_llm}
                             {btn_ask}
                         }
-                        div {
-                            class: "email-header-envelope",
+                        div { class: "email-header-envelope",
                             Avatar {
                                 size: AvatarImageSize::Small,
                                 style: "width: 36px; height: 36px;",
@@ -908,39 +971,29 @@ impl PstRagApp {
                                     "{avatar_initials}"
                                 }
                             }
-                            div {
-                                class: "email-envelope-fields",
-                                div {
-                                    class: "email-field-row",
+                            div { class: "email-envelope-fields",
+                                div { class: "email-field-row",
                                     span { class: "email-field-label", "{from_lbl}" }
-                                    div {
-                                        class: "email-field-values",
-                                        {from_pill}
-                                    }
+                                    div { class: "email-field-values", {from_pill} }
                                 }
-                                div {
-                                    class: "email-field-row",
+                                div { class: "email-field-row",
                                     span { class: "email-field-label", "{to_lbl}" }
-                                    div {
-                                        class: "email-field-values",
+                                    div { class: "email-field-values",
                                         if has_to {
                                             for tp in to_pills {
                                                 {tp}
                                             }
                                         } else {
-                                            span {
-                                                style: "font-size: 11.5px; color: {muted_color}; font-style: italic;",
+                                            span { style: "font-size: 11.5px; color: {muted_color}; font-style: italic;",
                                                 "{unknown_rcpt_lbl}"
                                             }
                                         }
                                     }
                                 }
                                 if has_cc {
-                                    div {
-                                        class: "email-field-row",
+                                    div { class: "email-field-row",
                                         span { class: "email-field-label", "{cc_lbl}" }
-                                        div {
-                                            class: "email-field-values",
+                                        div { class: "email-field-values",
                                             for cp in cc_pills {
                                                 {cp}
                                             }
@@ -948,11 +1001,9 @@ impl PstRagApp {
                                     }
                                 }
                             }
-                            div {
-                                class: "email-datetime-card",
+                            div { class: "email-datetime-card",
                                 if let Some(dt) = formatted_dt {
-                                    div {
-                                        class: "email-datetime-primary",
+                                    div { class: "email-datetime-primary",
                                         svg {
                                             width: "13",
                                             height: "13",
@@ -962,36 +1013,51 @@ impl PstRagApp {
                                             stroke_width: "2",
                                             stroke_linecap: "round",
                                             stroke_linejoin: "round",
-                                            rect { x: "3", y: "4", width: "18", height: "18", rx: "2", ry: "2" }
-                                            line { x1: "16", y1: "2", x2: "16", y2: "6" }
-                                            line { x1: "8", y1: "2", x2: "8", y2: "6" }
-                                            line { x1: "3", y1: "10", x2: "21", y2: "10" }
+                                            rect {
+                                                x: "3",
+                                                y: "4",
+                                                width: "18",
+                                                height: "18",
+                                                rx: "2",
+                                                ry: "2",
+                                            }
+                                            line {
+                                                x1: "16",
+                                                y1: "2",
+                                                x2: "16",
+                                                y2: "6",
+                                            }
+                                            line {
+                                                x1: "8",
+                                                y1: "2",
+                                                x2: "8",
+                                                y2: "6",
+                                            }
+                                            line {
+                                                x1: "3",
+                                                y1: "10",
+                                                x2: "21",
+                                                y2: "10",
+                                            }
                                         }
                                         span { "{dt.date_part}" }
                                         if !dt.time_part.is_empty() {
-                                            span {
-                                                class: "email-time-badge",
-                                                "{dt.time_part}"
-                                            }
+                                            span { class: "email-time-badge", "{dt.time_part}" }
                                         }
                                     }
                                 } else {
-                                    div {
-                                        class: "email-datetime-primary",
+                                    div { class: "email-datetime-primary",
                                         span { style: "color: {muted_color};", "{unknown_date_lbl}" }
                                     }
                                 }
-                                span {
-                                    class: "email-folder-pill",
-                                    "📁 {archive_folder_meta}"
-                                }
+                                span { class: "email-folder-pill", "📁 {archive_folder_meta}" }
                             }
                         }
                         if !attachment_chips.is_empty() {
-                            div {
-                                style: "display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 6px;",
-                                for att in attachment_chips {
+                            div { style: "display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 6px;",
+                                for (idx, att) in attachment_chips.iter().enumerate() {
                                     Badge {
+                                        key: "att-{idx}-{att}",
                                         variant: BadgeVariant::Secondary,
                                         "📎 {att}"
                                     }
@@ -999,22 +1065,25 @@ impl PstRagApp {
                             }
                         }
                         Separator {}
-                        div {
-                            style: "display: flex; flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap;",
-                            div {
-                                style: "flex: 1; display: flex; flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap;",
-                                span { style: "font-size: 11px; font-weight: 600; color: {muted_color};", "{labels_hdr}" }
+                        div { style: "display: flex; flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap;",
+                            div { style: "flex: 1; display: flex; flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap;",
+                                span { style: "font-size: 11px; font-weight: 600; color: {muted_color};",
+                                    "{labels_hdr}"
+                                }
                                 if is_labels_empty {
-                                    span { style: "font-size: 11px; color: {muted_color}; opacity: 0.7;", "{none_assigned_lbl}" }
+                                    span { style: "font-size: 11px; color: {muted_color}; opacity: 0.7;",
+                                        "{none_assigned_lbl}"
+                                    }
                                 } else {
                                     for ab in assigned_badges {
                                         {ab}
                                     }
                                 }
                             }
-                            div {
-                                style: "flex: 1; display: flex; flex-direction: row; align-items: center; gap: 5px; flex-wrap: wrap;",
-                                span { style: "font-size: 10.5px; font-weight: 600; color: {muted_color};", "{toggle_hdr}" }
+                            div { style: "flex: 1; display: flex; flex-direction: row; align-items: center; gap: 5px; flex-wrap: wrap;",
+                                span { style: "font-size: 10.5px; font-weight: 600; color: {muted_color};",
+                                    "{toggle_hdr}"
+                                }
                                 for qtb in quick_toggle_buttons {
                                     {qtb}
                                 }
@@ -1027,15 +1096,14 @@ impl PstRagApp {
                     class: "selectable-text",
                     style: "flex: 1; min-height: 0; width: 100%; {rb_style}",
                     if is_body_empty {
-                        div {
-                            style: "padding: 18px 22px; width: 100%; font-size: 13px; font-style: italic; color: {muted_color};",
+                        div { style: "padding: 18px 22px; width: 100%; font-size: 13px; font-style: italic; color: {muted_color};",
                             "{empty_body_text}"
                         }
                     } else {
                         div {
                             class: "email-html-body",
                             style: "padding: 18px 22px; width: 100%;",
-                            dangerous_inner_html: "{formatted_html}"
+                            dangerous_inner_html: "{formatted_html}",
                         }
                     }
                 }
@@ -1044,7 +1112,7 @@ impl PstRagApp {
     }
 }
 
-fn render_contact_pill(contact: &ContactEntry, is_sender: bool) -> Element {
+fn render_contact_pill(key_id: &str, contact: &ContactEntry, is_sender: bool) -> Element {
     let pill_class = if is_sender {
         "email-contact-pill sender"
     } else {
@@ -1080,10 +1148,7 @@ fn render_contact_pill(contact: &ContactEntry, is_sender: bool) -> Element {
     };
 
     rsx! {
-        span {
-            class: "{pill_class}",
-            {inner}
-        }
+        span { key: "{key_id}", class: "{pill_class}", {inner} }
     }
 }
 

@@ -45,19 +45,13 @@ pub(super) fn render_markdown_blocks<M: DispatchMessage>(
                 };
                 let inline = render_inline_text(title, size, heading_color, true, false, on_link);
                 rendered_blocks.push(rsx! {
-                    div {
-                        style: "width: 100%;",
-                        {inline}
-                    }
+                    div { style: "width: 100%;", {inline} }
                 });
             }
             MdBlock::Paragraph(paragraph) => {
                 let inline = render_inline_text(paragraph, 13.0, base_color, false, false, on_link);
                 rendered_blocks.push(rsx! {
-                    div {
-                        style: "width: 100%;",
-                        {inline}
-                    }
+                    div { style: "width: 100%;", {inline} }
                 });
             }
             MdBlock::CodeBlock { lang, code } => {
@@ -68,19 +62,15 @@ pub(super) fn render_markdown_blocks<M: DispatchMessage>(
                 let bright = bright_text();
                 let block_style = code_block_style();
                 rendered_blocks.push(rsx! {
-                    div {
-                        style: "width: 100%; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; {block_style}",
+                    div { style: "width: 100%; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; {block_style}",
                         if has_lang {
-                            div {
-                                style: "display: flex; flex-direction: row; align-items: center;",
-                                span {
-                                    style: "font-size: 9px; font-family: monospace; color: {accent};",
+                            div { style: "display: flex; flex-direction: row; align-items: center;",
+                                span { style: "font-size: 9px; font-family: monospace; color: {accent};",
                                     "{lang_upper}"
                                 }
                             }
                         }
-                        div {
-                            style: "overflow-x: auto; padding: 4px 2px;",
+                        div { style: "overflow-x: auto; padding: 4px 2px;",
                             pre {
                                 class: "selectable-text",
                                 style: "margin: 0; font-size: 11.5px; line-height: 1.45; font-family: monospace; color: {bright};",
@@ -97,8 +87,7 @@ pub(super) fn render_markdown_blocks<M: DispatchMessage>(
                     .map(|line| render_inline_text(line, 12.5, muted(), false, true, on_link))
                     .collect();
                 rendered_blocks.push(rsx! {
-                    div {
-                        style: "width: 100%; padding: 7px 11px; display: flex; flex-direction: column; gap: 4px; {quote_style}",
+                    div { style: "width: 100%; padding: 7px 11px; display: flex; flex-direction: column; gap: 4px; {quote_style}",
                         for ql in quote_lines {
                             {ql}
                         }
@@ -121,22 +110,16 @@ pub(super) fn render_markdown_blocks<M: DispatchMessage>(
                     let item_inline =
                         render_inline_text(&item.text, 13.0, base_color, false, false, on_link);
                     list_rows.push(rsx! {
-                        div {
-                            style: "display: flex; flex-direction: row; align-items: flex-start; gap: 6px; padding-left: {indent_px}px;",
-                            span {
-                                style: "font-size: 12.5px; color: {bullet_color}; flex-shrink: 0; line-height: 1.42;",
+                        div { style: "display: flex; flex-direction: row; align-items: flex-start; gap: 6px; padding-left: {indent_px}px;",
+                            span { style: "font-size: 12.5px; color: {bullet_color}; flex-shrink: 0; line-height: 1.42;",
                                 "{bullet_label}"
                             }
-                            div {
-                                style: "flex: 1;",
-                                {item_inline}
-                            }
+                            div { style: "flex: 1;", {item_inline} }
                         }
                     });
                 }
                 rendered_blocks.push(rsx! {
-                    div {
-                        style: "width: 100%; display: flex; flex-direction: column; gap: 4px;",
+                    div { style: "width: 100%; display: flex; flex-direction: column; gap: 4px;",
                         for row_el in list_rows {
                             {row_el}
                         }
@@ -164,10 +147,7 @@ pub(super) fn render_markdown_blocks<M: DispatchMessage>(
                                 on_link,
                             );
                             rsx! {
-                                div {
-                                    style: "flex: 1;",
-                                    {inline}
-                                }
+                                div { style: "flex: 1;", {inline} }
                             }
                         })
                         .collect()
@@ -184,16 +164,12 @@ pub(super) fn render_markdown_blocks<M: DispatchMessage>(
                                 cell_text, 11.5, base_color, false, false, on_link,
                             );
                             rsx! {
-                                div {
-                                    style: "flex: 1;",
-                                    {inline}
-                                }
+                                div { style: "flex: 1;", {inline} }
                             }
                         })
                         .collect();
                     body_rows.push(rsx! {
-                        div {
-                            style: "width: 100%; padding: 5px 8px; display: flex; flex-direction: row; align-items: flex-start; gap: 8px; {row_style}",
+                        div { style: "width: 100%; padding: 5px 8px; display: flex; flex-direction: row; align-items: flex-start; gap: 8px; {row_style}",
                             for c in cells {
                                 {c}
                             }
@@ -202,11 +178,9 @@ pub(super) fn render_markdown_blocks<M: DispatchMessage>(
                 }
 
                 rendered_blocks.push(rsx! {
-                    div {
-                        style: "width: 100%; display: flex; flex-direction: column;",
+                    div { style: "width: 100%; display: flex; flex-direction: column;",
                         if !header_cells.is_empty() {
-                            div {
-                                style: "width: 100%; padding: 6px 8px; display: flex; flex-direction: row; align-items: center; gap: 8px; {header_style}",
+                            div { style: "width: 100%; padding: 6px 8px; display: flex; flex-direction: row; align-items: center; gap: 8px; {header_style}",
                                 for hc in header_cells {
                                     {hc}
                                 }
@@ -219,7 +193,9 @@ pub(super) fn render_markdown_blocks<M: DispatchMessage>(
                 });
             }
             MdBlock::Rule => {
-                rendered_blocks.push(rsx! { Separator {} });
+                rendered_blocks.push(rsx! {
+                    Separator {}
+                });
             }
         }
     }
@@ -251,8 +227,7 @@ fn render_inline_text<M: DispatchMessage>(
                 let weight = if force_bold { "bold" } else { "normal" };
                 let fstyle = if force_italic { "italic" } else { "normal" };
                 spans.push(rsx! {
-                    span {
-                        style: "font-size: {font_size}px; color: {default_color}; font-weight: {weight}; font-style: {fstyle};",
+                    span { style: "font-size: {font_size}px; color: {default_color}; font-weight: {weight}; font-style: {fstyle};",
                         "{content}"
                     }
                 });
@@ -271,8 +246,7 @@ fn render_inline_text<M: DispatchMessage>(
                 };
                 let deco = if strike { "line-through" } else { "none" };
                 spans.push(rsx! {
-                    span {
-                        style: "font-size: {font_size}px; color: {default_color}; font-weight: {weight}; font-style: {fstyle}; text-decoration: {deco};",
+                    span { style: "font-size: {font_size}px; color: {default_color}; font-weight: {weight}; font-style: {fstyle}; text-decoration: {deco};",
                         "{content}"
                     }
                 });
@@ -283,8 +257,7 @@ fn render_inline_text<M: DispatchMessage>(
                 let code_bg = Color::from_rgba(0.04, 0.05, 0.08, 0.92);
                 let code_border = Color::from_rgba(0.25, 0.30, 0.40, 0.7);
                 spans.push(rsx! {
-                    code {
-                        style: "font-size: {code_size}px; font-family: monospace; color: {code_color}; background-color: {code_bg}; border: 1px solid {code_border}; border-radius: 4px; padding: 0px 4px;",
+                    code { style: "font-size: {code_size}px; font-family: monospace; color: {code_color}; background-color: {code_bg}; border: 1px solid {code_border}; border-radius: 4px; padding: 0px 4px;",
                         "{code}"
                     }
                 });
@@ -310,8 +283,7 @@ fn render_inline_text<M: DispatchMessage>(
     }
 
     rsx! {
-        div {
-            style: "line-height: 1.42; width: 100%; word-break: break-word;",
+        div { style: "line-height: 1.42; width: 100%; word-break: break-word;",
             for s in spans {
                 {s}
             }

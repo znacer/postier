@@ -45,7 +45,7 @@ When the user asks a question (`llm::run_agent`), a Rig agent is constructed wit
 
 Rig targets the configured OpenAI-compatible chat-completions endpoint; `validate_endpoint` enforces HTTPS (with an exact `http://127.0.0.1` loopback exception for local inference servers) before constructing the HTTP client.
 
-The `MailSource` boundary (`pst::import_streaming`) keeps parser-specific identifiers and lifetimes out of storage, retrieval, and UI code. Index writes are batched (250 messages per SQLite transaction) and `INSERT OR IGNORE` on a SHA-256 content hash makes repeated imports idempotent.
+The `MailSource` boundary (`pst::import_streaming`) keeps parser-specific identifiers and lifetimes out of storage, retrieval, and UI code. Index writes are batched (500 messages per SQLite transaction) and `INSERT OR IGNORE` on a SHA-256 content hash makes repeated imports idempotent.
 
 ## Gates before production
 

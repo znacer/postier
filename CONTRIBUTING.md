@@ -50,12 +50,14 @@ Because the desktop UI is powered by `dioxus` (`0.7`, `desktop` feature) and `wr
 config.toml                 # Compile-time shipped defaults ([llm], [agent], [laya], [ui])
 assets/
 ├── logo.svg                # PoSTier vector logo
-├── logo.jpg                # PoSTier high-resolution app icon
+├── logo.png                # PoSTier high-resolution app icon
+├── logo.ico                # Windows desktop application icon
 └── dx-components-theme.css # Base theme variables for Dioxus Components
 src/
 ├── main.rs                 # Application entry point
 ├── model.rs                # Shared domain models (Email, EmailRecord, SearchHit, LabelDefinition, etc.)
-├── pst.rs                  # Streaming Outlook PST archive & JSONL fixture reader (MAPI sender, To/Cc, body)
+├── pst.rs                  # Streaming Outlook PST archive & JSONL fixture reader (MAPI sender, To/Cc/Bcc, body)
+├── email_html.rs           # HTML5 email sanitizer (html5ever), plain-text-to-HTML formatter, participant & date parsers
 ├── text.rs                 # Plain-text indexing, EN/FR Snowball stemming, and best-passage snippet extraction
 ├── db.rs                   # SQLite + FTS5/BM25 schema, migrations, and message/source persistence
 ├── db/
@@ -71,11 +73,12 @@ src/
 ├── llm.rs                  # OpenAI-compatible client (Rig), TOML config loader, LLM Judge, and endpoint validation
 ├── llm/
 │   ├── agent.rs            # Tool-calling research agent (search_emails, read_email, get_thread, email_stats)
+│   ├── budget.rs           # Adaptive token budgeting and Rig history trimming hooks
 │   └── context.rs          # Bilingual agent prompts, email body cleaner, citation helpers, and context builder
 ├── i18n.rs                 # French and English UI translations and agent status strings
 ├── components/             # Styled Dioxus UI component library (dioxus-primitives + dioxus-icons)
-│   ├── mod.rs              # Exports Button, Badge, Avatar, Checkbox, Collapsible, Input, Item,
-│   │                       # Label, ScrollArea, Separator, Sidebar, Switch, ToggleGroup, Toolbar, etc.
+│   ├── mod.rs              # Exports Avatar, Badge, Button, Checkbox, Collapsible, DropdownMenu, Input, Item,
+│   │                       # Label, ScrollArea, Separator, Sheet, Sidebar, Skeleton, Switch, ToggleGroup, Toolbar, Tooltip
 │   └── <component>/        # Component implementation (component.rs) and scoped CSS module (style.css)
 ├── app.rs                  # Dioxus 0.7 desktop root component, state management, resize & worker tasks
 ├── app/
@@ -86,7 +89,6 @@ src/
 │   │                       # splitters, and reusable component wrappers
 │   ├── sidebar.rs          # Left collapsible sidebar (Sidebar*, Collapsible, ToggleGroup, Checkbox, Switch, Input)
 │   ├── explorer.rs         # Center mail table, Toolbar, structured envelope header (Avatar, Badge), and reader
-│   ├── email_html.rs       # HTML email sanitizer, plain-text-to-HTML formatter, participant & date parsers
 │   ├── chat.rs             # Right RAG chat pane, Avatar bubbles, mail:// links, and Collapsible evidence cards
 │   ├── markdown.rs         # Markdown block renderer for assistant responses
 │   └── markdown/

@@ -147,7 +147,7 @@ pub fn strip_mail_links(input: &str) -> String {
 }
 
 pub fn clean_email_body(raw: &str) -> String {
-    let plain_source = crate::app::email_html::html_to_plain_text(raw);
+    let plain_source = crate::email_html::html_to_plain_text(raw);
     let normalized = plain_source.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = normalized.lines().map(|l| l.trim_end()).collect();
     if lines.is_empty() {

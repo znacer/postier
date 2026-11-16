@@ -153,25 +153,15 @@ pub(super) const DX_COMPONENTS_THEME_CSS: &str =
     include_str!("../../assets/dx-components-theme.css");
 
 pub(super) const DX_COMPONENTS_CSS: &str = concat!(
-    include_str!("../components/accordion/style.css"),
-    "\n",
     include_str!("../components/avatar/style.css"),
     "\n",
     include_str!("../components/badge/style.css"),
     "\n",
     include_str!("../components/button/style.css"),
     "\n",
-    include_str!("../components/calendar/style.css"),
-    "\n",
     include_str!("../components/checkbox/style.css"),
     "\n",
     include_str!("../components/collapsible/style.css"),
-    "\n",
-    include_str!("../components/combobox/style.css"),
-    "\n",
-    include_str!("../components/date_picker/style.css"),
-    "\n",
-    include_str!("../components/dialog/style.css"),
     "\n",
     include_str!("../components/dropdown_menu/style.css"),
     "\n",
@@ -181,17 +171,7 @@ pub(super) const DX_COMPONENTS_CSS: &str = concat!(
     "\n",
     include_str!("../components/label/style.css"),
     "\n",
-    include_str!("../components/menubar/style.css"),
-    "\n",
-    include_str!("../components/popover/style.css"),
-    "\n",
-    include_str!("../components/progress/style.css"),
-    "\n",
-    include_str!("../components/radio_group/style.css"),
-    "\n",
     include_str!("../components/scroll_area/style.css"),
-    "\n",
-    include_str!("../components/select/style.css"),
     "\n",
     include_str!("../components/separator/style.css"),
     "\n",
@@ -203,17 +183,11 @@ pub(super) const DX_COMPONENTS_CSS: &str = concat!(
     "\n",
     include_str!("../components/switch/style.css"),
     "\n",
-    include_str!("../components/textarea/style.css"),
-    "\n",
-    include_str!("../components/toggle/style.css"),
-    "\n",
     include_str!("../components/toggle_group/style.css"),
     "\n",
     include_str!("../components/toolbar/style.css"),
     "\n",
     include_str!("../components/tooltip/style.css"),
-    "\n",
-    include_str!("../components/virtual_list/style.css"),
 );
 
 pub(super) const APP_CSS: &str = r#"
@@ -990,8 +964,7 @@ pub(super) const BUTTON_MAX_HEIGHT: f32 = 36.0;
 
 pub(super) fn constrain_button(btn: Element) -> Element {
     rsx! {
-        div {
-            style: "max-width: {BUTTON_MAX_WIDTH}px; max-height: {BUTTON_MAX_HEIGHT}px; overflow: hidden; display: inline-flex; flex-shrink: 0;",
+        div { style: "max-width: {BUTTON_MAX_WIDTH}px; max-height: {BUTTON_MAX_HEIGHT}px; overflow: hidden; display: inline-flex; flex-shrink: 0;",
             {btn}
         }
     }
@@ -1063,45 +1036,41 @@ pub(super) fn primary_button<M: DispatchMessage>(
     })
 }
 
-pub(super) fn prompt_button<M: DispatchMessage>(label: &str, on_press: M) -> Element {
+pub(super) fn prompt_button<M: DispatchMessage>(
+    label: &str,
+    use_label: &str,
+    on_press: M,
+) -> Element {
     let label_text = label.to_owned();
+    let use_text = use_label.to_owned();
     let accent = accent_text();
     rsx! {
         Button {
             variant: ButtonVariant::Outline,
             style: "width: 100%; height: auto; padding: 10px 12px; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; border-radius: var(--radius-md); white-space: normal;",
             onclick: move |_| on_press.clone().dispatch(),
-            span { style: "font-size: 12px; flex: 1; text-align: left; line-height: 1.35;", "{label_text}" }
-            span {
-                style: "font-size: 11px; font-weight: 600; color: {accent}; display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;",
-                "Use →"
+            span { style: "font-size: 12px; flex: 1; text-align: left; line-height: 1.35;",
+                "{label_text}"
+            }
+            span { style: "font-size: 11px; font-weight: 600; color: {accent}; display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;",
+                "{use_text}"
             }
         }
     }
 }
 
-pub(super) fn collapsible_section_label<M: DispatchMessage>(
-    label: &str,
-    collapsed: bool,
-    on_toggle: M,
-) -> Element {
+pub(super) fn collapsible_section_label(label: &str, collapsed: bool) -> Element {
     let label_text = label.to_owned();
     let chevron_rotation = if collapsed { "-90deg" } else { "0deg" };
     let muted_color = muted();
     rsx! {
         CollapsibleTrigger {
             style: "width: 100%; padding: 6px 4px; display: flex; flex-direction: row; align-items: center; justify-content: space-between; border-radius: var(--radius-xs);",
-            as: move |_attrs: Vec<Attribute>| {
-                let on_toggle = on_toggle.clone();
+            r#as: move |attrs: Vec<Attribute>| {
                 let label_text = label_text.clone();
                 rsx! {
-                    Button {
-                        variant: ButtonVariant::Ghost,
-                        size: ButtonSize::Xs,
-                        style: "width: 100%; padding: 6px 4px; display: flex; flex-direction: row; align-items: center; justify-content: space-between; border-radius: var(--radius-xs);",
-                        onclick: move |_| on_toggle.clone().dispatch(),
-                        span {
-                            style: "font-size: 10.5px; color: {muted_color}; flex: 1; text-align: left; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;",
+                    Button { variant: ButtonVariant::Ghost, size: ButtonSize::Xs, attributes: attrs,
+                        span { style: "font-size: 10.5px; color: {muted_color}; flex: 1; text-align: left; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;",
                             "{label_text}"
                         }
                         svg {
@@ -1126,10 +1095,7 @@ pub(super) fn collapsible_section_label<M: DispatchMessage>(
 pub(super) fn card(content: Element) -> Element {
     let style = card_style();
     rsx! {
-        div {
-            style: "width: 100%; padding: 12px; {style}",
-            {content}
-        }
+        div { style: "width: 100%; padding: 12px; {style}", {content} }
     }
 }
 
@@ -1160,15 +1126,13 @@ pub(super) fn label_badge(name: &str, hex_color: &str, detail: Option<String>) -
     let bright = bright_text();
     rsx! {
         Badge {
+            key: "{label_name}",
             variant: BadgeVariant::Outline,
             style: "display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; font-size: 11px; font-weight: 500; color: {bright}; background-color: var(--light, {light_bg}) var(--dark, {dark_bg}); border: 1px solid {border_col}; border-radius: 9999px; white-space: nowrap;",
-            span {
-                style: "width: 6px; height: 6px; border-radius: 50%; background-color: {base}; flex-shrink: 0;"
-            }
+            span { style: "width: 6px; height: 6px; border-radius: 50%; background-color: {base}; flex-shrink: 0;" }
             span { "{label_name}" }
             if let Some(extra) = detail {
-                span {
-                    style: "font-size: 10px; opacity: 0.78; font-variant-numeric: tabular-nums;",
+                span { style: "font-size: 10px; opacity: 0.78; font-variant-numeric: tabular-nums;",
                     "{extra}"
                 }
             }
@@ -1335,7 +1299,9 @@ mod tests {
             let small: Element = small_button("Test", Some(()));
             let primary: Element = primary_button("Test", Some(()));
             let enabled: Element = enabled_button("Test", Some(()));
-            let custom: Element = constrain_button(rsx! { Button { "Custom" } });
+            let custom: Element = constrain_button(rsx! {
+                Button { "Custom" }
+            });
             rsx! {
                 {small}
                 {primary}
@@ -1347,24 +1313,86 @@ mod tests {
         vdom.rebuild_in_place();
     }
 
+    struct TestTempDir(std::path::PathBuf);
+
+    impl TestTempDir {
+        fn new(prefix: &str) -> Self {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir()
+                .join(format!("postier-{prefix}-{}-{nanos}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            Self(dir)
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn full_app_view_renders_in_virtual_dom() {
-        fn app_comp() -> Element {
-            let app = crate::app::PstRagApp::new();
-            app.view()
-        }
-        let mut vdom = VirtualDom::new(app_comp);
+        let temp = TestTempDir::new("vdom-dark");
+        let storage_dir = temp.0.clone();
+        let mut vdom = VirtualDom::new_with_props(
+            |dir: std::path::PathBuf| {
+                let app = crate::app::PstRagApp::new_with_storage_dir(dir);
+                app.view()
+            },
+            storage_dir,
+        );
         vdom.rebuild_in_place();
     }
 
     #[test]
     fn full_app_view_renders_in_light_mode() {
-        fn app_comp() -> Element {
-            let mut app = crate::app::PstRagApp::new();
-            app.config.dark_mode = false;
-            app.view()
-        }
-        let mut vdom = VirtualDom::new(app_comp);
+        let temp = TestTempDir::new("vdom-light");
+        let storage_dir = temp.0.clone();
+        let mut vdom = VirtualDom::new_with_props(
+            |dir: std::path::PathBuf| {
+                let mut app = crate::app::PstRagApp::new_with_storage_dir(dir);
+                app.config.dark_mode = false;
+                app.view()
+            },
+            storage_dir,
+        );
         vdom.rebuild_in_place();
+    }
+
+    #[test]
+    fn collapsible_trigger_forwards_attributes_and_aria_state() {
+        use crate::components::collapsible::{Collapsible, CollapsibleContent};
+
+        fn comp() -> Element {
+            let mut open = use_signal(|| false);
+            rsx! {
+                Collapsible { open: open(), on_open_change: move |next| open.set(next),
+                    {collapsible_section_label("Mailboxes", !open())}
+                    CollapsibleContent {
+                        div { "Inner content" }
+                    }
+                }
+            }
+        }
+        let mut vdom = VirtualDom::new(comp);
+        vdom.rebuild_in_place();
+        let html = dioxus_ssr::render(&vdom);
+        assert!(
+            html.contains("aria-expanded=false"),
+            "expected aria-expanded=false in {html}"
+        );
+        assert!(
+            html.contains(r#"aria-controls="#),
+            "expected aria-controls in {html}"
+        );
+        assert!(
+            html.contains("data-open=false"),
+            "expected data-open=false in {html}"
+        );
     }
 }

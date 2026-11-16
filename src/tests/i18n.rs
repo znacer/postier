@@ -91,6 +91,10 @@ fn french_ui_translations_are_complete_and_accurate() {
     assert_eq!(fr.chat_title(), "Chat de l'archive");
     assert_eq!(fr.chat_welcome_title(), "Interrogez votre archive");
     assert_eq!(fr.no_message_selected(), "Aucun message sélectionné");
+    assert_eq!(fr.btn_use(), "Utiliser →");
+    assert_eq!(Language::English.btn_use(), "Use →");
+    assert!(fr.worker_panicked("boom").contains("boom"));
+    assert!(Language::English.worker_panicked("boom").contains("boom"));
 
     // Dynamic formatting tests
     assert_eq!(

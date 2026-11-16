@@ -2,7 +2,11 @@ mod agent;
 mod budget;
 mod context;
 
-use std::{sync::OnceLock, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use rig::{
@@ -424,13 +428,43 @@ impl Default for LlmConfig {
     }
 }
 
-pub(crate) fn build_http_client(url: &url::Url, config: &LlmConfig) -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .https_only(url.scheme() == "https")
-        .connect_timeout(config.connect_timeout())
-        .timeout(config.request_timeout())
+pub(crate) fn runtime() -> Result<&'static tokio::runtime::Runtime> {
+    static TOKIO_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    if let Some(rt) = TOKIO_RUNTIME.get() {
+        return Ok(rt);
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
         .build()
-        .context("build secure HTTP client")
+        .context("start Rig runtime")?;
+    Ok(TOKIO_RUNTIME.get_or_init(|| rt))
+}
+
+type HttpClientCache = Mutex<HashMap<(bool, Duration, Duration), reqwest::Client>>;
+
+pub(crate) fn build_http_client(url: &url::Url, config: &LlmConfig) -> Result<reqwest::Client> {
+    static HTTP_CLIENTS: OnceLock<HttpClientCache> = OnceLock::new();
+    let key = (
+        url.scheme() == "https",
+        config.connect_timeout(),
+        config.request_timeout(),
+    );
+    let cache = HTTP_CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock()
+        && let Some(client) = guard.get(&key)
+    {
+        return Ok(client.clone());
+    }
+    let client = reqwest::Client::builder()
+        .https_only(key.0)
+        .connect_timeout(key.1)
+        .timeout(key.2)
+        .build()
+        .context("build secure HTTP client")?;
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(key, client.clone());
+    }
+    Ok(client)
 }
 
 pub(crate) fn to_rig_history(history: &[ChatTurn]) -> Vec<rig::completion::Message> {
@@ -495,10 +529,7 @@ pub fn ask_with_history(
         max_output
     ));
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("start Rig runtime")?;
+    let runtime = runtime()?;
     runtime
         .block_on(async {
             if rig_messages.is_empty() {
@@ -542,10 +573,7 @@ pub fn judge_labels(
     }
     let agent = builder.build();
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("start Rig runtime")?;
+    let runtime = runtime()?;
     let response = runtime
         .block_on(async { agent.prompt(&prompt).await })
         .map_err(|error| {
@@ -638,10 +666,7 @@ pub fn embed(config: &LlmConfig, texts: Vec<String>) -> Result<Vec<Vec<f64>>> {
         config.embedding_model,
         texts.len()
     ));
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("start Rig runtime")?;
+    let runtime = runtime()?;
     runtime
         .block_on(async { model.embed_texts(texts).await })
         .map(|embeddings| embeddings.into_iter().map(|item| item.vec).collect())

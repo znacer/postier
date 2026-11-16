@@ -2426,7 +2426,7 @@ dependencies = [
 [[package]]
 name = "dioxus-attributes"
 version = "0.1.0"
-source = "git+https://github.com/DioxusLabs/components#9a758255ea26e2b20c8cecf4c1c946feb9e71da7"
+source = "git+https://github.com/DioxusLabs/components?rev=9a758255ea26e2b20c8cecf4c1c946feb9e71da7#9a758255ea26e2b20c8cecf4c1c946feb9e71da7"
 dependencies = [
  "dioxus-rsx",
  "proc-macro2",
@@ -2716,7 +2716,7 @@ dependencies = [
 [[package]]
 name = "dioxus-primitives"
 version = "0.0.1"
-source = "git+https://github.com/DioxusLabs/components#9a758255ea26e2b20c8cecf4c1c946feb9e71da7"
+source = "git+https://github.com/DioxusLabs/components?rev=9a758255ea26e2b20c8cecf4c1c946feb9e71da7#9a758255ea26e2b20c8cecf4c1c946feb9e71da7"
 dependencies = [
  "dioxus",
  "dioxus-attributes",
@@ -6826,6 +6826,7 @@ dependencies = [
  "dioxus-primitives",
  "dioxus-ssr",
  "encoding_rs",
+ "html5ever",
  "image",
  "outlook-pst",
  "reqwest 0.13.5",
@@ -6836,7 +6837,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "time",
  "tokio",
  "toml",
  "url",

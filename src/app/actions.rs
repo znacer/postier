@@ -13,8 +13,8 @@ use std::{
 use crate::{db::Index, laya, llm, model::EmailRecord, pst};
 
 use super::{
-    AppTask, ChatMessage, ChatRole, IndexOutcome, Message, PstRagApp, WorkerEvent, WorkerResult,
-    chat::chat_question_input_id,
+    AppTask, CachedExplorerRow, CachedReaderView, ChatMessage, ChatRole, IndexOutcome, Message,
+    PstRagApp, WorkerEvent, WorkerResult, chat::chat_question_input_id,
 };
 
 const CUSTOM_LABEL_PALETTE: &[&str] = &[
@@ -62,25 +62,59 @@ impl PstRagApp {
     pub(super) fn apply_storage_dir(&mut self, path: PathBuf) {
         self.storage_dir = path;
         self.db_path = self.storage_dir.join("index.sqlite");
-        self.db = Index::open(&self.db_path).ok();
-        self.config = load_config(&self.storage_dir).unwrap_or_default();
-        self.count = self.db.as_ref().and_then(|d| d.count().ok()).unwrap_or(0);
+        let mut load_err: Option<String> = None;
+        self.config = match load_config(&self.storage_dir) {
+            Ok(cfg) => cfg,
+            Err(error) => {
+                let default_cfg = crate::llm::LlmConfig::default();
+                load_err = Some(
+                    default_cfg
+                        .language
+                        .status_config_load_err(&format!("{error:#}")),
+                );
+                default_cfg
+            }
+        };
+        self.db = match Index::open(&self.db_path) {
+            Ok(db) => Some(db),
+            Err(error) => {
+                if load_err.is_none() {
+                    load_err = Some(
+                        self.config
+                            .language
+                            .status_db_open_err(&format!("{error:#}")),
+                    );
+                }
+                None
+            }
+        };
+        self.count = 0;
+        self.sources.clear();
         self.checked_message_ids.clear();
         self.range_anchor_id = None;
+        self.selected_message_id = None;
+        self.selected_message = None;
+        self.explorer_messages.clear();
+        self.cached_explorer_rows.clear();
+        self.cached_reader = None;
         self.refresh_sources();
         self.refresh_explorer();
-        self.status = match fs::write(
-            &self.storage_location_path,
-            self.storage_dir.to_string_lossy().as_bytes(),
-        ) {
-            Ok(()) => self
-                .config
-                .language
-                .status_storage_changed(&self.storage_dir.display().to_string()),
-            Err(error) => self
-                .config
-                .language
-                .status_storage_saved_err(&error.to_string()),
+        self.status = if let Some(err) = load_err {
+            err
+        } else {
+            match fs::write(
+                &self.storage_location_path,
+                self.storage_dir.to_string_lossy().as_bytes(),
+            ) {
+                Ok(()) => self
+                    .config
+                    .language
+                    .status_storage_changed(&self.storage_dir.display().to_string()),
+                Err(error) => self
+                    .config
+                    .language
+                    .status_storage_saved_err(&error.to_string()),
+            }
         };
     }
 
@@ -137,11 +171,16 @@ impl PstRagApp {
 
     pub(super) fn apply_laya_gguf(&mut self, path: PathBuf) {
         self.config.laya_gguf_path = path.to_string_lossy().to_string();
-        let _ = save_config(&self.storage_dir, &self.config);
-        self.status = self
-            .config
-            .language
-            .status_selected_laya_gguf(&path.display().to_string());
+        self.status = match save_config(&self.storage_dir, &self.config) {
+            Ok(()) => self
+                .config
+                .language
+                .status_selected_laya_gguf(&path.display().to_string()),
+            Err(error) => self
+                .config
+                .language
+                .status_settings_save_err(&format!("{error:#}")),
+        };
     }
 
     pub(super) fn active_laya_gguf_path(&self) -> Option<PathBuf> {
@@ -385,66 +424,128 @@ impl PstRagApp {
     }
 
     pub(super) fn refresh_sources(&mut self) {
-        self.sources = self
-            .db_mut()
-            .and_then(|db| db.sources())
-            .unwrap_or_default();
+        match self.db_mut().and_then(|db| db.sources()) {
+            Ok(sources) => self.sources = sources,
+            Err(error) => {
+                self.status = self
+                    .config
+                    .language
+                    .status_db_query_err(&format!("{error:#}"));
+            }
+        }
     }
 
     pub(super) fn refresh_explorer(&mut self) {
-        let Ok(db) = self.db_mut() else {
-            return;
-        };
-        let count = db.count().unwrap_or(0);
-        let labels_with_counts = db.label_definitions_with_counts().unwrap_or_default();
-        let unlabeled_count = db.unlabeled_count().unwrap_or(0);
-        self.count = count;
-        self.labels_with_counts = labels_with_counts;
-        self.unlabeled_count = unlabeled_count;
-        self.refresh_explorer_messages();
+        let res = self.db_mut().and_then(|db| {
+            Ok((
+                db.count()?,
+                db.label_definitions_with_counts()?,
+                db.unlabeled_count()?,
+            ))
+        });
+        match res {
+            Ok((count, labels_with_counts, unlabeled_count)) => {
+                self.count = count;
+                self.labels_with_counts = labels_with_counts;
+                self.unlabeled_count = unlabeled_count;
+                self.refresh_explorer_messages();
+            }
+            Err(error) => {
+                self.status = self
+                    .config
+                    .language
+                    .status_db_query_err(&format!("{error:#}"));
+            }
+        }
     }
 
     pub(super) fn refresh_explorer_messages(&mut self) {
-        if self.db.is_none() {
-            self.db = Index::open(&self.db_path).ok();
+        let limit = self.config.explorer_message_limit.max(1);
+        let mail_scope = self.mail_scope.clone();
+        let label_filter = self.label_filter.clone();
+        let filter_query = self.filter_query.clone();
+        let mail_sort = self.mail_sort;
+        let res = self.db_mut().and_then(|db| {
+            db.list_message_summaries(&mail_scope, &label_filter, &filter_query, mail_sort, limit)
+        });
+        match res {
+            Ok(messages) => {
+                self.explorer_messages = messages;
+                self.rebuild_explorer_row_cache();
+                if let Some(selected_id) = self.selected_message_id {
+                    if !self
+                        .explorer_messages
+                        .iter()
+                        .any(|message| message.id == selected_id)
+                    {
+                        self.selected_message_id = self.explorer_messages.first().map(|m| m.id);
+                    }
+                } else {
+                    self.selected_message_id = self.explorer_messages.first().map(|m| m.id);
+                }
+                self.sync_selected_message(true);
+            }
+            Err(error) => {
+                self.status = self
+                    .config
+                    .language
+                    .status_db_query_err(&format!("{error:#}"));
+            }
         }
-        let Some(db) = self.db.as_ref() else {
+    }
+
+    pub(super) fn rebuild_explorer_row_cache(&mut self) {
+        let tr = self.config.language;
+        self.cached_explorer_rows = self
+            .explorer_messages
+            .iter()
+            .map(|email| CachedExplorerRow::from_record(email, tr))
+            .collect();
+    }
+
+    pub(super) fn rebuild_reader_cache(&mut self) {
+        let tr = self.config.language;
+        self.cached_reader = self
+            .selected_message
+            .as_ref()
+            .map(|email| CachedReaderView::from_email(email, tr));
+    }
+
+    pub(super) fn sync_selected_message(&mut self, force_reload: bool) {
+        let Some(selected_id) = self.selected_message_id else {
+            self.selected_message = None;
+            self.cached_reader = None;
             return;
         };
-        let limit = self.config.explorer_message_limit.max(1);
-        let messages = db
-            .list_messages(
-                &self.mail_scope,
-                &self.label_filter,
-                &self.filter_query,
-                self.mail_sort,
-                limit,
-            )
-            .unwrap_or_default();
-        self.explorer_messages = messages;
-
-        if let Some(selected_id) = self.selected_message_id {
-            if !self
-                .explorer_messages
-                .iter()
-                .any(|message| message.id == selected_id)
-            {
-                self.selected_message_id = self.explorer_messages.first().map(|m| m.id);
+        let needs_load = force_reload
+            || self
+                .selected_message
+                .as_ref()
+                .is_none_or(|email| email.id != selected_id);
+        if !needs_load {
+            self.rebuild_reader_cache();
+            return;
+        }
+        match self.db_mut().and_then(|db| db.get_message(selected_id)) {
+            Ok(record) => {
+                self.selected_message = record;
+                self.rebuild_reader_cache();
             }
-        } else {
-            self.selected_message_id = self.explorer_messages.first().map(|m| m.id);
+            Err(error) => {
+                self.selected_message = None;
+                self.cached_reader = None;
+                self.status = self
+                    .config
+                    .language
+                    .status_db_query_err(&format!("{error:#}"));
+            }
         }
     }
 
     pub(super) fn select_email(&mut self, id: i64) {
         self.selected_message_id = Some(id);
         self.range_anchor_id = Some(id);
-        if !self.explorer_messages.iter().any(|email| email.id == id)
-            && let Ok(db) = self.db_mut()
-            && let Ok(Some(record)) = db.get_message(id)
-        {
-            self.explorer_messages.insert(0, record);
-        }
+        self.sync_selected_message(false);
     }
 
     pub(super) fn select_adjacent_email(&mut self, delta: isize, extend_range: bool) {
@@ -463,8 +564,7 @@ impl PstRagApp {
             if extend_range {
                 self.select_range_to(next_id);
             } else {
-                self.selected_message_id = Some(next_id);
-                self.range_anchor_id = Some(next_id);
+                self.select_email(next_id);
             }
         }
     }
@@ -483,6 +583,7 @@ impl PstRagApp {
             self.checked_message_ids.insert(id);
             if self.selected_message_id.is_none() {
                 self.selected_message_id = Some(id);
+                self.sync_selected_message(false);
             }
         } else {
             self.checked_message_ids.remove(&id);
@@ -539,6 +640,7 @@ impl PstRagApp {
             }
             self.selected_message_id = Some(target_id);
             self.range_anchor_id = Some(anchor_id);
+            self.sync_selected_message(false);
             self.status = self
                 .config
                 .language
@@ -547,12 +649,12 @@ impl PstRagApp {
             self.checked_message_ids.insert(target_id);
             self.selected_message_id = Some(target_id);
             self.range_anchor_id = Some(target_id);
+            self.sync_selected_message(false);
         }
     }
 
     pub(super) fn selected_email(&self) -> Option<&EmailRecord> {
-        let id = self.selected_message_id?;
-        self.explorer_messages.iter().find(|email| email.id == id)
+        self.selected_message.as_ref()
     }
 
     pub(super) fn set_source_enabled(&mut self, source: &str, enabled: bool) {

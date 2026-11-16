@@ -23,7 +23,7 @@ pub fn Collapsible(props: CollapsibleProps) -> Element {
             disabled: props.disabled,
             open: props.open,
             on_open_change: props.on_open_change,
-            as: props.r#as,
+            r#as: props.r#as,
             attributes: props.attributes,
             {props.children}
         }
@@ -40,13 +40,10 @@ pub fn CollapsibleTrigger(props: CollapsibleTriggerProps) -> Element {
     let show_icon = props.r#as.is_none();
 
     rsx! {
-        collapsible::CollapsibleTrigger { as: props.r#as, attributes: merged,
+        collapsible::CollapsibleTrigger { r#as: props.r#as, attributes: merged,
             {props.children}
             if show_icon {
-                ChevronsUpDown {
-                    size: "1rem",
-                    stroke: "var(--secondary-color-3)",
-                }
+                ChevronsUpDown { size: "1rem", stroke: "var(--secondary-color-3)" }
             }
         }
     }

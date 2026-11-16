@@ -1,11 +1,12 @@
 use std::{
+    collections::HashSet,
     fs::File,
     io::{BufRead, BufReader},
     path::Path,
     rc::Rc,
 };
 
-use crate::{app::email_html::repair_text_encoding, model::Email};
+use crate::{email_html::repair_text_encoding, model::Email};
 use anyhow::{Context, Result, bail};
 use encoding_rs::Encoding;
 use outlook_pst::{
@@ -18,6 +19,7 @@ use outlook_pst::{
 };
 
 pub const IMPORT_BATCH_SIZE: usize = 500;
+const MAX_FOLDER_DEPTH: usize = 64;
 
 pub trait MailSource {
     fn read_messages(&self, path: &Path) -> Result<Vec<Email>> {
@@ -89,11 +91,15 @@ impl MailSource for PstSource {
         let mut batch = Vec::with_capacity(IMPORT_BATCH_SIZE);
         let mut total = 0usize;
         let mut skipped = 0usize;
+        let mut visited = HashSet::new();
+        visited.insert(u32::from(root_id.node_id()));
         walk_folder(
             store,
             root,
             String::new(),
             &path.to_string_lossy(),
+            0,
+            &mut visited,
             &mut batch,
             &mut total,
             &mut skipped,
@@ -116,16 +122,26 @@ fn walk_folder(
     folder: Rc<dyn Folder>,
     parent: String,
     source: &str,
+    depth: usize,
+    visited: &mut HashSet<u32>,
     batch: &mut Vec<Email>,
     total: &mut usize,
     skipped: &mut usize,
     on_batch: &mut dyn FnMut(Vec<Email>) -> Result<()>,
 ) -> Result<()> {
+    if depth > MAX_FOLDER_DEPTH {
+        return Ok(());
+    }
     let folder_props = folder.properties();
     let folder_cp =
         codepage_prop(folder_props.get(0x3FFD)).or_else(|| codepage_prop(folder_props.get(0x3FDE)));
     let name = text_prop(folder_props.get(0x3001), folder_cp)
-        .or_else(|| folder_props.display_name().ok().map(|s| repair_text_encoding(&s)))
+        .or_else(|| {
+            folder_props
+                .display_name()
+                .ok()
+                .map(|s| repair_text_encoding(&s))
+        })
         .unwrap_or_else(|| "Unnamed".into());
     let path = if parent.is_empty() {
         name
@@ -153,7 +169,11 @@ fn walk_folder(
     }
     if let Some(children) = folder.hierarchy_table() {
         for row in children.rows_matrix() {
-            let node = NodeId::from(u32::from(row.id()));
+            let raw_id = u32::from(row.id());
+            if !visited.insert(raw_id) {
+                continue;
+            }
+            let node = NodeId::from(raw_id);
             let entry_id = store.properties().make_entry_id(node)?;
             if let Ok(child) = store.open_folder(&entry_id) {
                 walk_folder(
@@ -161,6 +181,8 @@ fn walk_folder(
                     child,
                     path.clone(),
                     source,
+                    depth + 1,
+                    visited,
                     batch,
                     total,
                     skipped,
@@ -323,14 +345,21 @@ fn format_name_and_email(name: Option<&str>, email: Option<&str>) -> String {
 }
 
 fn combine_to_and_cc(to: Option<&str>, cc: Option<&str>) -> String {
-    let to_clean = to.map(str::trim).filter(|s| !s.is_empty());
-    let cc_clean = cc.map(str::trim).filter(|s| !s.is_empty());
-    match (to_clean, cc_clean) {
-        (Some(t), Some(c)) => format!("{t}\nCc: {c}"),
-        (Some(t), None) => t.to_string(),
-        (None, Some(c)) => format!("Cc: {c}"),
-        (None, None) => String::new(),
+    combine_recipients(to, cc, None)
+}
+
+fn combine_recipients(to: Option<&str>, cc: Option<&str>, bcc: Option<&str>) -> String {
+    let mut parts = Vec::new();
+    if let Some(t) = to.map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(t.to_string());
     }
+    if let Some(c) = cc.map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("Cc: {c}"));
+    }
+    if let Some(b) = bcc.map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("Bcc: {b}"));
+    }
+    parts.join("\n")
 }
 
 fn codepage_prop(value: Option<&PropertyValue>) -> Option<u32> {
@@ -390,10 +419,7 @@ pub(crate) fn decode_bytes(bytes: &[u8], codepage: Option<u32>, is_html: bool) -
     }
 
     // Strip trailing NUL padding on 8-bit buffers.
-    let end = bytes
-        .iter()
-        .rposition(|&b| b != 0)
-        .map_or(0, |idx| idx + 1);
+    let end = bytes.iter().rposition(|&b| b != 0).map_or(0, |idx| idx + 1);
     let trimmed = &bytes[..end];
     if trimmed.is_empty() {
         return String::new();
@@ -415,14 +441,11 @@ pub(crate) fn decode_bytes(bytes: &[u8], codepage: Option<u32>, is_html: bool) -
     // 4. Prefer UTF-8 if the bytes are valid UTF-8 and either UTF-8 is indicated or the
     //    declared codepage is ASCII/Latin-1/Windows-1252 (common when UTF-8 bytes are stored
     //    inside String8 or PidTagBodyHtml without updating meta/codepage).
-    let allow_utf8_autodetect = matches!(
-        codepage,
-        None | Some(65001 | 1252 | 28591 | 20127 | 28590)
-    ) || html_enc == Some(encoding_rs::UTF_8);
+    let allow_utf8_autodetect =
+        matches!(codepage, None | Some(65001 | 1252 | 28591 | 20127 | 28590))
+            || html_enc == Some(encoding_rs::UTF_8);
 
-    if allow_utf8_autodetect
-        && let Ok(s) = std::str::from_utf8(trimmed)
-    {
+    if allow_utf8_autodetect && let Ok(s) = std::str::from_utf8(trimmed) {
         return repair_text_encoding(s);
     }
 
@@ -437,10 +460,7 @@ pub(crate) fn decode_bytes(bytes: &[u8], codepage: Option<u32>, is_html: bool) -
 }
 
 fn decode_utf8_or_fallback(bytes: &[u8], fallback: Option<&'static Encoding>) -> String {
-    let end = bytes
-        .iter()
-        .rposition(|&b| b != 0)
-        .map_or(0, |idx| idx + 1);
+    let end = bytes.iter().rposition(|&b| b != 0).map_or(0, |idx| idx + 1);
     let trimmed = &bytes[..end];
     if let Ok(s) = std::str::from_utf8(trimmed) {
         return repair_text_encoding(s);
@@ -453,13 +473,19 @@ fn decode_utf8_or_fallback(bytes: &[u8], fallback: Option<&'static Encoding>) ->
 }
 
 fn looks_like_utf16le(bytes: &[u8]) -> bool {
-    if bytes.len() < 4 || bytes.len() % 2 != 0 {
+    if bytes.len() < 4 || !bytes.len().is_multiple_of(2) {
         return false;
     }
     let sample_len = bytes.len().min(64);
     let pairs = sample_len / 2;
-    let odd_nulls = (1..sample_len).step_by(2).filter(|&i| bytes[i] == 0).count();
-    let even_non_nulls = (0..sample_len).step_by(2).filter(|&i| bytes[i] != 0).count();
+    let odd_nulls = (1..sample_len)
+        .step_by(2)
+        .filter(|&i| bytes[i] == 0)
+        .count();
+    let even_non_nulls = (0..sample_len)
+        .step_by(2)
+        .filter(|&i| bytes[i] != 0)
+        .count();
     odd_nulls * 2 >= pairs && even_non_nulls * 2 >= pairs
 }
 
@@ -477,7 +503,9 @@ fn extract_html_charset(bytes: &[u8]) -> Option<&'static Encoding> {
             let val = rest
                 .trim_start()
                 .trim_start_matches(['"', '\''])
-                .split(|c: char| c.is_ascii_whitespace() || matches!(c, '"' | '\'' | ';' | '>' | '/'))
+                .split(|c: char| {
+                    c.is_ascii_whitespace() || matches!(c, '"' | '\'' | ';' | '>' | '/')
+                })
                 .next()
                 .unwrap_or("");
             if !val.is_empty()
@@ -518,7 +546,7 @@ fn codepage_to_encoding(codepage: Option<u32>) -> Option<&'static Encoding> {
         20866 => Some(encoding_rs::KOI8_R),
         21866 => Some(encoding_rs::KOI8_U),
         932 => Some(encoding_rs::SHIFT_JIS),
-        50220 | 50221 | 50222 => Some(encoding_rs::ISO_2022_JP),
+        50220..=50222 => Some(encoding_rs::ISO_2022_JP),
         51932 => Some(encoding_rs::EUC_JP),
         936 => Some(encoding_rs::GBK),
         54936 => Some(encoding_rs::GB18030),
@@ -683,6 +711,7 @@ fn extract_recipients(
     let context = table.context();
     let mut to_list = Vec::new();
     let mut cc_list = Vec::new();
+    let mut bcc_list = Vec::new();
 
     for row in table.rows_matrix() {
         let Ok(cols) = row.columns(context) else {
@@ -701,9 +730,13 @@ fn extract_recipients(
                 continue;
             };
             match col.prop_id() {
-                0x3001 => display_name = text_prop(Some(&prop_val), codepage).map(|s| decode_rfc2047(&s)),
+                0x3001 => {
+                    display_name = text_prop(Some(&prop_val), codepage).map(|s| decode_rfc2047(&s))
+                }
                 0x39FE => smtp_addr = text_prop(Some(&prop_val), codepage),
-                0x3003 => email_addr = text_prop(Some(&prop_val), codepage).filter(|s| s.contains('@')),
+                0x3003 => {
+                    email_addr = text_prop(Some(&prop_val), codepage).filter(|s| s.contains('@'))
+                }
                 0x0C15 => {
                     if let Some(rt) = int_prop(Some(&prop_val)) {
                         recipient_type = rt;
@@ -720,6 +753,7 @@ fn extract_recipients(
         }
         match recipient_type {
             2 => cc_list.push(formatted),
+            3 => bcc_list.push(formatted),
             _ => to_list.push(formatted),
         }
     }
@@ -734,7 +768,8 @@ fn extract_recipients(
     } else {
         fallback_cc.map(str::to_owned)
     };
-    combine_to_and_cc(to_str.as_deref(), cc_str.as_deref())
+    let bcc_str = (!bcc_list.is_empty()).then(|| bcc_list.join(", "));
+    combine_recipients(to_str.as_deref(), cc_str.as_deref(), bcc_str.as_deref())
 }
 
 #[allow(dead_code)]

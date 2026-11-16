@@ -1171,10 +1171,7 @@ pub fn run_agent(
     progress(language.agent_progress_thinking().to_string());
 
     let rig_history = to_rig_history(history);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("start Rig runtime")?;
+    let runtime = super::runtime()?;
     let outcome = runtime.block_on(async {
         let runner = agent
             .runner(question)
@@ -1186,7 +1183,6 @@ pub fn run_agent(
             _ = wait_for_cancel(&cancel) => None,
         }
     });
-    drop(runtime);
 
     let raw_answer = match outcome {
         None => anyhow::bail!("{}", language.agent_cancelled()),

@@ -32,9 +32,9 @@ impl GgufValue {
     pub(super) fn as_u32(&self) -> Option<u32> {
         match self {
             Self::U32(v) => Some(*v),
-            Self::I32(v) => (*v >= 0).then_some(*v as u32),
-            Self::U64(v) => Some(*v as u32),
-            Self::I64(v) => (*v >= 0).then_some(*v as u32),
+            Self::I32(v) => u32::try_from(*v).ok(),
+            Self::U64(v) => u32::try_from(*v).ok(),
+            Self::I64(v) => u32::try_from(*v).ok(),
             _ => None,
         }
     }
@@ -99,7 +99,12 @@ pub(super) struct WeightTensor {
 
 impl WeightTensor {
     pub(super) fn get_row(&self, row: usize, out: &mut [f32]) {
-        debug_assert_eq!(out.len(), self.ne0);
+        assert_eq!(out.len(), self.ne0, "WeightTensor::get_row width mismatch");
+        assert!(
+            row < self.ne1,
+            "WeightTensor::get_row row {row} out of bounds ({})",
+            self.ne1
+        );
         let start = row * self.ne0;
         match &self.storage {
             TensorStorage::F32(data) => {
@@ -131,7 +136,16 @@ impl WeightTensor {
     }
 
     pub(super) fn dot_row(&self, row: usize, input: &[f32]) -> f32 {
-        debug_assert_eq!(input.len(), self.ne0);
+        assert_eq!(
+            input.len(),
+            self.ne0,
+            "WeightTensor::dot_row input width mismatch"
+        );
+        assert!(
+            row < self.ne1,
+            "WeightTensor::dot_row row {row} out of bounds ({})",
+            self.ne1
+        );
         let start = row * self.ne0;
         match &self.storage {
             TensorStorage::F32(data) => data[start..start + self.ne0]
@@ -169,8 +183,24 @@ impl WeightTensor {
     }
 
     pub(super) fn linear(&self, input: &[f32], bias: Option<&[f32]>, out: &mut [f32]) {
-        debug_assert_eq!(input.len(), self.ne0);
-        debug_assert_eq!(out.len(), self.ne1);
+        assert_eq!(
+            input.len(),
+            self.ne0,
+            "WeightTensor::linear input width mismatch"
+        );
+        assert_eq!(
+            out.len(),
+            self.ne1,
+            "WeightTensor::linear output width mismatch"
+        );
+        if let Some(b) = bias {
+            assert!(
+                b.len() >= self.ne1,
+                "WeightTensor::linear bias length {} smaller than {}",
+                b.len(),
+                self.ne1
+            );
+        }
         for (row, dst) in out.iter_mut().enumerate() {
             let b = bias.map_or(0.0, |b| b[row]);
             *dst = self.dot_row(row, input) + b;
@@ -230,36 +260,66 @@ pub(super) fn parse_gguf(bytes: &[u8]) -> Result<GgufParsed> {
     if !(2..=3).contains(&version) {
         bail!("unsupported GGUF version {version}");
     }
-    let n_tensors = read_u64(bytes, &mut cursor)? as usize;
-    let n_kv = read_u64(bytes, &mut cursor)? as usize;
+    let n_tensors = usize::try_from(read_u64(bytes, &mut cursor)?)
+        .context("GGUF tensor count overflows usize")?;
+    let n_kv = usize::try_from(read_u64(bytes, &mut cursor)?)
+        .context("GGUF metadata count overflows usize")?;
 
-    let mut meta = HashMap::with_capacity(n_kv);
+    let remaining_for_kv = bytes.len().saturating_sub(cursor);
+    if n_kv > remaining_for_kv / 12 {
+        bail!("GGUF metadata count {n_kv} exceeds file length");
+    }
+    let mut meta = HashMap::with_capacity(n_kv.min(4096));
     for _ in 0..n_kv {
         let key = read_gguf_string(bytes, &mut cursor)?;
         let val_type = read_u32(bytes, &mut cursor)?;
-        let value = read_gguf_value(bytes, &mut cursor, val_type)?;
+        let value = read_gguf_value(bytes, &mut cursor, val_type, 0)?;
         meta.insert(key, value);
     }
 
-    let mut tensors = HashMap::with_capacity(n_tensors);
+    let remaining_for_tensors = bytes.len().saturating_sub(cursor);
+    if n_tensors > remaining_for_tensors / 24 {
+        bail!("GGUF tensor count {n_tensors} exceeds file length");
+    }
+    let mut tensors = HashMap::with_capacity(n_tensors.min(4096));
     for _ in 0..n_tensors {
         let name = read_gguf_string(bytes, &mut cursor)?;
-        let n_dims = read_u32(bytes, &mut cursor)? as usize;
+        let n_dims = usize::try_from(read_u32(bytes, &mut cursor)?)
+            .context("GGUF tensor dimension count overflows usize")?;
+        if n_dims > 8 || n_dims > bytes.len().saturating_sub(cursor) / 8 {
+            bail!("invalid GGUF dimension count {n_dims} for tensor {name:?}");
+        }
         let mut dims = Vec::with_capacity(n_dims);
         for _ in 0..n_dims {
-            dims.push(read_u64(bytes, &mut cursor)? as usize);
+            dims.push(
+                usize::try_from(read_u64(bytes, &mut cursor)?)
+                    .context("GGUF tensor dimension overflows usize")?,
+            );
         }
         let ggml_type = read_u32(bytes, &mut cursor)?;
-        let offset = read_u64(bytes, &mut cursor)? as usize;
-        let elems: usize = dims.iter().copied().product::<usize>().max(1);
+        let offset = usize::try_from(read_u64(bytes, &mut cursor)?)
+            .context("GGUF tensor offset overflows usize")?;
+        let elems = dims
+            .iter()
+            .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+            .context("GGUF tensor element count overflow")?;
+        if elems == 0 {
+            bail!("GGUF tensor {name:?} has zero elements");
+        }
         let byte_len = match ggml_type {
-            GGML_TYPE_F32 => elems * 4,
-            GGML_TYPE_F16 | GGML_TYPE_BF16 => elems * 2,
+            GGML_TYPE_F32 => elems
+                .checked_mul(4)
+                .context("GGUF F32 tensor size overflow")?,
+            GGML_TYPE_F16 | GGML_TYPE_BF16 => elems
+                .checked_mul(2)
+                .context("GGUF F16/BF16 tensor size overflow")?,
             GGML_TYPE_Q8_0 => {
                 if !elems.is_multiple_of(32) {
                     bail!("Q8_0 tensor {name} element count {elems} is not a multiple of 32");
                 }
-                (elems / 32) * 34
+                (elems / 32)
+                    .checked_mul(34)
+                    .context("GGUF Q8_0 tensor size overflow")?
             }
             other => bail!("unsupported GGML tensor type {other} for tensor {name}"),
         };
@@ -274,11 +334,26 @@ pub(super) fn parse_gguf(bytes: &[u8]) -> Result<GgufParsed> {
         );
     }
 
-    let alignment = meta
-        .get("general.alignment")
-        .and_then(GgufValue::as_u32)
-        .unwrap_or(32) as usize;
-    let data_offset = cursor.div_ceil(alignment) * alignment;
+    let alignment = match meta.get("general.alignment") {
+        Some(val) => val
+            .as_u32()
+            .context("invalid general.alignment metadata value")? as usize,
+        None => 32usize,
+    };
+    if alignment == 0 {
+        bail!("invalid GGUF alignment 0");
+    }
+    let data_offset = cursor
+        .checked_add(alignment - 1)
+        .context("GGUF data offset alignment overflow")?
+        / alignment
+        * alignment;
+    if data_offset > bytes.len() {
+        bail!(
+            "GGUF tensor data offset out of bounds ({data_offset} > {})",
+            bytes.len()
+        );
+    }
     Ok((meta, tensors, data_offset))
 }
 
@@ -292,7 +367,18 @@ pub(super) fn load_weight_tensor(
         .get(name)
         .with_context(|| format!("missing GGUF tensor {name:?}"))?;
     let ne0 = info.dims.first().copied().unwrap_or(1);
-    let ne1 = info.dims.iter().skip(1).copied().product::<usize>().max(1);
+    let ne1 = info
+        .dims
+        .iter()
+        .skip(1)
+        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+        .context("GGUF tensor row count overflow")?;
+    if ne0 == 0 || ne1 == 0 {
+        bail!("GGUF tensor {name:?} has zero dimension ({ne0}x{ne1})");
+    }
+    if info.ggml_type == GGML_TYPE_Q8_0 && !ne0.is_multiple_of(32) {
+        bail!("Q8_0 tensor {name:?} row width {ne0} is not a multiple of 32");
+    }
     let start = data_offset
         .checked_add(info.offset)
         .context("GGUF tensor offset overflow")?;
@@ -332,23 +418,25 @@ pub(super) fn load_weight_tensor(
 }
 
 fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32> {
-    if *cursor + 4 > bytes.len() {
-        bail!("unexpected EOF reading u32 in GGUF");
-    }
+    let end = cursor
+        .checked_add(4)
+        .filter(|&e| e <= bytes.len())
+        .context("unexpected EOF reading u32 in GGUF")?;
     let v = u32::from_le_bytes([
         bytes[*cursor],
         bytes[*cursor + 1],
         bytes[*cursor + 2],
         bytes[*cursor + 3],
     ]);
-    *cursor += 4;
+    *cursor = end;
     Ok(v)
 }
 
 fn read_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64> {
-    if *cursor + 8 > bytes.len() {
-        bail!("unexpected EOF reading u64 in GGUF");
-    }
+    let end = cursor
+        .checked_add(8)
+        .filter(|&e| e <= bytes.len())
+        .context("unexpected EOF reading u64 in GGUF")?;
     let v = u64::from_le_bytes([
         bytes[*cursor],
         bytes[*cursor + 1],
@@ -359,74 +447,94 @@ fn read_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64> {
         bytes[*cursor + 6],
         bytes[*cursor + 7],
     ]);
-    *cursor += 8;
+    *cursor = end;
     Ok(v)
 }
 
 fn read_gguf_string(bytes: &[u8], cursor: &mut usize) -> Result<String> {
-    let len = read_u64(bytes, cursor)? as usize;
-    if *cursor + len > bytes.len() {
-        bail!("unexpected EOF reading GGUF string");
-    }
-    let s = std::str::from_utf8(&bytes[*cursor..*cursor + len])
+    let len =
+        usize::try_from(read_u64(bytes, cursor)?).context("GGUF string length overflows usize")?;
+    let end = cursor
+        .checked_add(len)
+        .filter(|&e| e <= bytes.len())
+        .context("unexpected EOF reading GGUF string")?;
+    let s = std::str::from_utf8(&bytes[*cursor..end])
         .context("invalid UTF-8 in GGUF string")?
         .to_owned();
-    *cursor += len;
+    *cursor = end;
     Ok(s)
 }
 
-fn read_gguf_value(bytes: &[u8], cursor: &mut usize, val_type: u32) -> Result<GgufValue> {
+fn read_gguf_value(
+    bytes: &[u8],
+    cursor: &mut usize,
+    val_type: u32,
+    depth: usize,
+) -> Result<GgufValue> {
+    if depth > 8 {
+        bail!("GGUF metadata nesting depth exceeded");
+    }
     Ok(match val_type {
         0 => {
-            if *cursor + 1 > bytes.len() {
-                bail!("unexpected EOF reading u8");
-            }
+            let end = cursor
+                .checked_add(1)
+                .filter(|&e| e <= bytes.len())
+                .context("unexpected EOF reading u8")?;
             let v = bytes[*cursor] as u32;
-            *cursor += 1;
+            *cursor = end;
             GgufValue::U32(v)
         }
         1 => {
-            if *cursor + 1 > bytes.len() {
-                bail!("unexpected EOF reading i8");
-            }
+            let end = cursor
+                .checked_add(1)
+                .filter(|&e| e <= bytes.len())
+                .context("unexpected EOF reading i8")?;
             let v = bytes[*cursor] as i8 as i32;
-            *cursor += 1;
+            *cursor = end;
             GgufValue::I32(v)
         }
         2 => {
-            if *cursor + 2 > bytes.len() {
-                bail!("unexpected EOF reading u16");
-            }
+            let end = cursor
+                .checked_add(2)
+                .filter(|&e| e <= bytes.len())
+                .context("unexpected EOF reading u16")?;
             let v = u16::from_le_bytes([bytes[*cursor], bytes[*cursor + 1]]) as u32;
-            *cursor += 2;
+            *cursor = end;
             GgufValue::U32(v)
         }
         3 => {
-            if *cursor + 2 > bytes.len() {
-                bail!("unexpected EOF reading i16");
-            }
+            let end = cursor
+                .checked_add(2)
+                .filter(|&e| e <= bytes.len())
+                .context("unexpected EOF reading i16")?;
             let v = i16::from_le_bytes([bytes[*cursor], bytes[*cursor + 1]]) as i32;
-            *cursor += 2;
+            *cursor = end;
             GgufValue::I32(v)
         }
         4 => GgufValue::U32(read_u32(bytes, cursor)?),
         5 => GgufValue::I32(read_u32(bytes, cursor)? as i32),
         6 => GgufValue::F32(f32::from_bits(read_u32(bytes, cursor)?)),
         7 => {
-            if *cursor + 1 > bytes.len() {
-                bail!("unexpected EOF reading bool");
-            }
+            let end = cursor
+                .checked_add(1)
+                .filter(|&e| e <= bytes.len())
+                .context("unexpected EOF reading bool")?;
             let v = bytes[*cursor] != 0;
-            *cursor += 1;
+            *cursor = end;
             GgufValue::Bool(v)
         }
         8 => GgufValue::String(read_gguf_string(bytes, cursor)?),
         9 => {
             let elem_type = read_u32(bytes, cursor)?;
-            let count = read_u64(bytes, cursor)? as usize;
-            let mut items = Vec::with_capacity(count);
+            let count = usize::try_from(read_u64(bytes, cursor)?)
+                .context("GGUF array count overflows usize")?;
+            let remaining = bytes.len().saturating_sub(*cursor);
+            if count > remaining {
+                bail!("GGUF array count {count} exceeds remaining bytes {remaining}");
+            }
+            let mut items = Vec::with_capacity(count.min(4096));
             for _ in 0..count {
-                items.push(read_gguf_value(bytes, cursor, elem_type)?);
+                items.push(read_gguf_value(bytes, cursor, elem_type, depth + 1)?);
             }
             GgufValue::Array(items)
         }

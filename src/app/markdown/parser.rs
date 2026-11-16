@@ -277,11 +277,8 @@ fn is_table_separator(trimmed: &str) -> bool {
 }
 
 fn split_table_row(trimmed: &str) -> Vec<String> {
-    let inner = trimmed
-        .strip_prefix('|')
-        .unwrap_or(trimmed)
-        .strip_suffix('|')
-        .unwrap_or(trimmed);
+    let without_prefix = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let inner = without_prefix.strip_suffix('|').unwrap_or(without_prefix);
     inner.split('|').map(|s| s.trim().to_owned()).collect()
 }
 

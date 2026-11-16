@@ -1,5 +1,5 @@
 use crate::{
-    app::email_html::{
+    email_html::{
         decode_html_entities, format_email_body_html, format_email_datetime,
         format_plain_text_email_html, html_to_plain_text, is_html_email, parse_contact,
         parse_email_participants, repair_text_encoding, sanitize_html_email,
@@ -260,7 +260,10 @@ fn repairs_mojibake_and_c1_controls_without_corrupting_valid_french() {
 
     // Mixed string (valid UTF-8 header + mojibake body)
     let mixed = format!("À: Équipe\n{}", utf8_as_latin1);
-    assert_eq!(repair_text_encoding(&mixed), format!("À: Équipe\n{utf8_src}"));
+    assert_eq!(
+        repair_text_encoding(&mixed),
+        format!("À: Équipe\n{utf8_src}")
+    );
 }
 
 #[test]
@@ -294,7 +297,17 @@ fn decodes_pst_bytes_across_utf8_win1252_iso8859_and_rfc2047() {
     );
 
     // ISO-8859-15 (codepage 28605): 0xA4 = €, 0xBD = œ, 0xE9 = é
-    let iso15 = [b"C".as_slice(), &[0xF4], b"t", &[0xE9], b" ", &[0xBD], b"uf 3 ", &[0xA4]].concat();
+    let iso15 = [
+        b"C".as_slice(),
+        &[0xF4],
+        b"t",
+        &[0xE9],
+        b" ",
+        &[0xBD],
+        b"uf 3 ",
+        &[0xA4],
+    ]
+    .concat();
     assert_eq!(decode_bytes(&iso15, Some(28605), false), "Côté œuf 3 €");
 
     // UTF-16LE with BOM
@@ -313,4 +326,35 @@ fn decodes_pst_bytes_across_utf8_win1252_iso8859_and_rfc2047() {
         decode_rfc2047("=?UTF-8?B?Q2Fmw6kgw6AgbOKAmcOpY29sZQ==?="),
         "Café à l’école"
     );
+}
+
+#[test]
+fn sanitizer_blocks_self_closing_script_svg_data_uri_and_preserves_angle_comparisons() {
+    let tricky = concat!(
+        r#"<p>1 < 2 and 3 > 2</p>"#,
+        r#"<script />alert('xss1');</script>"#,
+        r#"<svg onload="alert(2)"><circle /></svg>"#,
+        r#"<svg />"#,
+        r#"<img src="data:image/svg+xml;base64,PHN2Zz4=" alt="BadSVG">"#,
+        r#"<img src="data:image/webp;base64,UklGRg==" alt="GoodWebP">"#,
+        r#"<p>After SVG</p>"#,
+    );
+    let sanitized = sanitize_html_email(tricky);
+    assert!(
+        sanitized.contains("<p>1 &lt; 2 and 3 &gt; 2</p>"),
+        "{sanitized}"
+    );
+    assert!(!sanitized.contains("alert("), "{sanitized}");
+    assert!(!sanitized.contains("svg+xml"), "{sanitized}");
+    assert!(
+        sanitized.contains("data:image/webp;base64,UklGRg=="),
+        "{sanitized}"
+    );
+    assert!(sanitized.contains("<p>After SVG</p>"), "{sanitized}");
+
+    // Unclosed <script /> must not leak trailing text
+    let unclosed = r#"<p>Safe</p><script />alert('unclosed')"#;
+    let sanitized_unclosed = sanitize_html_email(unclosed);
+    assert!(sanitized_unclosed.contains("<p>Safe</p>"));
+    assert!(!sanitized_unclosed.contains("alert("));
 }

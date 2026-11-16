@@ -7,7 +7,7 @@ use crate::{
     db::Index,
     laya::LayaModel,
     llm,
-    model::{EmailRecord, LabelDefinition, LabelFilter, LabelerBackend},
+    model::{LabelDefinition, LabelFilter, LabelerBackend},
 };
 
 use super::{
@@ -82,11 +82,34 @@ impl PstRagApp {
             return AppTask::none();
         }
         let limit = self.config.batch_label_limit.max(1);
-        let batch: Vec<EmailRecord> = self.explorer_messages.iter().take(limit).cloned().collect();
+        let ids: Vec<i64> = self
+            .explorer_messages
+            .iter()
+            .take(limit)
+            .map(|m| m.id)
+            .collect();
+        let batch = match self.db_mut().and_then(|db| db.get_messages_by_ids(&ids)) {
+            Ok(records) if !records.is_empty() => records,
+            Ok(_) => {
+                self.status = self.config.language.status_labeling_no_visible().into();
+                return AppTask::none();
+            }
+            Err(error) => {
+                self.status = self
+                    .config
+                    .language
+                    .status_labeling_load_err(&format!("{error:#}"));
+                return AppTask::none();
+            }
+        };
         self.run_labeling_job(batch, self.config.labeler_backend)
     }
 
-    fn run_labeling_job(&mut self, emails: Vec<EmailRecord>, backend: LabelerBackend) -> AppTask {
+    fn run_labeling_job(
+        &mut self,
+        emails: Vec<crate::model::EmailRecord>,
+        backend: LabelerBackend,
+    ) -> AppTask {
         let db_path = self.db_path.clone();
         let config = self.config.clone();
         let laya_path = self.active_laya_gguf_path();
@@ -215,7 +238,13 @@ impl PstRagApp {
                         .iter()
                         .all(|m| m.labels.iter().any(|l| l.label == label))
             }
-            Err(_) => false,
+            Err(error) => {
+                self.status = self
+                    .config
+                    .language
+                    .status_labeling_load_err(&format!("{error:#}"));
+                return;
+            }
         };
         let assign = !all_have_label;
         let res = self

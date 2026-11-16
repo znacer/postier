@@ -397,7 +397,7 @@ pub fn fold_diacritics(s: &str) -> String {
 /// quoted replies and signatures cut off so every reply in a thread does not match the
 /// same words.
 pub fn index_body(subject: &str, raw_body: &str) -> String {
-    let plain = crate::app::email_html::html_to_plain_text(raw_body);
+    let plain = crate::email_html::html_to_plain_text(raw_body);
     let normalized = plain.replace("\r\n", "\n").replace('\r', "\n");
     let text = if is_forward(subject) {
         normalized

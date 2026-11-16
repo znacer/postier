@@ -57,11 +57,7 @@ pub fn Sheet(props: DialogRootProps) -> Element {
             open: props.open,
             default_open: props.default_open,
             on_open_change: props.on_open_change,
-            dialog::DialogContent {
-                class: None,
-                attributes: content_attributes,
-                {props.children}
-            }
+            dialog::DialogContent { class: None, attributes: content_attributes, {props.children} }
         }
     }
 }
@@ -88,7 +84,12 @@ pub fn SheetHeader(
     children: Element,
 ) -> Element {
     rsx! {
-        div { class: Styles::dx_sheet_header, "data-slot": "sheet-header", ..attributes, {children} }
+        div {
+            class: Styles::dx_sheet_header,
+            "data-slot": "sheet-header",
+            ..attributes,
+            {children}
+        }
     }
 }
 
@@ -98,7 +99,12 @@ pub fn SheetFooter(
     children: Element,
 ) -> Element {
     rsx! {
-        div { class: Styles::dx_sheet_footer, "data-slot": "sheet-footer", ..attributes, {children} }
+        div {
+            class: Styles::dx_sheet_footer,
+            "data-slot": "sheet-footer",
+            ..attributes,
+            {children}
+        }
     }
 }
 
@@ -149,7 +155,7 @@ pub fn SheetClose(
         dynamic.call(merged)
     } else {
         rsx! {
-            button { ..merged, {children} }
+            button { ..merged,{children} }
         }
     }
 }

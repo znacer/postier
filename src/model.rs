@@ -130,7 +130,7 @@ pub struct EmailRecord {
 
 impl EmailRecord {
     pub fn excerpt(&self, max_chars: usize) -> String {
-        let plain = crate::app::email_html::html_to_plain_text(&self.body);
+        let plain = crate::email_html::html_to_plain_text(&self.body);
         let mut out = String::new();
         let trimmed = plain.trim();
         for ch in trimmed.chars().take(max_chars) {
@@ -196,7 +196,7 @@ impl SearchHit {
     }
 
     pub fn excerpt(&self, max_chars: usize) -> String {
-        let plain = crate::app::email_html::html_to_plain_text(&self.body);
+        let plain = crate::email_html::html_to_plain_text(&self.body);
         let mut out = String::new();
         for ch in plain.chars().take(max_chars) {
             out.push(ch);

@@ -1,30 +1,55 @@
 use anyhow::Result;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, params, types::Value};
+use std::collections::HashMap;
 
 use crate::model::{AssignedLabel, EmailRecord, LabelDefinition, SearchHit};
 
 use super::Index;
 
+const IN_CHUNK_SIZE: usize = 500;
+
 impl Index {
+    fn fetch_labels_for_ids(&self, ids: &[i64]) -> Result<HashMap<i64, Vec<AssignedLabel>>> {
+        let mut by_id: HashMap<i64, Vec<AssignedLabel>> = HashMap::with_capacity(ids.len());
+        if ids.is_empty() {
+            return Ok(by_id);
+        }
+        for chunk in ids.chunks(IN_CHUNK_SIZE) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let sql = format!(
+                "SELECT message_id, label, confidence, source
+                 FROM message_labels
+                 WHERE message_id IN ({placeholders})
+                 ORDER BY message_id ASC, coalesce(confidence, 1.0) DESC, label ASC"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let bind_values = chunk.iter().copied().map(Value::Integer);
+            let rows = stmt.query_map(rusqlite::params_from_iter(bind_values), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    AssignedLabel {
+                        label: row.get(1)?,
+                        confidence: row.get(2)?,
+                        source: row.get(3)?,
+                    },
+                ))
+            })?;
+            for row in rows {
+                let (message_id, assigned) = row?;
+                by_id.entry(message_id).or_default().push(assigned);
+            }
+        }
+        Ok(by_id)
+    }
+
     pub(super) fn attach_labels(&self, records: &mut [EmailRecord]) -> Result<()> {
         if records.is_empty() {
             return Ok(());
         }
-        let mut label_stmt = self.conn.prepare(
-            "SELECT label, confidence, source
-             FROM message_labels
-             WHERE message_id = ?1
-             ORDER BY coalesce(confidence, 1.0) DESC, label ASC",
-        )?;
+        let ids: Vec<i64> = records.iter().map(|r| r.id).collect();
+        let mut by_id = self.fetch_labels_for_ids(&ids)?;
         for record in records {
-            let rows = label_stmt.query_map([record.id], |row| {
-                Ok(AssignedLabel {
-                    label: row.get(0)?,
-                    confidence: row.get(1)?,
-                    source: row.get(2)?,
-                })
-            })?;
-            record.labels = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+            record.labels = by_id.remove(&record.id).unwrap_or_default();
         }
         Ok(())
     }
@@ -110,21 +135,10 @@ impl Index {
         if hits.is_empty() {
             return Ok(());
         }
-        let mut stmt = self.conn.prepare(
-            "SELECT label, confidence, source
-             FROM message_labels
-             WHERE message_id = ?1
-             ORDER BY coalesce(confidence, 1.0) DESC, label ASC",
-        )?;
+        let ids: Vec<i64> = hits.iter().map(|h| h.id).collect();
+        let by_id = self.fetch_labels_for_ids(&ids)?;
         for hit in hits {
-            let rows = stmt.query_map([hit.id], |row| {
-                Ok(AssignedLabel {
-                    label: row.get(0)?,
-                    confidence: row.get(1)?,
-                    source: row.get(2)?,
-                })
-            })?;
-            hit.labels = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+            hit.labels = by_id.get(&hit.id).cloned().unwrap_or_default();
         }
         Ok(())
     }
@@ -137,8 +151,9 @@ impl Index {
         )?;
         {
             let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO message_labels(message_id, label, confidence, source)
-                 VALUES(?1, ?2, ?3, ?4)",
+                "INSERT INTO message_labels(message_id, label, confidence, source)
+                 VALUES(?1, ?2, ?3, ?4)
+                 ON CONFLICT(message_id, label) DO NOTHING",
             )?;
             for item in labels {
                 stmt.execute(params![

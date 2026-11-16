@@ -71,3 +71,16 @@ fn parses_inline_bold_italic_code_strikethrough_and_links() {
         url: "mail://42".into(),
     }));
 }
+
+#[test]
+fn parses_table_row_missing_trailing_pipe_without_empty_leading_cell() {
+    let md = "| Item | Status\n| --- | ---\n| Budget | Approved";
+    let blocks = parse_markdown(md);
+    assert!(matches!(
+        &blocks[0],
+        MdBlock::Table { headers, rows }
+            if headers == &vec!["Item".to_string(), "Status".to_string()]
+            && rows.len() == 1
+            && rows[0] == vec!["Budget".to_string(), "Approved".to_string()]
+    ));
+}

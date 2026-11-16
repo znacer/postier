@@ -2,7 +2,7 @@ mod labels;
 pub mod query;
 mod search;
 
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, types::Value};
@@ -106,29 +106,59 @@ impl Index {
                PRIMARY KEY(message_id, label)
              );
              CREATE INDEX IF NOT EXISTS message_labels_label ON message_labels(label);
-             CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id);",
+             CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id);
+             CREATE TABLE IF NOT EXISTS app_meta (
+               key TEXT PRIMARY KEY,
+               value TEXT NOT NULL
+             );",
         )?;
         migrate(&mut conn)?;
 
-        let source_count: u64 =
-            conn.query_row("SELECT count(*) FROM indexed_sources", [], |r| r.get(0))?;
-        if source_count == 0 {
+        let seeded_sources: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_meta WHERE key = 'sources_backfilled'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if seeded_sources.is_none() {
+            let source_count: u64 =
+                conn.query_row("SELECT count(*) FROM indexed_sources", [], |r| r.get(0))?;
+            if source_count == 0 {
+                conn.execute(
+                    "INSERT OR IGNORE INTO indexed_sources(source_key, display_name, enabled)
+                     SELECT DISTINCT source_key, source_key, 1 FROM messages",
+                    [],
+                )?;
+            }
             conn.execute(
-                "INSERT OR IGNORE INTO indexed_sources(source_key, display_name, enabled)
-                 SELECT DISTINCT source_key, source_key, 1 FROM messages",
+                "INSERT OR REPLACE INTO app_meta(key, value) VALUES('sources_backfilled', '1')",
                 [],
             )?;
         }
 
-        let label_count: u64 =
-            conn.query_row("SELECT count(*) FROM label_definitions", [], |r| r.get(0))?;
-        if label_count == 0 {
-            for def in default_label_definitions() {
-                conn.execute(
-                    "INSERT OR IGNORE INTO label_definitions(name, description, color) VALUES(?1, ?2, ?3)",
-                    params![def.name, def.description, def.color],
-                )?;
+        let seeded_labels: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_meta WHERE key = 'default_labels_seeded'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if seeded_labels.is_none() {
+            let label_count: u64 =
+                conn.query_row("SELECT count(*) FROM label_definitions", [], |r| r.get(0))?;
+            if label_count == 0 {
+                for def in default_label_definitions() {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO label_definitions(name, description, color) VALUES(?1, ?2, ?3)",
+                        params![def.name, def.description, def.color],
+                    )?;
+                }
             }
+            conn.execute(
+                "INSERT OR REPLACE INTO app_meta(key, value) VALUES('default_labels_seeded', '1')",
+                [],
+            )?;
         }
 
         Ok(Self { conn })
@@ -153,37 +183,29 @@ impl Index {
                  (source_key,message_id,conversation_id,folder,subject,sender,recipients,sent_at,body,attachment_names,content_hash,body_text,stems)
                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             )?;
+            let mut last_source_key: Option<&str> = None;
             for email in emails {
-                let display_name = Path::new(&email.source_key)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or(&email.source_key);
-                source_stmt.execute(params![email.source_key, display_name])?;
+                if last_source_key != Some(email.source_key.as_str()) {
+                    let display_name = Path::new(&email.source_key)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(&email.source_key);
+                    source_stmt.execute(params![email.source_key, display_name])?;
+                    last_source_key = Some(email.source_key.as_str());
+                }
                 let mut hash = Sha256::new();
-                hash.update(email.message_id.as_bytes());
-                hash.update(email.subject.as_bytes());
-                hash.update(email.sender.as_bytes());
-                hash.update(email.sent_at.as_deref().unwrap_or_default().as_bytes());
-                hash.update(email.body.as_bytes());
-                let base_digest = format!("{:x}", hash.finalize());
-                let existing_source: Option<String> = tx
-                    .query_row(
-                        "SELECT source_key FROM messages WHERE content_hash=?1",
-                        [&base_digest],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                let digest = if existing_source
-                    .as_deref()
-                    .is_some_and(|source| source != email.source_key)
-                {
-                    let mut source_hash = Sha256::new();
-                    source_hash.update(base_digest.as_bytes());
-                    source_hash.update(email.source_key.as_bytes());
-                    format!("{:x}", source_hash.finalize())
-                } else {
-                    base_digest
-                };
+                for field in [
+                    email.source_key.as_str(),
+                    email.message_id.as_str(),
+                    email.subject.as_str(),
+                    email.sender.as_str(),
+                    email.sent_at.as_deref().unwrap_or_default(),
+                    email.body.as_str(),
+                ] {
+                    hash.update((field.len() as u64).to_le_bytes());
+                    hash.update(field.as_bytes());
+                }
+                let digest = format!("{:x}", hash.finalize());
                 let body_text = text::index_body(&email.subject, &email.body);
                 let stems = text::index_stems(&email.subject, &body_text);
                 added += stmt.execute(params![
@@ -222,15 +244,47 @@ impl Index {
     }
 
     pub fn get_messages_by_ids(&self, ids: &[i64]) -> Result<Vec<EmailRecord>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut by_id = HashMap::with_capacity(ids.len());
+        for chunk in ids.chunks(500) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let sql = format!(
+                "SELECT m.id, m.source_key, m.message_id, m.conversation_id, m.folder,
+                        m.subject, m.sender, m.recipients, m.sent_at, m.body, m.attachment_names
+                 FROM messages m WHERE m.id IN ({placeholders})"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let bind_values = chunk.iter().copied().map(Value::Integer);
+            let rows = stmt.query_map(rusqlite::params_from_iter(bind_values), map_email_record)?;
+            for row in rows {
+                let record = row?;
+                by_id.insert(record.id, record);
+            }
+        }
         let mut out = Vec::with_capacity(ids.len());
         for &id in ids {
-            if let Some(record) = self.get_message(id)? {
+            if let Some(record) = by_id.remove(&id) {
                 out.push(record);
             }
         }
+        self.attach_labels(&mut out)?;
         Ok(out)
     }
 
+    pub fn list_message_summaries(
+        &self,
+        scope: &MailScope,
+        label_filter: &LabelFilter,
+        query: &str,
+        sort: MailSort,
+        limit: usize,
+    ) -> Result<Vec<EmailRecord>> {
+        self.list_messages_inner(scope, label_filter, query, sort, limit, false)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn list_messages(
         &self,
         scope: &MailScope,
@@ -238,6 +292,18 @@ impl Index {
         query: &str,
         sort: MailSort,
         limit: usize,
+    ) -> Result<Vec<EmailRecord>> {
+        self.list_messages_inner(scope, label_filter, query, sort, limit, true)
+    }
+
+    fn list_messages_inner(
+        &self,
+        scope: &MailScope,
+        label_filter: &LabelFilter,
+        query: &str,
+        sort: MailSort,
+        limit: usize,
+        include_body: bool,
     ) -> Result<Vec<EmailRecord>> {
         let parsed = query::parse_query(query);
         let fts_query = parsed.fts_all().unwrap_or_default();
@@ -250,23 +316,24 @@ impl Index {
 
         let mut sql = String::new();
         let mut bind_values: Vec<Value> = Vec::new();
+        let body_col = if include_body { "m.body" } else { "''" };
 
         if fts_query.is_empty() {
-            sql.push_str(
+            sql.push_str(&format!(
                 "SELECT m.id, m.source_key, m.message_id, m.conversation_id, m.folder,
-                        m.subject, m.sender, m.recipients, m.sent_at, m.body, m.attachment_names
+                        m.subject, m.sender, m.recipients, m.sent_at, {body_col}, m.attachment_names
                  FROM messages m
                  JOIN indexed_sources s ON s.source_key = m.source_key
                  WHERE s.enabled = 1
                    AND NOT EXISTS (
                      SELECT 1 FROM source_folder_settings sf
                      WHERE sf.source_key = m.source_key AND sf.folder = m.folder AND sf.enabled = 0
-                   )",
-            );
+                   )"
+            ));
         } else {
-            sql.push_str(
+            sql.push_str(&format!(
                 "SELECT m.id, m.source_key, m.message_id, m.conversation_id, m.folder,
-                        m.subject, m.sender, m.recipients, m.sent_at, m.body, m.attachment_names
+                        m.subject, m.sender, m.recipients, m.sent_at, {body_col}, m.attachment_names
                  FROM messages_fts f
                  JOIN messages m ON m.id = f.rowid
                  JOIN indexed_sources s ON s.source_key = m.source_key
@@ -275,8 +342,8 @@ impl Index {
                    AND NOT EXISTS (
                      SELECT 1 FROM source_folder_settings sf
                      WHERE sf.source_key = m.source_key AND sf.folder = m.folder AND sf.enabled = 0
-                   )",
-            );
+                   )"
+            ));
             bind_values.push(Value::Text(fts_query.clone()));
         }
 

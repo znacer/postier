@@ -283,3 +283,93 @@ fn search_populates_rich_metadata_labels_and_expands_threads() {
             .any(|h| h.attachment_names == "backup_checksums.txt")
     );
 }
+
+#[test]
+fn set_message_labels_preserves_manual_labels_even_on_name_collision() {
+    let mut db = Index::open(Path::new(":memory:")).unwrap();
+    db.index_batch(&[Email {
+        subject: "Urgent review".into(),
+        body: "Please check".into(),
+        ..Default::default()
+    }])
+    .unwrap();
+    let msgs = db
+        .list_messages(
+            &MailScope::AllMessages,
+            &LabelFilter::Any,
+            "",
+            MailSort::DateDesc,
+            10,
+        )
+        .unwrap();
+    let id = msgs[0].id;
+
+    assert!(db.toggle_manual_label(id, "Urgent").unwrap());
+    db.set_message_labels(
+        id,
+        &[
+            AssignedLabel {
+                label: "Urgent".into(),
+                confidence: Some(0.95),
+                source: "laya-packaged".into(),
+            },
+            AssignedLabel {
+                label: "FYI".into(),
+                confidence: Some(0.60),
+                source: "laya-packaged".into(),
+            },
+        ],
+    )
+    .unwrap();
+
+    let labels = db.get_message_labels(id).unwrap();
+    let urgent = labels.iter().find(|l| l.label == "Urgent").unwrap();
+    assert_eq!(urgent.source, "manual");
+    assert_eq!(urgent.confidence, None);
+    assert!(labels.iter().any(|l| l.label == "FYI"));
+}
+
+#[test]
+fn deleted_default_labels_stay_deleted_across_reopen() {
+    let dir = std::env::temp_dir().join(format!("postier_db_meta_{}", std::process::id()));
+    let db_path = dir.join("test.sqlite");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    {
+        let mut db = Index::open(&db_path).unwrap();
+        let defs = db.label_definitions().unwrap();
+        assert!(!defs.is_empty());
+        for def in defs {
+            db.remove_label_definition(&def.name).unwrap();
+        }
+        assert!(db.label_definitions().unwrap().is_empty());
+    }
+
+    {
+        let db = Index::open(&db_path).unwrap();
+        assert!(db.label_definitions().unwrap().is_empty());
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dedup_hash_is_source_scoped_after_removing_earlier_source() {
+    let mut db = Index::open(Path::new(":memory:")).unwrap();
+    let first = Email {
+        source_key: "/archives/a.pst".into(),
+        message_id: "same-id".into(),
+        subject: "Shared".into(),
+        body: "Identical content".into(),
+        ..Default::default()
+    };
+    let second = Email {
+        source_key: "/archives/b.pst".into(),
+        ..first.clone()
+    };
+    assert_eq!(db.index_batch(&[first, second.clone()]).unwrap(), 2);
+    assert_eq!(db.remove_source("/archives/a.pst").unwrap(), 1);
+    // Re-indexing b.pst after removing a.pst must still deduplicate cleanly to 0 new rows.
+    assert_eq!(db.index_batch(&[second]).unwrap(), 0);
+    assert_eq!(db.count().unwrap(), 1);
+}

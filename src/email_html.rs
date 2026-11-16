@@ -1,7 +1,16 @@
 //! HTML email sanitization, plain-text-to-HTML formatting, HTML-to-text extraction,
 //! participant (`From`, `To`, `Cc`) parsing, and localized date/time formatting.
 
+use std::cell::RefCell;
+
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Timelike};
+use html5ever::{
+    tendril::StrTendril,
+    tokenizer::{
+        BufferQueue, Tag, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
+        states::RawKind,
+    },
+};
 
 use crate::i18n::Language;
 
@@ -216,6 +225,8 @@ pub fn parse_email_participants(sender: &str, recipients: &str, body: &str) -> P
             }
         } else if let Some(cc_rest) = strip_cc_prefix(trimmed) {
             cc_segments.push(cc_rest);
+        } else if is_bcc_line(trimmed) {
+            // Keep Bcc separate from displayed To recipients.
         } else {
             to_segments.push(strip_to_prefix(trimmed));
         }
@@ -259,6 +270,14 @@ fn strip_to_prefix(s: &str) -> &str {
         }
     }
     trimmed
+}
+
+fn is_bcc_line(s: &str) -> bool {
+    let lower = s.trim().to_ascii_lowercase();
+    lower.starts_with("bcc:")
+        || lower.starts_with("bcc :")
+        || lower.starts_with("cci:")
+        || lower.starts_with("cci :")
 }
 
 fn strip_cc_prefix(s: &str) -> Option<&str> {
@@ -516,60 +535,19 @@ pub fn format_email_body_html(raw: &str) -> String {
 /// If the input is already plain text, returns it unchanged.
 pub fn html_to_plain_text(raw: &str) -> String {
     let repaired = repair_text_encoding(raw);
-    let raw = repaired.as_str();
-    if !is_html_email(raw) {
+    if !is_html_email(repaired.as_str()) {
         return repaired;
     }
 
-    let cleaned = strip_ignored_blocks(raw);
-    let mut out = String::with_capacity(cleaned.len());
-    let mut chars = cleaned.chars().peekable();
+    let sink = PlainTextSink {
+        out: RefCell::new(String::with_capacity(repaired.len())),
+        skip_stack: RefCell::new(Vec::new()),
+    };
+    let out_raw = run_html_tokenizer(repaired.as_str(), sink);
 
-    while let Some(ch) = chars.next() {
-        if ch == '<' {
-            let mut tag_content = String::new();
-            for next_ch in chars.by_ref() {
-                if next_ch == '>' {
-                    break;
-                }
-                tag_content.push(next_ch);
-            }
-            let tag_name = extract_tag_name(&tag_content);
-            let is_closing = tag_content.trim_start().starts_with('/');
-            match tag_name.as_str() {
-                "br" => out.push('\n'),
-                "hr" if !is_closing => {
-                    if !out.ends_with('\n') {
-                        out.push('\n');
-                    }
-                    out.push_str("---\n");
-                }
-                "li" if !is_closing => {
-                    if !out.ends_with('\n') && !out.is_empty() {
-                        out.push('\n');
-                    }
-                    out.push_str("- ");
-                }
-                "p" | "div" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "blockquote"
-                | "li" | "table" | "ul" | "ol" => {
-                    if !out.ends_with('\n') && !out.is_empty() {
-                        out.push('\n');
-                    }
-                }
-                "td" | "th" if is_closing => {
-                    out.push('\t');
-                }
-                _ => {}
-            }
-        } else {
-            out.push(ch);
-        }
-    }
-
-    let decoded = decode_html_entities(&out);
     let mut lines_out = Vec::new();
     let mut empty_run = 0usize;
-    for line in decoded.lines() {
+    for line in out_raw.lines() {
         let trimmed_end = line.trim_end();
         if trimmed_end.trim().is_empty() {
             empty_run += 1;
@@ -590,184 +568,231 @@ pub fn html_to_plain_text(raw: &str) -> String {
 /// Sanitizes raw HTML email markup so it is safe and readable inside the application's dark theme.
 pub fn sanitize_html_email(raw: &str) -> String {
     let repaired = repair_text_encoding(raw);
-    let without_blocks = strip_ignored_blocks(&repaired);
-    let body_slice = extract_body_inner(&without_blocks);
+    let sink = SanitizerSink {
+        out: RefCell::new(String::with_capacity(repaired.len())),
+        skip_stack: RefCell::new(Vec::new()),
+    };
+    run_html_tokenizer(repaired.as_str(), sink)
+        .trim()
+        .to_string()
+}
 
-    let mut out = String::with_capacity(body_slice.len());
-    let mut chars = body_slice.chars().peekable();
+trait FinishSink: TokenSink {
+    fn finish(self) -> String;
+}
 
-    while let Some(ch) = chars.next() {
-        if ch == '<' {
-            let mut raw_tag = String::new();
-            let mut in_quote: Option<char> = None;
-            for next_ch in chars.by_ref() {
-                if let Some(q) = in_quote {
-                    if next_ch == q {
-                        in_quote = None;
+fn run_html_tokenizer<S: FinishSink>(input: &str, sink: S) -> String {
+    let queue = BufferQueue::default();
+    queue.push_back(StrTendril::from(input));
+    let tokenizer = Tokenizer::new(sink, TokenizerOpts::default());
+    let _ = tokenizer.feed(&queue);
+    tokenizer.end();
+    tokenizer.sink.finish()
+}
+
+fn handle_ignored_tag(
+    skip_stack: &mut Vec<&'static str>,
+    kind: TagKind,
+    tag_name: &str,
+    self_closing: bool,
+) -> (bool, TokenSinkResult<()>) {
+    match kind {
+        TagKind::StartTag => {
+            if tag_name == "body" {
+                if let Some(pos) = skip_stack.iter().rposition(|&t| t == "head") {
+                    skip_stack.truncate(pos);
+                }
+                return (!skip_stack.is_empty(), TokenSinkResult::Continue);
+            }
+            if let Some((canonical, raw_kind)) = raw_content_tag(tag_name) {
+                skip_stack.push(canonical);
+                return (true, TokenSinkResult::RawData(raw_kind));
+            }
+            if let Some(canonical) = ignored_container_tag(tag_name) {
+                if !(self_closing && matches!(canonical, "svg" | "math" | "xml" | "head")) {
+                    skip_stack.push(canonical);
+                }
+                return (true, TokenSinkResult::Continue);
+            }
+            if matches!(
+                tag_name,
+                "embed" | "param" | "source" | "track" | "wbr" | "meta" | "link" | "base" | "area"
+            ) {
+                return (true, TokenSinkResult::Continue);
+            }
+        }
+        TagKind::EndTag => {
+            if let Some(canonical) = raw_content_tag(tag_name)
+                .map(|(c, _)| c)
+                .or_else(|| ignored_container_tag(tag_name))
+            {
+                if let Some(pos) = skip_stack.iter().rposition(|&t| t == canonical) {
+                    skip_stack.truncate(pos);
+                }
+                return (true, TokenSinkResult::Continue);
+            }
+        }
+    }
+    (!skip_stack.is_empty(), TokenSinkResult::Continue)
+}
+
+fn raw_content_tag(name: &str) -> Option<(&'static str, RawKind)> {
+    match name {
+        "script" => Some(("script", RawKind::ScriptData)),
+        "style" => Some(("style", RawKind::Rawtext)),
+        "iframe" => Some(("iframe", RawKind::Rawtext)),
+        "noscript" => Some(("noscript", RawKind::Rawtext)),
+        "xmp" => Some(("xmp", RawKind::Rawtext)),
+        "noembed" => Some(("noembed", RawKind::Rawtext)),
+        "noframes" => Some(("noframes", RawKind::Rawtext)),
+        "title" => Some(("title", RawKind::Rcdata)),
+        "textarea" => Some(("textarea", RawKind::Rcdata)),
+        _ => None,
+    }
+}
+
+fn ignored_container_tag(name: &str) -> Option<&'static str> {
+    match name {
+        "head" => Some("head"),
+        "object" => Some("object"),
+        "applet" => Some("applet"),
+        "xml" => Some("xml"),
+        "svg" => Some("svg"),
+        "template" => Some("template"),
+        "math" => Some("math"),
+        _ => None,
+    }
+}
+
+struct PlainTextSink {
+    out: RefCell<String>,
+    skip_stack: RefCell<Vec<&'static str>>,
+}
+
+impl FinishSink for PlainTextSink {
+    fn finish(self) -> String {
+        self.out.into_inner()
+    }
+}
+
+impl TokenSink for PlainTextSink {
+    type Handle = ();
+
+    fn process_token(&self, token: Token, _line_number: u64) -> TokenSinkResult<Self::Handle> {
+        match token {
+            Token::TagToken(tag) => {
+                let tag_name = tag.name.as_ref();
+                let mut skip = self.skip_stack.borrow_mut();
+                let (ignored, result) =
+                    handle_ignored_tag(&mut skip, tag.kind, tag_name, tag.self_closing);
+                if ignored {
+                    return result;
+                }
+                let is_closing = tag.kind == TagKind::EndTag;
+                let mut out = self.out.borrow_mut();
+                match tag_name {
+                    "br" => out.push('\n'),
+                    "hr" if !is_closing => {
+                        if !out.ends_with('\n') && !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str("---\n");
                     }
-                    raw_tag.push(next_ch);
-                } else if next_ch == '"' || next_ch == '\'' {
-                    in_quote = Some(next_ch);
-                    raw_tag.push(next_ch);
-                } else if next_ch == '>' {
-                    break;
-                } else {
-                    raw_tag.push(next_ch);
+                    "li" if !is_closing => {
+                        if !out.ends_with('\n') && !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str("- ");
+                    }
+                    "p" | "div" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "blockquote"
+                    | "li" | "table" | "ul" | "ol" => {
+                        if !out.ends_with('\n') && !out.is_empty() {
+                            out.push('\n');
+                        }
+                    }
+                    "td" | "th" if is_closing => {
+                        out.push('\t');
+                    }
+                    _ => {}
                 }
+                TokenSinkResult::Continue
             }
-            out.push_str(&sanitize_tag(&raw_tag));
-        } else {
-            out.push(ch);
-        }
-    }
-
-    out.trim().to_string()
-}
-
-fn strip_ignored_blocks(input: &str) -> String {
-    let mut result = strip_html_comments(input);
-    for tag in [
-        "script", "style", "head", "title", "iframe", "object", "embed", "applet", "xml", "svg",
-    ] {
-        result = remove_element_with_content(&result, tag);
-    }
-    result
-}
-
-fn strip_html_comments(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut rest = input;
-    while let Some(start) = rest.find("<!--") {
-        out.push_str(&rest[..start]);
-        let after_start = &rest[start + 4..];
-        if let Some(end) = after_start.find("-->") {
-            rest = &after_start[end + 3..];
-        } else {
-            return out;
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-fn remove_element_with_content(input: &str, tag_lower: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut idx = 0;
-    let bytes = input.as_bytes();
-    let open_pat = format!("<{tag_lower}");
-    let close_pat = format!("</{tag_lower}");
-
-    while idx < input.len() {
-        let rem = &input[idx..];
-        let rem_lower = rem.to_ascii_lowercase();
-        let Some(rel_open) = rem_lower.find(&open_pat) else {
-            out.push_str(rem);
-            break;
-        };
-
-        out.push_str(&rem[..rel_open]);
-        let tag_start = idx + rel_open;
-        let after_name_idx = tag_start + open_pat.len();
-
-        // Ensure it's actually this tag and not a prefix of another tag (e.g., <header vs <head)
-        if after_name_idx < bytes.len() {
-            let next_b = bytes[after_name_idx];
-            if next_b.is_ascii_alphanumeric() || next_b == b'-' || next_b == b':' {
-                out.push_str(&input[tag_start..after_name_idx]);
-                idx = after_name_idx;
-                continue;
-            }
-        }
-
-        let after_open = &input[after_name_idx..];
-        // Check if self-closing `<tag ... />`
-        if let Some(gt_pos) = after_open.find('>') {
-            let open_tag_body = &after_open[..gt_pos];
-            if open_tag_body.trim_end().ends_with('/') {
-                idx = after_name_idx + gt_pos + 1;
-                continue;
-            }
-            let content_start = after_name_idx + gt_pos + 1;
-            let content_rem_lower = input[content_start..].to_ascii_lowercase();
-            if let Some(rel_close) = content_rem_lower.find(&close_pat) {
-                let close_start = content_start + rel_close;
-                if let Some(close_gt) = input[close_start..].find('>') {
-                    idx = close_start + close_gt + 1;
-                    continue;
+            Token::CharacterTokens(text) => {
+                if self.skip_stack.borrow().is_empty() {
+                    self.out.borrow_mut().push_str(&text);
                 }
+                TokenSinkResult::Continue
             }
-            // Unclosed ignored block: drop to end
-            break;
-        } else {
-            break;
+            Token::NullCharacterToken
+            | Token::CommentToken(_)
+            | Token::DoctypeToken(_)
+            | Token::EOFToken
+            | Token::ParseError(_) => TokenSinkResult::Continue,
         }
     }
-    out
 }
 
-fn extract_body_inner(input: &str) -> &str {
-    let lower = input.to_ascii_lowercase();
-    let start = if let Some(body_pos) = lower.find("<body") {
-        let after_body = body_pos + 5;
-        if input
-            .as_bytes()
-            .get(after_body)
-            .is_none_or(|b| !b.is_ascii_alphanumeric())
-        {
-            input[after_body..]
-                .find('>')
-                .map(|gt| after_body + gt + 1)
-                .unwrap_or(0)
-        } else {
-            0
+struct SanitizerSink {
+    out: RefCell<String>,
+    skip_stack: RefCell<Vec<&'static str>>,
+}
+
+impl FinishSink for SanitizerSink {
+    fn finish(self) -> String {
+        self.out.into_inner()
+    }
+}
+
+impl TokenSink for SanitizerSink {
+    type Handle = ();
+
+    fn process_token(&self, token: Token, _line_number: u64) -> TokenSinkResult<Self::Handle> {
+        match token {
+            Token::TagToken(tag) => {
+                let tag_name = tag.name.as_ref();
+                let mut skip = self.skip_stack.borrow_mut();
+                let (ignored, result) =
+                    handle_ignored_tag(&mut skip, tag.kind, tag_name, tag.self_closing);
+                if ignored {
+                    return result;
+                }
+                let sanitized = sanitize_tag(&tag);
+                if !sanitized.is_empty() {
+                    self.out.borrow_mut().push_str(&sanitized);
+                }
+                TokenSinkResult::Continue
+            }
+            Token::CharacterTokens(text) => {
+                if self.skip_stack.borrow().is_empty() {
+                    let mut out = self.out.borrow_mut();
+                    for ch in text.chars() {
+                        match ch {
+                            '&' => out.push_str("&amp;"),
+                            '<' => out.push_str("&lt;"),
+                            '>' => out.push_str("&gt;"),
+                            _ => out.push(ch),
+                        }
+                    }
+                }
+                TokenSinkResult::Continue
+            }
+            Token::NullCharacterToken
+            | Token::CommentToken(_)
+            | Token::DoctypeToken(_)
+            | Token::EOFToken
+            | Token::ParseError(_) => TokenSinkResult::Continue,
         }
-    } else {
-        0
-    };
-
-    let rem = &input[start..];
-    let rem_lower = rem.to_ascii_lowercase();
-    if let Some(end_pos) = rem_lower.rfind("</body") {
-        &rem[..end_pos]
-    } else {
-        rem
     }
 }
 
-fn extract_tag_name(raw_tag: &str) -> String {
-    let trimmed = raw_tag.trim().trim_start_matches('/').trim_start();
-    trimmed
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == ':' || *c == '-')
-        .collect::<String>()
-        .to_ascii_lowercase()
-}
-
-fn sanitize_tag(raw_tag: &str) -> String {
-    let trimmed = raw_tag.trim();
-    if trimmed.is_empty() || trimmed.starts_with('!') || trimmed.starts_with('?') {
-        return String::new();
-    }
-
-    let is_closing = trimmed.starts_with('/');
-    let inner = if is_closing {
-        trimmed[1..].trim_start()
-    } else {
-        trimmed
-    };
-
-    let tag_name: String = inner
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == ':' || *c == '-')
-        .collect::<String>()
-        .to_ascii_lowercase();
-
+fn sanitize_tag(tag: &Tag) -> String {
+    let tag_name = tag.name.as_ref();
     if tag_name.is_empty() || tag_name.contains(':') {
         // Strip XML/Office namespace tags such as <o:p>, <v:shape>, <w:WordDocument>
         return String::new();
     }
 
-    let mapped_tag = match tag_name.as_str() {
+    let mapped_tag = match tag_name {
         "font" => "span",
         "center" => "div",
         other => other,
@@ -829,15 +854,18 @@ fn sanitize_tag(raw_tag: &str) -> String {
         return String::new();
     }
 
-    if is_closing {
+    if tag.kind == TagKind::EndTag {
         if matches!(mapped_tag, "br" | "hr" | "img") {
             return String::new();
         }
         return format!("</{mapped_tag}>");
     }
 
-    let attr_str = inner[tag_name.len()..].trim().trim_end_matches('/').trim();
-    let attrs = parse_html_attributes(attr_str);
+    let attrs: Vec<(&str, &str)> = tag
+        .attrs
+        .iter()
+        .map(|a| (a.name.local.as_ref(), a.value.as_ref()))
+        .collect();
 
     if mapped_tag == "img" {
         return sanitize_img_tag(&attrs);
@@ -856,7 +884,7 @@ fn sanitize_tag(raw_tag: &str) -> String {
     if mapped_tag == "a" {
         if let Some(href) = attrs
             .iter()
-            .find(|(k, _)| k == "href")
+            .find(|(k, _)| *k == "href")
             .map(|(_, v)| v.trim())
             && is_safe_href(href)
         {
@@ -869,11 +897,11 @@ fn sanitize_tag(raw_tag: &str) -> String {
         clean_attrs.push("class=\"email-quote\"".to_string());
     } else if matches!(mapped_tag, "td" | "th") {
         for (k, v) in &attrs {
-            if matches!(k.as_str(), "colspan" | "rowspan")
-                && v.chars().all(|c| c.is_ascii_digit())
-                && !v.is_empty()
-            {
-                clean_attrs.push(format!("{k}=\"{v}\""));
+            if matches!(*k, "colspan" | "rowspan") {
+                let v = v.trim();
+                if !v.is_empty() && v.chars().all(|c| c.is_ascii_digit()) {
+                    clean_attrs.push(format!("{k}=\"{v}\""));
+                }
             }
         }
     }
@@ -882,7 +910,7 @@ fn sanitize_tag(raw_tag: &str) -> String {
     if tag_name == "center" {
         style_rules.push("text-align: center".to_string());
     }
-    if let Some((_, raw_style)) = attrs.iter().find(|(k, _)| k == "style") {
+    if let Some((_, raw_style)) = attrs.iter().find(|(k, _)| *k == "style") {
         let sanitized_style = sanitize_inline_style(raw_style);
         if !sanitized_style.is_empty() {
             style_rules.push(sanitized_style);
@@ -902,25 +930,25 @@ fn sanitize_tag(raw_tag: &str) -> String {
     }
 }
 
-fn sanitize_img_tag(attrs: &[(String, String)]) -> String {
+fn sanitize_img_tag(attrs: &[(&str, &str)]) -> String {
     let src = attrs
         .iter()
-        .find(|(k, _)| k == "src")
+        .find(|(k, _)| *k == "src")
         .map(|(_, v)| v.trim())
         .unwrap_or("");
     let alt = attrs
         .iter()
-        .find(|(k, _)| k == "alt")
+        .find(|(k, _)| *k == "alt")
         .map(|(_, v)| v.trim())
         .unwrap_or("");
     let width = attrs
         .iter()
-        .find(|(k, _)| k == "width")
+        .find(|(k, _)| *k == "width")
         .map(|(_, v)| v.trim())
         .unwrap_or("");
     let height = attrs
         .iter()
-        .find(|(k, _)| k == "height")
+        .find(|(k, _)| *k == "height")
         .map(|(_, v)| v.trim())
         .unwrap_or("");
 
@@ -943,9 +971,25 @@ fn sanitize_img_tag(attrs: &[(String, String)]) -> String {
         );
     }
 
-    // Only allow self-contained inline `data:image/` URIs; external `http(s)://` images are
-    // blocked so opening an email in the WebView never makes automatic outbound network requests.
-    if src_lower.starts_with("data:image/") {
+    // Only allow safe raster inline `data:image/` URIs (explicitly excludes SVG).
+    // External `http(s)://` images remain blocked so opening an email in the WebView
+    // never triggers automatic outbound network requests.
+    let is_safe_raster_data_uri = [
+        "data:image/png;",
+        "data:image/png,",
+        "data:image/jpeg;",
+        "data:image/jpeg,",
+        "data:image/jpg;",
+        "data:image/jpg,",
+        "data:image/gif;",
+        "data:image/gif,",
+        "data:image/webp;",
+        "data:image/webp,",
+    ]
+    .iter()
+    .any(|prefix| src_lower.starts_with(prefix));
+
+    if is_safe_raster_data_uri {
         let mut img_attrs = vec![
             format!("src=\"{}\"", escape_html_attr(src)),
             "class=\"email-inline-img\"".to_string(),
@@ -982,9 +1026,12 @@ fn sanitize_inline_style(raw_style: &str) -> String {
         let val_clean = val.trim();
         let val_lower = val_clean.to_ascii_lowercase();
 
-        if val_lower.contains("url(")
+        if val_clean.is_empty()
+            || val_lower.contains("url(")
             || val_lower.contains("expression(")
             || val_lower.contains("javascript:")
+            || val_lower.contains("-moz-binding")
+            || val_clean.contains(['\"', '\'', '<', '>', '{', '}'])
         {
             continue;
         }
@@ -1003,63 +1050,6 @@ fn sanitize_inline_style(raw_style: &str) -> String {
         }
     }
     allowed.join("; ")
-}
-
-fn parse_html_attributes(attr_str: &str) -> Vec<(String, String)> {
-    let mut attrs = Vec::new();
-    let mut chars = attr_str.chars().peekable();
-
-    while chars.peek().is_some() {
-        while chars.peek().is_some_and(|c| c.is_whitespace()) {
-            chars.next();
-        }
-        let mut name = String::new();
-        while let Some(&c) = chars.peek() {
-            if c == '=' || c.is_whitespace() || c == '/' || c == '>' {
-                break;
-            }
-            name.push(c.to_ascii_lowercase());
-            chars.next();
-        }
-        if name.is_empty() {
-            chars.next();
-            continue;
-        }
-        while chars.peek().is_some_and(|c| c.is_whitespace()) {
-            chars.next();
-        }
-        if chars.peek() != Some(&'=') {
-            attrs.push((name, String::new()));
-            continue;
-        }
-        chars.next(); // consume '='
-        while chars.peek().is_some_and(|c| c.is_whitespace()) {
-            chars.next();
-        }
-        let mut value = String::new();
-        if let Some(&quote) = chars.peek()
-            && (quote == '"' || quote == '\'')
-        {
-            chars.next();
-            for c in chars.by_ref() {
-                if c == quote {
-                    break;
-                }
-                value.push(c);
-            }
-        } else {
-            while let Some(&c) = chars.peek() {
-                if c.is_whitespace() || c == '>' {
-                    break;
-                }
-                value.push(c);
-                chars.next();
-            }
-        }
-        attrs.push((name, decode_html_entities(&value)));
-    }
-
-    attrs
 }
 
 /// Converts a plain-text email body into rich semantic HTML with structured reply headers,
@@ -1527,6 +1517,7 @@ fn push_escaped_char(out: &mut String, ch: char) {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn decode_html_entities(input: &str) -> String {
     if !input.contains('&') {
         return input.to_string();
@@ -1553,6 +1544,7 @@ pub fn decode_html_entities(input: &str) -> String {
     out
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn resolve_html_entity(entity: &str) -> Option<String> {
     if let Some(hex) = entity
         .strip_prefix("#x")
@@ -1696,6 +1688,7 @@ fn resolve_html_entity(entity: &str) -> Option<String> {
     Some(ch.to_string())
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn decode_numeric_entity(code: u32) -> Option<char> {
     if code == 0 {
         return None;
