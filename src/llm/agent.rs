@@ -5,7 +5,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    future::IntoFuture,
     path::Path,
     sync::{
         Arc, Mutex,
@@ -16,7 +15,11 @@ use std::{
 
 use anyhow::{Context, Result};
 use rig::{
-    completion::{Prompt, PromptError},
+    agent::{
+        AgentHook, CompletionCallAction, CompletionCallEvent, HookContext, RequestPatch,
+        ToolResultAction, ToolResultEvent,
+    },
+    completion::PromptError,
     prelude::*,
     providers::openai,
     tool::PortableTool,
@@ -25,8 +28,13 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::{
-    ChatTurn, LlmConfig, agent_system_prompt, build_context, build_http_client, clean_email_body,
-    debug_log, endpoint_for_log, openai_base_url, to_rig_history, validate_endpoint,
+    ChatTurn, LlmConfig, PromptDensity, agent_system_prompt_for_density,
+    budget::{
+        cap_output_tokens, estimate_message_tokens, estimate_tokens, estimate_tool_def_tokens,
+        trim_rig_history_for_completion, truncate_to_token_budget,
+    },
+    build_context, build_http_client, clean_email_body, debug_log, endpoint_for_log,
+    openai_base_url, to_rig_history, validate_endpoint,
 };
 use crate::{
     db::{
@@ -127,12 +135,15 @@ impl Evidence {
 struct Shared {
     db: Mutex<Index>,
     language: Language,
+    prompt_density: PromptDensity,
     default_limit: usize,
     max_search_results: usize,
     snippet_chars: usize,
     read_email_max_chars: usize,
     thread_max_messages: usize,
     thread_total_chars: usize,
+    stats_max_groups: usize,
+    hit_recipients_max_chars: usize,
     evidence: Mutex<Evidence>,
     trace: Mutex<Vec<String>>,
     progress: ProgressFn,
@@ -158,6 +169,76 @@ impl Shared {
     }
 }
 
+struct TokenBudgetHook {
+    window_tokens: Option<usize>,
+    input_budget_tokens: usize,
+    history_budget_tokens: usize,
+    overhead_tokens: usize,
+    single_tool_result_max_tokens: usize,
+}
+
+impl AgentHook for TokenBudgetHook {
+    async fn on_completion_call(
+        &self,
+        _ctx: &HookContext,
+        event: CompletionCallEvent<'_>,
+    ) -> CompletionCallAction {
+        let Some(window) = self.window_tokens else {
+            return CompletionCallAction::continue_run();
+        };
+
+        let (patched_history, history_changed) = trim_rig_history_for_completion(
+            event.history,
+            event.prompt,
+            self.input_budget_tokens,
+            self.overhead_tokens,
+            self.history_budget_tokens,
+        );
+
+        let effective_history = if history_changed {
+            patched_history.as_slice()
+        } else {
+            event.history
+        };
+        let prompt_tokens = estimate_message_tokens(event.prompt);
+        let history_tokens: usize = effective_history.iter().map(estimate_message_tokens).sum();
+        let total_input = self.overhead_tokens + prompt_tokens + history_tokens;
+        let max_output = cap_output_tokens(window, total_input, 4096, 64);
+
+        let mut patch = RequestPatch::new().max_tokens(max_output as u64);
+        if history_changed {
+            debug_log(format_args!(
+                "compacted agent history on turn {} ({} -> {} messages; est_input={total_input}/{window}, max_tokens={max_output})",
+                event.turn,
+                event.history.len(),
+                patched_history.len()
+            ));
+            patch = patch.history(patched_history);
+        }
+        CompletionCallAction::patch(patch)
+    }
+
+    async fn on_tool_result(
+        &self,
+        _ctx: &HookContext,
+        event: ToolResultEvent<'_>,
+    ) -> ToolResultAction {
+        if self.window_tokens.is_none() {
+            return ToolResultAction::keep();
+        }
+        let rendered = event.presentation.render();
+        if estimate_tokens(&rendered) <= self.single_tool_result_max_tokens {
+            return ToolResultAction::keep();
+        }
+        let truncated = truncate_to_token_budget(
+            &rendered,
+            self.single_tool_result_max_tokens,
+            "\n... [tool output truncated to fit token limit]",
+        );
+        ToolResultAction::rewrite(truncated)
+    }
+}
+
 #[derive(Debug)]
 pub struct ToolFailure(String);
 
@@ -175,36 +256,85 @@ impl From<anyhow::Error> for ToolFailure {
     }
 }
 
-fn filter_properties() -> Map<String, Value> {
+fn filter_properties(density: PromptDensity) -> Map<String, Value> {
     let mut props = Map::new();
-    props.insert(
-        "from".into(),
-        json!({"type": "string", "description": "Sender name or address (substring match), e.g. \"alice\" or \"@acme.com\"."}),
-    );
-    props.insert(
-        "to".into(),
-        json!({"type": "string", "description": "Recipient (To/Cc) name or address (substring match)."}),
-    );
-    props.insert(
-        "date_from".into(),
-        json!({"type": "string", "description": "Inclusive start date: YYYY, YYYY-MM or YYYY-MM-DD."}),
-    );
-    props.insert(
-        "date_to".into(),
-        json!({"type": "string", "description": "Inclusive end date: YYYY, YYYY-MM or YYYY-MM-DD."}),
-    );
-    props.insert(
-        "folder".into(),
-        json!({"type": "string", "description": "Folder path substring, e.g. \"Sent\" or \"Projects/Atlas\"."}),
-    );
-    props.insert(
-        "label".into(),
-        json!({"type": "string", "description": "Label name or substring, e.g. \"Urgent\" or \"Decision\"."}),
-    );
-    props.insert(
-        "has_attachment".into(),
-        json!({"type": "boolean", "description": "Only emails with (true) or without (false) attachments."}),
-    );
+    match density {
+        PromptDensity::Full => {
+            props.insert(
+                "from".into(),
+                json!({"type": "string", "description": "Sender name or address (substring match), e.g. \"alice\" or \"@acme.com\"."}),
+            );
+            props.insert(
+                "to".into(),
+                json!({"type": "string", "description": "Recipient (To/Cc) name or address (substring match)."}),
+            );
+            props.insert(
+                "date_from".into(),
+                json!({"type": "string", "description": "Inclusive start date: YYYY, YYYY-MM or YYYY-MM-DD."}),
+            );
+            props.insert(
+                "date_to".into(),
+                json!({"type": "string", "description": "Inclusive end date: YYYY, YYYY-MM or YYYY-MM-DD."}),
+            );
+            props.insert(
+                "folder".into(),
+                json!({"type": "string", "description": "Folder path substring, e.g. \"Sent\" or \"Projects/Atlas\"."}),
+            );
+            props.insert(
+                "label".into(),
+                json!({"type": "string", "description": "Label name or substring, e.g. \"Urgent\" or \"Decision\"."}),
+            );
+            props.insert(
+                "has_attachment".into(),
+                json!({"type": "boolean", "description": "Only emails with (true) or without (false) attachments."}),
+            );
+        }
+        PromptDensity::Compact => {
+            props.insert(
+                "from".into(),
+                json!({"type": "string", "description": "Sender substring."}),
+            );
+            props.insert(
+                "to".into(),
+                json!({"type": "string", "description": "Recipient substring."}),
+            );
+            props.insert(
+                "date_from".into(),
+                json!({"type": "string", "description": "Start YYYY(-MM-DD)."}),
+            );
+            props.insert(
+                "date_to".into(),
+                json!({"type": "string", "description": "End YYYY(-MM-DD)."}),
+            );
+            props.insert(
+                "folder".into(),
+                json!({"type": "string", "description": "Folder substring."}),
+            );
+            props.insert(
+                "label".into(),
+                json!({"type": "string", "description": "Label substring."}),
+            );
+            props.insert(
+                "has_attachment".into(),
+                json!({"type": "boolean", "description": "Has attachments."}),
+            );
+        }
+        PromptDensity::UltraCompact => {
+            props.insert("from".into(), json!({"type": "string"}));
+            props.insert("to".into(), json!({"type": "string"}));
+            props.insert(
+                "date_from".into(),
+                json!({"type": "string", "description": "YYYY-MM-DD"}),
+            );
+            props.insert(
+                "date_to".into(),
+                json!({"type": "string", "description": "YYYY-MM-DD"}),
+            );
+            props.insert("folder".into(), json!({"type": "string"}));
+            props.insert("label".into(), json!({"type": "string"}));
+            props.insert("has_attachment".into(), json!({"type": "boolean"}));
+        }
+    }
     props
 }
 
@@ -237,25 +367,40 @@ fn describe_query(parsed: &ParsedQuery) -> String {
     }
 }
 
-fn hit_header(hit: &SearchHit) -> Map<String, Value> {
+fn hit_header(hit: &SearchHit, shared: &Shared) -> Map<String, Value> {
     let mut obj = Map::new();
     obj.insert("id".into(), json!(hit.id));
     obj.insert(
         "date".into(),
         json!(hit.sent_at.as_deref().unwrap_or("unknown")),
     );
+    let subject = match shared.prompt_density {
+        PromptDensity::Full => hit.subject.clone(),
+        PromptDensity::Compact | PromptDensity::UltraCompact => {
+            text::truncate_chars(&hit.subject, 160)
+        }
+    };
     obj.insert("from".into(), json!(hit.sender));
     obj.insert(
         "to".into(),
-        json!(text::truncate_chars(&hit.recipients, 200)),
+        json!(text::truncate_chars(
+            &hit.recipients,
+            shared.hit_recipients_max_chars
+        )),
     );
-    obj.insert("subject".into(), json!(hit.subject));
+    obj.insert("subject".into(), json!(subject));
     obj.insert("folder".into(), json!(hit.folder));
     if !hit.conversation_id.trim().is_empty() {
         obj.insert("thread_id".into(), json!(hit.conversation_id.trim()));
     }
     if !hit.attachment_names.trim().is_empty() {
-        obj.insert("attachments".into(), json!(hit.attachment_names.trim()));
+        let attachments = match shared.prompt_density {
+            PromptDensity::Full => hit.attachment_names.trim().to_string(),
+            PromptDensity::Compact | PromptDensity::UltraCompact => {
+                text::truncate_chars(hit.attachment_names.trim(), 140)
+            }
+        };
+        obj.insert("attachments".into(), json!(attachments));
     }
     if !hit.labels.is_empty() {
         let labels: Vec<&str> = hit.labels.iter().map(|l| l.label.as_str()).collect();
@@ -322,13 +467,15 @@ impl SearchEmailsTool {
         let results: Vec<Value> = hits
             .iter()
             .map(|hit| {
-                let mut obj = hit_header(hit);
+                let mut obj = hit_header(hit, shared);
                 if hit.thread_matches > 1 {
                     obj.insert("thread_matches".into(), json!(hit.thread_matches));
-                    obj.insert(
-                        "thread_hint".into(),
-                        json!("Multiple matching messages in this thread; call get_thread to read the full conversation."),
-                    );
+                    if shared.prompt_density == PromptDensity::Full {
+                        obj.insert(
+                            "thread_hint".into(),
+                            json!("Multiple matching messages in this thread; call get_thread to read the full conversation."),
+                        );
+                    }
                 }
                 obj.insert(
                     "snippet".into(),
@@ -377,26 +524,59 @@ impl PortableTool for SearchEmailsTool {
     type Error = ToolFailure;
 
     fn description(&self) -> String {
-        "Keyword (BM25) search over the email archive, with optional filters. Matching is \
-         lexical with stemming (English and French): use 2-5 distinctive keywords rather than \
-         sentences, and use the filters for people, dates, folders, labels and attachments. \
-         Use \"double quotes\" in the query for exact phrases. Returns one result per thread \
-         (best match), each with an id, metadata, thread_id and a snippet of the matching \
-         passages. Snippets are partial: use read_email or get_thread before relying on an \
-         email."
-            .into()
+        match self.0.prompt_density {
+            PromptDensity::Full => {
+                "Keyword (BM25) search over the email archive, with optional filters. Matching is \
+                 lexical with stemming (English and French): use 2-5 distinctive keywords rather than \
+                 sentences, and use the filters for people, dates, folders, labels and attachments. \
+                 Use \"double quotes\" in the query for exact phrases. Returns one result per thread \
+                 (best match), each with an id, metadata, thread_id and a snippet of the matching \
+                 passages. Snippets are partial: use read_email or get_thread before relying on an \
+                 email."
+                    .into()
+            }
+            PromptDensity::Compact => {
+                "BM25 keyword search over emails (EN/FR stemming) with filters. Use 2-5 keywords; \
+                 returns 1 hit per thread with id, thread_id and snippet."
+                    .into()
+            }
+            PromptDensity::UltraCompact => {
+                "Search emails by keywords/filters. Returns id, thread_id, snippet.".into()
+            }
+        }
     }
 
     fn parameters(&self) -> Value {
-        let mut props = filter_properties();
-        props.insert(
-            "query".into(),
-            json!({"type": "string", "description": "Keywords to search for. May be empty when filters are given (returns the most recent matching emails)."}),
-        );
-        props.insert(
-            "limit".into(),
-            json!({"type": "integer", "description": format!("Maximum number of threads to return (default {}, max {}).", self.0.default_limit, self.0.max_search_results)}),
-        );
+        let mut props = filter_properties(self.0.prompt_density);
+        match self.0.prompt_density {
+            PromptDensity::Full => {
+                props.insert(
+                    "query".into(),
+                    json!({"type": "string", "description": "Keywords to search for. May be empty when filters are given (returns the most recent matching emails)."}),
+                );
+                props.insert(
+                    "limit".into(),
+                    json!({"type": "integer", "description": format!("Maximum number of threads to return (default {}, max {}).", self.0.default_limit, self.0.max_search_results)}),
+                );
+            }
+            PromptDensity::Compact => {
+                props.insert(
+                    "query".into(),
+                    json!({"type": "string", "description": "Keywords (optional if filters given)."}),
+                );
+                props.insert(
+                    "limit".into(),
+                    json!({"type": "integer", "description": format!("Max threads (default {}, max {}).", self.0.default_limit, self.0.max_search_results)}),
+                );
+            }
+            PromptDensity::UltraCompact => {
+                props.insert("query".into(), json!({"type": "string"}));
+                props.insert(
+                    "limit".into(),
+                    json!({"type": "integer", "description": format!("Max {}", self.0.max_search_results)}),
+                );
+            }
+        }
         json!({"type": "object", "properties": props})
     }
 
@@ -426,7 +606,7 @@ impl ReadEmailTool {
             shared.record(format!("read_email #{id} → not found"));
             return Ok(json!({"error": format!("No email with id {id}.")}));
         };
-        let mut obj = hit_header(&hit);
+        let mut obj = hit_header(&hit, shared);
         obj.insert(
             "body".into(),
             json!(text::truncate_chars(
@@ -447,15 +627,25 @@ impl PortableTool for ReadEmailTool {
     type Error = ToolFailure;
 
     fn description(&self) -> String {
-        "Full content and metadata of one email, by id (as returned by search_emails or cited \
-         as [#id] in earlier answers)."
-            .into()
+        match self.0.prompt_density {
+            PromptDensity::Full => {
+                "Full content and metadata of one email, by id (as returned by search_emails or cited \
+                 as [#id] in earlier answers)."
+                    .into()
+            }
+            PromptDensity::Compact => "Read email body and metadata by id.".into(),
+            PromptDensity::UltraCompact => "Read email by id.".into(),
+        }
     }
 
     fn parameters(&self) -> Value {
+        let id_schema = match self.0.prompt_density {
+            PromptDensity::Full => json!({"type": "integer", "description": "Email id."}),
+            PromptDensity::Compact | PromptDensity::UltraCompact => json!({"type": "integer"}),
+        };
         json!({
             "type": "object",
-            "properties": {"id": {"type": "integer", "description": "Email id."}},
+            "properties": {"id": id_schema},
             "required": ["id"]
         })
     }
@@ -507,11 +697,36 @@ impl GetThreadTool {
             shared.record(format!("get_thread {thread_id} → not found"));
             return Ok(json!({"error": format!("No thread with id {thread_id}.")}));
         }
-        let per_message = (shared.thread_total_chars / messages.len()).max(400);
-        let items: Vec<Value> = messages
+
+        // Fit messages into `shared.thread_total_chars`: reserve ~140 chars per message header
+        // and keep the root + most recent messages if budget is too tight for all of them.
+        const HEADER_OVERHEAD_PER_MSG: usize = 140;
+        const MIN_BODY_PER_MSG: usize = 100;
+        let max_affordable_msgs =
+            (shared.thread_total_chars / (HEADER_OVERHEAD_PER_MSG + MIN_BODY_PER_MSG)).max(1);
+        let kept_messages: Vec<SearchHit> = if messages.len() <= max_affordable_msgs {
+            messages
+        } else if max_affordable_msgs == 1 {
+            vec![messages.last().expect("non-empty").clone()]
+        } else {
+            let mut slice = Vec::with_capacity(max_affordable_msgs);
+            slice.push(messages[0].clone());
+            let tail_start = messages.len() - (max_affordable_msgs - 1);
+            slice.extend(messages[tail_start..].iter().cloned());
+            slice
+        };
+
+        let header_budget = kept_messages.len().saturating_mul(HEADER_OVERHEAD_PER_MSG);
+        let body_budget = shared
+            .thread_total_chars
+            .saturating_sub(header_budget)
+            .max(kept_messages.len().saturating_mul(MIN_BODY_PER_MSG));
+        let per_message = (body_budget / kept_messages.len()).max(MIN_BODY_PER_MSG);
+
+        let items: Vec<Value> = kept_messages
             .iter()
             .map(|hit| {
-                let mut obj = hit_header(hit);
+                let mut obj = hit_header(hit, shared);
                 obj.remove("thread_id");
                 obj.insert(
                     "body".into(),
@@ -525,10 +740,10 @@ impl GetThreadTool {
             "total_messages": total,
             "messages": items,
         });
-        if total > messages.len() {
+        if total > kept_messages.len() {
             out["note"] = json!(format!(
-                "Long thread: showing the first message and the {} most recent. Quoted replies are removed from bodies; use read_email for a full message.",
-                messages.len() - 1
+                "Showing the first message and the {} most recent (of {total}) within token budget. Use read_email for a full message.",
+                kept_messages.len().saturating_sub(1)
             ));
         }
         shared.record(format!(
@@ -540,7 +755,7 @@ impl GetThreadTool {
             },
             total
         ));
-        shared.remember(messages, true);
+        shared.remember(kept_messages, true);
         Ok(out)
     }
 }
@@ -552,21 +767,38 @@ impl PortableTool for GetThreadTool {
     type Error = ToolFailure;
 
     fn description(&self) -> String {
-        "All messages of a conversation in chronological order (quoted replies removed). Pass \
-         the thread_id from search results, or an email_id to open that email's thread. Use it \
-         for discussions, decisions and status questions: the latest messages usually hold the \
-         outcome."
-            .into()
+        match self.0.prompt_density {
+            PromptDensity::Full => {
+                "All messages of a conversation in chronological order (quoted replies removed). Pass \
+                 the thread_id from search results, or an email_id to open that email's thread. Use it \
+                 for discussions, decisions and status questions: the latest messages usually hold the \
+                 outcome."
+                    .into()
+            }
+            PromptDensity::Compact => {
+                "Read chronological messages of a thread by `thread_id` or `email_id`.".into()
+            }
+            PromptDensity::UltraCompact => "Get thread messages by thread_id or email_id.".into(),
+        }
     }
 
     fn parameters(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "thread_id": {"type": "string", "description": "Thread id from search results."},
-                "email_id": {"type": "integer", "description": "Any email id of the thread (alternative to thread_id)."}
-            }
-        })
+        match self.0.prompt_density {
+            PromptDensity::Full => json!({
+                "type": "object",
+                "properties": {
+                    "thread_id": {"type": "string", "description": "Thread id from search results."},
+                    "email_id": {"type": "integer", "description": "Any email id of the thread (alternative to thread_id)."}
+                }
+            }),
+            PromptDensity::Compact | PromptDensity::UltraCompact => json!({
+                "type": "object",
+                "properties": {
+                    "thread_id": {"type": "string"},
+                    "email_id": {"type": "integer"}
+                }
+            }),
+        }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -596,12 +828,13 @@ impl EmailStatsTool {
         let shared = &self.0;
         let mut parsed = query::parse_query(args.query.as_deref().unwrap_or(""));
         parsed.filters = args.filters.or(parsed.filters);
+        let default_top = 20.min(shared.stats_max_groups);
         let top = args
             .top
             .as_ref()
             .and_then(parse_id)
-            .map(|n| n.clamp(1, 100) as usize)
-            .unwrap_or(20);
+            .map(|n| n.clamp(1, shared.stats_max_groups as i64) as usize)
+            .unwrap_or(default_top);
         let described = describe_query(&parsed);
         let group_name = args
             .group_by
@@ -635,27 +868,51 @@ impl PortableTool for EmailStatsTool {
     type Error = ToolFailure;
 
     fn description(&self) -> String {
-        "Counts emails matching keywords and/or filters, optionally grouped by sender, month, \
-         year, folder or label (top groups by count; months/years in chronological order). \
-         Use it for how-many / who-most / when / trend questions instead of counting search \
-         results. Keyword matching here requires all keywords."
-            .into()
+        match self.0.prompt_density {
+            PromptDensity::Full => {
+                "Counts emails matching keywords and/or filters, optionally grouped by sender, month, \
+                 year, folder or label (top groups by count; months/years in chronological order). \
+                 Use it for how-many / who-most / when / trend questions instead of counting search \
+                 results. Keyword matching here requires all keywords."
+                    .into()
+            }
+            PromptDensity::Compact => {
+                "Count matching emails, optionally grouped by sender, month, year, folder or label."
+                    .into()
+            }
+            PromptDensity::UltraCompact => "Count/group matching emails.".into(),
+        }
     }
 
     fn parameters(&self) -> Value {
-        let mut props = filter_properties();
-        props.insert(
-            "group_by".into(),
-            json!({"type": "string", "enum": ["sender", "month", "year", "folder", "label"], "description": "Optional grouping."}),
-        );
-        props.insert(
-            "query".into(),
-            json!({"type": "string", "description": "Optional keywords (all must match)."}),
-        );
-        props.insert(
-            "top".into(),
-            json!({"type": "integer", "description": "Maximum number of groups (default 20, max 100)."}),
-        );
+        let mut props = filter_properties(self.0.prompt_density);
+        match self.0.prompt_density {
+            PromptDensity::Full => {
+                props.insert(
+                    "group_by".into(),
+                    json!({"type": "string", "enum": ["sender", "month", "year", "folder", "label"], "description": "Optional grouping."}),
+                );
+                props.insert(
+                    "query".into(),
+                    json!({"type": "string", "description": "Optional keywords (all must match)."}),
+                );
+                props.insert(
+                    "top".into(),
+                    json!({"type": "integer", "description": format!("Maximum number of groups (default {}, max {}).", 20.min(self.0.stats_max_groups), self.0.stats_max_groups)}),
+                );
+            }
+            PromptDensity::Compact | PromptDensity::UltraCompact => {
+                props.insert(
+                    "group_by".into(),
+                    json!({"type": "string", "enum": ["sender", "month", "year", "folder", "label"]}),
+                );
+                props.insert("query".into(), json!({"type": "string"}));
+                props.insert(
+                    "top".into(),
+                    json!({"type": "integer", "description": format!("Max {}", self.0.stats_max_groups)}),
+                );
+            }
+        }
         json!({"type": "object", "properties": props})
     }
 
@@ -794,6 +1051,7 @@ pub fn run_agent(
     cancel: Arc<AtomicBool>,
 ) -> Result<AgentAnswer> {
     let language = config.language;
+    let budgets = config.effective_budgets();
     let db = Index::open(db_path)?;
     let configured_labels: Vec<String> = db
         .label_definitions()
@@ -804,12 +1062,15 @@ pub fn run_agent(
     let shared = Arc::new(Shared {
         db: Mutex::new(db),
         language,
-        default_limit: config.context_email_limit(),
-        max_search_results: config.max_search_results_limit(),
-        snippet_chars: config.snippet_chars_limit(),
-        read_email_max_chars: config.read_email_max_chars_limit(),
-        thread_max_messages: config.thread_max_messages_limit(),
-        thread_total_chars: config.thread_total_chars_limit(),
+        prompt_density: budgets.prompt_density,
+        default_limit: budgets.default_search_results,
+        max_search_results: budgets.max_search_results,
+        snippet_chars: budgets.snippet_chars,
+        read_email_max_chars: budgets.read_email_max_chars,
+        thread_max_messages: budgets.thread_max_messages,
+        thread_total_chars: budgets.thread_total_chars,
+        stats_max_groups: budgets.stats_max_groups,
+        hit_recipients_max_chars: budgets.hit_recipients_max_chars,
         evidence: Mutex::new(Evidence::default()),
         trace: Mutex::new(Vec::new()),
         progress: progress.clone(),
@@ -830,53 +1091,98 @@ pub fn run_agent(
     let labels_note = if configured_labels.is_empty() {
         String::new()
     } else {
+        let joined = configured_labels.join(", ");
+        let capped = match budgets.prompt_density {
+            PromptDensity::Full => joined,
+            PromptDensity::Compact => text::truncate_chars(&joined, 160),
+            PromptDensity::UltraCompact => text::truncate_chars(&joined, 90),
+        };
         match language {
-            Language::English => format!(
-                "\nConfigured archive labels: {}.",
-                configured_labels.join(", ")
-            ),
-            Language::French => format!(
-                "\nÉtiquettes configurées dans l'archive : {}.",
-                configured_labels.join(", ")
-            ),
+            Language::English => format!("\nLabels: {capped}."),
+            Language::French => format!("\nÉtiquettes : {capped}."),
         }
     };
     let preamble = format!(
-        "{}\n\n{} {}.{}",
-        agent_system_prompt(language),
+        "{}\n\n{} {}.{labels_note}",
+        agent_system_prompt_for_density(language, budgets.prompt_density),
         language.agent_today_label(),
         chrono::Local::now().format("%Y-%m-%d (%A)"),
-        labels_note
     );
+
+    let search_tool = SearchEmailsTool(shared.clone());
+    let read_tool = ReadEmailTool(shared.clone());
+    let thread_tool = GetThreadTool(shared.clone());
+    let stats_tool = EmailStatsTool(shared.clone());
+
+    let overhead_tokens = estimate_tokens(&preamble)
+        + 12
+        + estimate_tool_def_tokens(
+            <SearchEmailsTool as PortableTool>::NAME,
+            &PortableTool::description(&search_tool),
+            &PortableTool::parameters(&search_tool),
+        )
+        + estimate_tool_def_tokens(
+            <ReadEmailTool as PortableTool>::NAME,
+            &PortableTool::description(&read_tool),
+            &PortableTool::parameters(&read_tool),
+        )
+        + estimate_tool_def_tokens(
+            <GetThreadTool as PortableTool>::NAME,
+            &PortableTool::description(&thread_tool),
+            &PortableTool::parameters(&thread_tool),
+        )
+        + estimate_tool_def_tokens(
+            <EmailStatsTool as PortableTool>::NAME,
+            &PortableTool::description(&stats_tool),
+            &PortableTool::parameters(&stats_tool),
+        );
+
     let agent = client
         .agent(&config.model)
         .preamble(&preamble)
-        .tool(SearchEmailsTool(shared.clone()))
-        .tool(ReadEmailTool(shared.clone()))
-        .tool(GetThreadTool(shared.clone()))
-        .tool(EmailStatsTool(shared.clone()))
+        .tool(search_tool)
+        .tool(read_tool)
+        .tool(thread_tool)
+        .tool(stats_tool)
         .build();
 
-    let max_turns = config.agent_max_turns_limit();
+    let max_turns = budgets.max_turns;
+    let working_tokens = budgets
+        .input_budget_tokens
+        .saturating_sub(overhead_tokens)
+        .max(160);
+    let single_tool_result_max_tokens = (working_tokens * 65 / 100).max(160);
+
+    let hook = TokenBudgetHook {
+        window_tokens: budgets.max_context_tokens,
+        input_budget_tokens: budgets.input_budget_tokens,
+        history_budget_tokens: budgets.history_budget_tokens,
+        overhead_tokens,
+        single_tool_result_max_tokens,
+    };
+
     debug_log(format_args!(
-        "Agent request: POST {endpoint_for_log}; model={:?}; max_turns={max_turns}; history_turns={}; question_bytes={}",
+        "Agent request: POST {endpoint_for_log}; model={:?}; max_turns={max_turns}; history_turns={}; question_bytes={}; window_tokens={:?}; overhead_tok={overhead_tokens}",
         config.model,
         history.len(),
-        question.len()
+        question.len(),
+        budgets.max_context_tokens
     ));
     progress(language.agent_progress_thinking().to_string());
 
+    let rig_history = to_rig_history(history);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("start Rig runtime")?;
     let outcome = runtime.block_on(async {
-        let request = agent
-            .prompt(question)
-            .history(to_rig_history(history))
-            .max_turns(max_turns);
+        let runner = agent
+            .runner(question)
+            .history(rig_history)
+            .max_turns(max_turns)
+            .add_hook(hook);
         tokio::select! {
-            result = request.into_future() => Some(result),
+            result = runner.run() => Some(result),
             _ = wait_for_cancel(&cancel) => None,
         }
     });
@@ -884,7 +1190,7 @@ pub fn run_agent(
 
     let raw_answer = match outcome {
         None => anyhow::bail!("{}", language.agent_cancelled()),
-        Some(Ok(answer)) => answer,
+        Some(Ok(response)) => response.output,
         Some(Err(PromptError::MaxTurnsError { .. })) => {
             progress(language.agent_progress_finalizing().to_string());
             let hits = shared
@@ -893,7 +1199,7 @@ pub fn run_agent(
                 .unwrap_or_else(|e| e.into_inner())
                 .for_context();
             shared.record("research budget exhausted → answering with collected evidence".into());
-            let context = build_context(&hits, config.max_context_chars);
+            let context = build_context(&hits, budgets.max_context_chars);
             let prompt = format!("{question}\n\n{}", language.agent_budget_exhausted_note());
             super::ask_with_history(config, &prompt, &context, history)?
         }

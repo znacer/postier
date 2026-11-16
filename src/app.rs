@@ -834,6 +834,12 @@ impl PstRagApp {
                 }
                 AppTask::none()
             }
+            SidebarMessage::MaxContextTokensChanged(value) => {
+                if let Ok(tokens) = value.trim().parse::<usize>() {
+                    self.config.max_context_tokens = tokens;
+                }
+                AppTask::none()
+            }
             SidebarMessage::LanguageChanged(language) => {
                 self.set_language(language);
                 AppTask::none()

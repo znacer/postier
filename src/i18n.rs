@@ -408,6 +408,35 @@ impl Language {
         }
     }
 
+    pub fn max_context_tokens_label(self) -> &'static str {
+        match self {
+            Self::English => "Max LLM tokens (context window)",
+            Self::French => "Tokens LLM max (fenêtre de contexte)",
+        }
+    }
+
+    pub fn max_context_tokens_hint(
+        self,
+        effective: Option<usize>,
+        read_chars: usize,
+        search_hits: usize,
+    ) -> String {
+        match (self, effective) {
+            (Self::English, None) => {
+                "Unlimited (0) — uses raw limits without token-based scaling".into()
+            }
+            (Self::French, None) => {
+                "Illimité (0) — utilise les limites brutes sans mise à l'échelle par tokens".into()
+            }
+            (Self::English, Some(tok)) => format!(
+                "Input + output cap (≥512, 0 = unlimited). Active: {tok} tok (≤{read_chars} chars/mail, ≤{search_hits} hits)"
+            ),
+            (Self::French, Some(tok)) => format!(
+                "Plafond entrée + sortie (≥512, 0 = illimité). Actif : {tok} tok (≤{read_chars} car./mail, ≤{search_hits} rés.)"
+            ),
+        }
+    }
+
     pub fn https_required_notice(self) -> &'static str {
         match self {
             Self::English => "HTTPS required except for 127.0.0.1",

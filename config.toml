@@ -12,6 +12,11 @@ endpoint = "https://llm.internal.examples/v1/chat/completions"
 model = "private-model"
 # Default Bearer API token (leave empty to require the user to enter one in Settings).
 bearer_token = ""
+# Maximum context window (input + output tokens per request) accepted by the LLM.
+# Lower values (e.g. 1024, 2048, 4096) automatically scale prompts, conversation
+# history, tool outputs, fallback RAG context, and output reserves to fit.
+# Set to 0 to disable token-based scaling (uses raw character/result limits below).
+max_context_tokens = 16384
 # HTTP connection timeout in seconds.
 connect_timeout_secs = 15
 # HTTP request timeout in seconds (per LLM turn / request).

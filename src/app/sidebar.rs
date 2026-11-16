@@ -67,6 +67,7 @@ pub(super) enum SidebarMessage {
     RemoteEmbeddingsChanged(bool),
     EmbeddingModelChanged(String),
     ContextEmailsChanged(String),
+    MaxContextTokensChanged(String),
     LanguageChanged(crate::i18n::Language),
     ThemeChanged(bool),
 }
@@ -784,6 +785,14 @@ impl PstRagApp {
         let ctx_emails_val = self.config.context_email_limit();
         let ctx_emails_min = crate::llm::MIN_CONTEXT_EMAILS;
         let ctx_emails_max = self.config.max_search_results_limit();
+        let budgets = self.config.effective_budgets();
+        let max_tokens_lbl = tr.max_context_tokens_label();
+        let max_tokens_val = self.config.max_context_tokens;
+        let max_tokens_hint = tr.max_context_tokens_hint(
+            budgets.max_context_tokens,
+            budgets.read_email_max_chars,
+            budgets.default_search_results,
+        );
         let https_notice = tr.https_required_notice();
 
         let llm_card = card(rsx! {
@@ -912,6 +921,29 @@ impl PstRagApp {
                         }
                     }
                     span { class: "form-hint", "{ctx_emails_hint}" }
+                }
+                div {
+                    style: "display: flex; flex-direction: column; gap: 3px;",
+                    Label {
+                        html_for: "llm-max-tokens-input",
+                        style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
+                        "{max_tokens_lbl}"
+                    }
+                    Input {
+                        id: "llm-max-tokens-input",
+                        r#type: "number",
+                        min: "0",
+                        step: "256",
+                        value: "{max_tokens_val}",
+                        style: "width: 100%; font-size: 12px;",
+                        oninput: move |evt: FormEvent| SidebarMessage::MaxContextTokensChanged(evt.value()).dispatch(),
+                        onkeydown: move |evt: KeyboardEvent| {
+                            if evt.key() != Key::Escape {
+                                evt.stop_propagation();
+                            }
+                        }
+                    }
+                    span { class: "form-hint", "{max_tokens_hint}" }
                 }
                 span { class: "form-hint", "{https_notice}" }
                 {save}

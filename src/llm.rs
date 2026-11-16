@@ -1,4 +1,5 @@
 mod agent;
+mod budget;
 mod context;
 
 use std::{sync::OnceLock, time::Duration};
@@ -18,8 +19,18 @@ pub use self::agent::{ProgressFn, run_agent};
 #[cfg(test)]
 pub(crate) use self::agent::{extract_citation_ids, linkify_citations};
 #[allow(unused_imports)]
+pub use self::budget::{
+    EffectiveBudgets, MIN_CONTEXT_TOKENS, PromptDensity, estimate_tokens,
+    trim_chat_turns_to_budget, trim_rig_history_for_completion,
+};
+#[cfg(test)]
+pub(crate) use self::budget::{
+    build_judge_prompt_and_max_tokens, build_rag_request_budgets, estimate_message_tokens,
+};
+#[allow(unused_imports)]
 pub use self::context::{
-    AGENT_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT_FR, ChatTurn, agent_system_prompt, build_context,
+    AGENT_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT_FR, ChatTurn, agent_system_prompt,
+    agent_system_prompt_for_density, build_context, rag_system_prompt,
 };
 pub(crate) use self::context::{clean_email_body, strip_mail_links};
 pub use crate::i18n::Language;
@@ -42,6 +53,10 @@ pub struct LlmConfig {
     pub use_remote_embeddings: bool,
     pub embedding_model: String,
     pub bearer_token: String,
+    /// Maximum total context window (input + output tokens per request) accepted by the LLM.
+    /// `0` disables token-based scaling and uses raw configured character/result limits.
+    #[serde(alias = "max_tokens", alias = "context_window_tokens")]
+    pub max_context_tokens: usize,
     pub connect_timeout_secs: u64,
     pub request_timeout_secs: u64,
     pub embeddings_enabled: bool,
@@ -80,6 +95,8 @@ struct TomlLlmSection {
     endpoint: Option<String>,
     model: Option<String>,
     bearer_token: Option<String>,
+    #[serde(alias = "max_tokens", alias = "context_window_tokens")]
+    max_context_tokens: Option<usize>,
     connect_timeout_secs: Option<u64>,
     request_timeout_secs: Option<u64>,
     embeddings_enabled: Option<bool>,
@@ -131,6 +148,8 @@ struct TomlConfig {
     endpoint: Option<String>,
     model: Option<String>,
     bearer_token: Option<String>,
+    #[serde(alias = "max_tokens", alias = "context_window_tokens")]
+    max_context_tokens: Option<usize>,
     connect_timeout_secs: Option<u64>,
     request_timeout_secs: Option<u64>,
     embeddings_enabled: Option<bool>,
@@ -164,6 +183,7 @@ impl LlmConfig {
             use_remote_embeddings: false,
             embedding_model: String::new(),
             bearer_token: String::new(),
+            max_context_tokens: 16_384,
             connect_timeout_secs: 15,
             request_timeout_secs: 180,
             embeddings_enabled: EMBEDDINGS_ENABLED,
@@ -207,6 +227,11 @@ impl LlmConfig {
         apply!(endpoint, parsed.llm.endpoint, parsed.endpoint);
         apply!(model, parsed.llm.model, parsed.model);
         apply!(bearer_token, parsed.llm.bearer_token, parsed.bearer_token);
+        apply!(
+            max_context_tokens,
+            parsed.llm.max_context_tokens,
+            parsed.max_context_tokens
+        );
         apply!(
             connect_timeout_secs,
             parsed.llm.connect_timeout_secs,
@@ -311,6 +336,18 @@ impl LlmConfig {
         Ok(cfg)
     }
 
+    /// Configured total context window in tokens, or `None` when set to `0` (unlimited).
+    /// Non-zero values below `MIN_CONTEXT_TOKENS` are clamped up to `MIN_CONTEXT_TOKENS`.
+    pub fn max_context_tokens_limit(&self) -> Option<usize> {
+        (self.max_context_tokens > 0).then(|| self.max_context_tokens.max(MIN_CONTEXT_TOKENS))
+    }
+
+    /// Computes effective prompt, tool, history, RAG, and judge budgets scaled to
+    /// `max_context_tokens` (when non-zero).
+    pub fn effective_budgets(&self) -> EffectiveBudgets {
+        EffectiveBudgets::from_config(self)
+    }
+
     /// Default number of results (one per thread) returned by each agent search,
     /// clamped to a sane range.
     pub fn context_email_limit(&self) -> usize {
@@ -320,7 +357,8 @@ impl LlmConfig {
 
     /// Maximum number of results returned by a single search call, clamped to a sane range.
     pub fn max_search_results_limit(&self) -> usize {
-        self.max_search_results.clamp(MIN_CONTEXT_EMAILS, MAX_CONTEXT_EMAILS.max(500))
+        self.max_search_results
+            .clamp(MIN_CONTEXT_EMAILS, MAX_CONTEXT_EMAILS.max(500))
     }
 
     /// Maximum number of model turns per agent question.
@@ -395,7 +433,7 @@ pub(crate) fn build_http_client(url: &url::Url, config: &LlmConfig) -> Result<re
         .context("build secure HTTP client")
 }
 
-fn to_rig_history(history: &[ChatTurn]) -> Vec<rig::completion::Message> {
+pub(crate) fn to_rig_history(history: &[ChatTurn]) -> Vec<rig::completion::Message> {
     let mut rig_messages = Vec::new();
     for turn in history {
         if turn.role.eq_ignore_ascii_case("user") {
@@ -431,16 +469,20 @@ pub fn ask_with_history(
         .context("build Rig OpenAI-compatible client")?
         .completions_api();
 
-    let agent = client
-        .agent(&config.model)
-        .preamble(agent_system_prompt(config.language))
-        .context(context)
-        .build();
+    let (preamble, fitted_context, mut rig_messages, max_output) =
+        budget::build_rag_request_budgets(config, question, context, history);
 
-    let mut rig_messages = to_rig_history(history);
+    let mut builder = client
+        .agent(&config.model)
+        .preamble(preamble)
+        .context(&fitted_context);
+    if let Some(cap) = max_output {
+        builder = builder.max_tokens(cap);
+    }
+    let agent = builder.build();
 
     debug_log(format_args!(
-        "LLM request: POST {endpoint_for_log}; model={:?}; auth={}; history_turns={}; question_bytes={}; context_bytes={}",
+        "LLM request: POST {endpoint_for_log}; model={:?}; auth={}; history_turns={}; question_bytes={}; context_bytes={}; max_tokens={:?}",
         config.model,
         if config.bearer_token.is_empty() {
             "none"
@@ -449,7 +491,8 @@ pub fn ask_with_history(
         },
         rig_messages.len(),
         question.len(),
-        context.len()
+        fitted_context.len(),
+        max_output
     ));
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -490,29 +533,14 @@ pub fn judge_labels(
         .context("build Rig OpenAI-compatible client")?
         .completions_api();
 
-    let mut rubric = String::from("Available labels and criteria:\n");
-    for def in definitions {
-        rubric.push_str(&format!("- {}: {}\n", def.name, def.description));
-    }
-    let excerpt_chars = config.judge_email_excerpt_chars.max(200);
-    let prompt = format!(
-        "{rubric}\nEmail to evaluate:\nDate: {}\nFrom: {}\nTo: {}\nFolder: {}\nSubject: {}\nBody:\n{}\n\n\
-         Respond ONLY with JSON in the exact format: {{\"labels\": [{{\"label\": \"<exact label name>\", \"confidence\": 0.92}}]}} \
-         selecting 1 or 2 matching labels from the list above.",
-        email.sent_at.as_deref().unwrap_or("unknown"),
-        email.sender,
-        email.recipients,
-        email.folder,
-        email.subject,
-        email.excerpt(excerpt_chars)
-    );
+    let (preamble, prompt, max_output) =
+        budget::build_judge_prompt_and_max_tokens(config, email, definitions);
 
-    let agent = client
-        .agent(&config.model)
-        .preamble(
-            "You are an expert email classification judge. Evaluate the email strictly against the supplied label criteria and output valid JSON only.",
-        )
-        .build();
+    let mut builder = client.agent(&config.model).preamble(preamble);
+    if let Some(cap) = max_output {
+        builder = builder.max_tokens(cap);
+    }
+    let agent = builder.build();
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

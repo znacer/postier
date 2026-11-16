@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::budget::PromptDensity;
 use crate::{i18n::Language, model::SearchHit};
 
 pub const AGENT_SYSTEM_PROMPT: &str = r#"You are an expert research assistant for the user's email archive. You answer questions by investigating the archive with tools, then writing a grounded, cited answer.
@@ -56,10 +57,65 @@ Règles de réponse :
 - Si les preuves sont insuffisantes ou contradictoires, indiquez ce qui est établi, ce qui n'a pas pu être trouvé et ce que vous avez cherché.
 "#;
 
+pub const AGENT_SYSTEM_PROMPT_COMPACT: &str = r#"You research the user's email archive with tools and write concise, grounded answers.
+Rules:
+1. Always search before answering; use 2-5 keywords plus filters (`from`, `to`, `date_from`, `date_to`, `folder`, `label`). Reformulate with synonyms or EN/FR variants if empty.
+2. Read promising emails with `read_email` or full discussions with `get_thread`. Use `email_stats` for counts/rankings. Never repeat an identical search.
+3. Base every claim strictly on tool outputs. Cite email IDs inline as `[#123]`. Note dates if later emails supersede earlier ones; state clearly if evidence is missing."#;
+
+pub const AGENT_SYSTEM_PROMPT_COMPACT_FR: &str = r#"Vous explorez l'archive de courriels avec les outils pour rédiger des réponses concises et sourcées en français.
+Règles :
+1. Cherchez toujours avant de répondre : 2 à 5 mots-clés et filtres (`from`, `to`, `date_from`, `date_to`, `folder`, `label`). Reformulez (synonymes, FR/EN) si vide.
+2. Lisez les courriels clés avec `read_email` ou les fils avec `get_thread`. Utilisez `email_stats` pour compter/classer. Ne répétez pas une recherche identique.
+3. Appuyez chaque fait uniquement sur les outils. Citez avec `[#123]`. Mentionnez les dates si un message en remplace un autre ; signalez les manques."#;
+
+pub const AGENT_SYSTEM_PROMPT_ULTRA: &str = r#"Email archive assistant. Use tools (`search_emails`, `read_email`, `get_thread`, `email_stats`) before answering. Base facts strictly on tool results, cite `[#id]`, be brief."#;
+
+pub const AGENT_SYSTEM_PROMPT_ULTRA_FR: &str = r#"Assistant d'archive mail. Utilisez les outils (`search_emails`, `read_email`, `get_thread`, `email_stats`) avant de répondre en français. Fondez tout sur les résultats, citez `[#id]`, soyez bref."#;
+
+pub const RAG_SYSTEM_PROMPT: &str = r#"You answer questions strictly from the retrieved email evidence supplied below.
+- Never invent facts, names, dates, or ids.
+- Cite sources inline as [#id] matching only the supplied emails.
+- Start with a direct answer, note chronological updates if relevant, and clearly state what is missing if evidence is incomplete."#;
+
+pub const RAG_SYSTEM_PROMPT_FR: &str = r#"Vous répondez aux questions uniquement à partir des courriels fournis en contexte.
+- N'inventez aucun fait, nom, date ou identifiant.
+- Citez vos sources en ligne sous la forme [#id] uniquement pour les courriels fournis.
+- Commencez par une réponse directe en français, précisez la chronologie si utile, et indiquez ce qui manque si les preuves sont partielles."#;
+
+pub const RAG_SYSTEM_PROMPT_COMPACT: &str = r#"Answer strictly from the provided emails. Cite ids as [#id]. Be concise and state if evidence is insufficient."#;
+
+pub const RAG_SYSTEM_PROMPT_COMPACT_FR: &str = r#"Répondez en français uniquement d'après les courriels fournis. Citez avec [#id]. Soyez bref et signalez les manques."#;
+
+#[allow(dead_code)]
 pub fn agent_system_prompt(lang: Language) -> &'static str {
     match lang {
         Language::English => AGENT_SYSTEM_PROMPT,
         Language::French => AGENT_SYSTEM_PROMPT_FR,
+    }
+}
+
+pub fn agent_system_prompt_for_density(lang: Language, density: PromptDensity) -> &'static str {
+    match (lang, density) {
+        (Language::English, PromptDensity::Full) => AGENT_SYSTEM_PROMPT,
+        (Language::French, PromptDensity::Full) => AGENT_SYSTEM_PROMPT_FR,
+        (Language::English, PromptDensity::Compact) => AGENT_SYSTEM_PROMPT_COMPACT,
+        (Language::French, PromptDensity::Compact) => AGENT_SYSTEM_PROMPT_COMPACT_FR,
+        (Language::English, PromptDensity::UltraCompact) => AGENT_SYSTEM_PROMPT_ULTRA,
+        (Language::French, PromptDensity::UltraCompact) => AGENT_SYSTEM_PROMPT_ULTRA_FR,
+    }
+}
+
+pub fn rag_system_prompt(lang: Language, density: PromptDensity) -> &'static str {
+    match (lang, density) {
+        (Language::English, PromptDensity::Full) => RAG_SYSTEM_PROMPT,
+        (Language::French, PromptDensity::Full) => RAG_SYSTEM_PROMPT_FR,
+        (Language::English, PromptDensity::Compact | PromptDensity::UltraCompact) => {
+            RAG_SYSTEM_PROMPT_COMPACT
+        }
+        (Language::French, PromptDensity::Compact | PromptDensity::UltraCompact) => {
+            RAG_SYSTEM_PROMPT_COMPACT_FR
+        }
     }
 }
 
@@ -328,7 +384,7 @@ pub fn build_context(hits: &[SearchHit], max_chars: usize) -> String {
     }
 
     // 3. Multi-hit Fair Budget Allocation (water-filling across items)
-    let min_body_bytes = 250;
+    let min_body_bytes = 250.min(max_chars / 3).max(60);
     let mut count_to_include = items.len();
     while count_to_include > 1 {
         let headers_len = overview.len()

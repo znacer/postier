@@ -85,6 +85,9 @@ impl PstRagApp {
     }
 
     pub(super) fn save_credentials(&mut self) {
+        if let Some(clamped) = self.config.max_context_tokens_limit() {
+            self.config.max_context_tokens = clamped;
+        }
         self.status = match save_config(&self.storage_dir, &self.config) {
             Ok(()) => self
                 .config
@@ -279,7 +282,7 @@ impl PstRagApp {
                 idx += 1;
             }
         }
-        let history_turns = self.config.history_turns_limit();
+        let history_turns = self.config.effective_budgets().history_turns;
         let history: Vec<llm::ChatTurn> = completed_pairs
             .into_iter()
             .rev()
