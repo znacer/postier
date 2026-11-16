@@ -391,6 +391,7 @@ pub fn run() {
         .with_always_on_top(false);
     let config = Config::new()
         .with_window(window)
+        .with_custom_head(r#"<meta charset="utf-8">"#.to_string())
         .with_background_color((11, 15, 23, 255));
 
     LaunchBuilder::desktop().with_cfg(config).launch(app_root);

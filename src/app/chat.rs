@@ -22,7 +22,7 @@ use crate::{
 
 use super::{
     ChatMessage, ChatRole, DispatchMessage, PstRagApp,
-    email_html::{format_email_datetime, parse_contact},
+    email_html::{format_email_datetime, parse_contact, repair_text_encoding},
     markdown::render_markdown_blocks,
     theme::*,
 };
@@ -407,20 +407,22 @@ impl PstRagApp {
         let bright = bright_text();
         let muted_color = muted();
 
-        let subject = if hit.subject.is_empty() {
+        let repaired_subject = repair_text_encoding(&hit.subject);
+        let subject = if repaired_subject.trim().is_empty() {
             tr.no_subject().to_owned()
         } else {
-            hit.subject.clone()
+            repaired_subject
         };
         let source_name = std::path::Path::new(&hit.source_key)
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or(&hit.source_key);
         let idx_str = format!("{:02}", index + 1);
-        let sender_display = if hit.sender.trim().is_empty() {
+        let repaired_sender = repair_text_encoding(&hit.sender);
+        let sender_display = if repaired_sender.trim().is_empty() {
             tr.unknown_sender().to_owned()
         } else {
-            parse_contact(&hit.sender).display_primary().to_owned()
+            parse_contact(&repaired_sender).display_primary().to_owned()
         };
         let formatted_date = format_email_datetime(hit.sent_at.as_deref(), tr)
             .map(|dt| dt.full)

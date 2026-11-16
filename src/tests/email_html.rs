@@ -1,11 +1,12 @@
 use crate::{
     app::email_html::{
-        format_email_body_html, format_email_datetime, format_plain_text_email_html,
-        html_to_plain_text, is_html_email, parse_contact, parse_email_participants,
-        sanitize_html_email,
+        decode_html_entities, format_email_body_html, format_email_datetime,
+        format_plain_text_email_html, html_to_plain_text, is_html_email, parse_contact,
+        parse_email_participants, repair_text_encoding, sanitize_html_email,
     },
     i18n::Language,
     llm::clean_email_body,
+    pst::{decode_bytes, decode_rfc2047},
 };
 
 #[test]
@@ -221,4 +222,95 @@ fn formats_email_dates_and_times_in_french_and_english() {
     let fr_sql = fr_fn(Some(sql_ts), Language::French).expect("should format SQL");
     assert_eq!(fr_sql.date_part, "Mer. 24 déc. 2025");
     assert_eq!(fr_sql.time_part, "09:05");
+}
+
+#[test]
+fn decodes_french_html_entities_and_win1252_numeric_refs() {
+    let raw = "R&eacute;union &agrave; Paris : l&rsquo;&oelig;uvre d&rsquo;&Eacute;milie (&laquo;&nbsp;caf&eacute; &agrave; 5&nbsp;&euro;&nbsp;&raquo;) &#146;ok&#146; &#128; &#156;";
+    let decoded = decode_html_entities(raw);
+    assert_eq!(
+        decoded,
+        "Réunion à Paris : l’œuvre d’Émilie (« café à 5 € ») ’ok’ € œ"
+    );
+
+    let html = r#"<html><body><p>Bonjour &agrave; tous, r&eacute;sum&eacute; ci-joint.</p><img src="cid:doc1" alt="Pi&egrave;ce jointe"></body></html>"#;
+    let plain = html_to_plain_text(html);
+    assert_eq!(plain, "Bonjour à tous, résumé ci-joint.");
+
+    let sanitized = sanitize_html_email(html);
+    assert!(sanitized.contains("📎 Pièce jointe"));
+}
+
+#[test]
+fn repairs_mojibake_and_c1_controls_without_corrupting_valid_french() {
+    let valid_french = "Voilà l’été à Noël — Café © 2025 « Bonjour » Ça va bien ?";
+    assert_eq!(repair_text_encoding(valid_french), valid_french);
+
+    // Classic UTF-8 bytes decoded as Latin-1 (e.g. outlook-pst String8::to_string())
+    let utf8_src = "Réunion à l’école — Été € œ";
+    let utf8_as_latin1: String = utf8_src.as_bytes().iter().map(|&b| char::from(b)).collect();
+    assert_eq!(repair_text_encoding(&utf8_as_latin1), utf8_src);
+
+    // Windows-1252 bytes 0x80..=0x9F decoded as Latin-1 C1 control chars
+    let win1252_c1 = "L\u{0092}offre : 50 \u{0080} \u{0096} chef-d\u{0092}\u{009C}uvre";
+    assert_eq!(
+        repair_text_encoding(win1252_c1),
+        "L’offre : 50 € – chef-d’œuvre"
+    );
+
+    // Mixed string (valid UTF-8 header + mojibake body)
+    let mixed = format!("À: Équipe\n{}", utf8_as_latin1);
+    assert_eq!(repair_text_encoding(&mixed), format!("À: Équipe\n{utf8_src}"));
+}
+
+#[test]
+fn decodes_pst_bytes_across_utf8_win1252_iso8859_and_rfc2047() {
+    // Windows-1252 HTML body with French accents and smart quotes (0xE9, 0xE0, 0xE8, 0xE7, 0x92, 0x80)
+    let mut win1252_html = b"<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=windows-1252\"></head><body><p>R".to_vec();
+    win1252_html.extend_from_slice(&[0xE9]); // é
+    win1252_html.extend_from_slice(b"union ");
+    win1252_html.extend_from_slice(&[0xE0]); // à
+    win1252_html.extend_from_slice(b" Paris : ");
+    win1252_html.extend_from_slice(b"l");
+    win1252_html.extend_from_slice(&[0x92]); // ’
+    win1252_html.extend_from_slice(&[0xE9, 0x74, 0xE9]); // été
+    win1252_html.extend_from_slice(b" ");
+    win1252_html.extend_from_slice(&[0xE7, 0x61]); // ça
+    win1252_html.extend_from_slice(b" co");
+    win1252_html.extend_from_slice(&[0xFB]); // û
+    win1252_html.extend_from_slice(b"te 5 ");
+    win1252_html.extend_from_slice(&[0x80]); // €
+    win1252_html.extend_from_slice(b"</p></body></html>");
+
+    let decoded_html = decode_bytes(&win1252_html, Some(1252), true);
+    assert!(decoded_html.contains("Réunion à Paris : l’été ça coûte 5 €"));
+    assert!(!decoded_html.contains(char::REPLACEMENT_CHARACTER));
+
+    // UTF-8 bytes stored inside String8 even with Windows-1252 codepage
+    let utf8_bytes = "Boîte de réception — Éléments envoyés".as_bytes();
+    assert_eq!(
+        decode_bytes(utf8_bytes, Some(1252), false),
+        "Boîte de réception — Éléments envoyés"
+    );
+
+    // ISO-8859-15 (codepage 28605): 0xA4 = €, 0xBD = œ, 0xE9 = é
+    let iso15 = [b"C".as_slice(), &[0xF4], b"t", &[0xE9], b" ", &[0xBD], b"uf 3 ", &[0xA4]].concat();
+    assert_eq!(decode_bytes(&iso15, Some(28605), false), "Côté œuf 3 €");
+
+    // UTF-16LE with BOM
+    let mut utf16 = vec![0xFFu8, 0xFE];
+    for unit in "Café à Noël".encode_utf16() {
+        utf16.extend_from_slice(&unit.to_le_bytes());
+    }
+    assert_eq!(decode_bytes(&utf16, None, false), "Café à Noël");
+
+    // RFC 2047 encoded-words in subjects / headers
+    assert_eq!(
+        decode_rfc2047("Re: =?ISO-8859-1?Q?R=E9union_=E0_Paris?="),
+        "Re: Réunion à Paris"
+    );
+    assert_eq!(
+        decode_rfc2047("=?UTF-8?B?Q2Fmw6kgw6AgbOKAmcOpY29sZQ==?="),
+        "Café à l’école"
+    );
 }

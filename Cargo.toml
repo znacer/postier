@@ -8,6 +8,7 @@ license = "MIT"
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 dioxus = { version = "0.7", features = ["desktop"] }
+encoding_rs = "0.8"
 image = { version = "0.25", default-features = false, features = ["png"] }
 outlook-pst = "1.2"
 rfd = "0.15"

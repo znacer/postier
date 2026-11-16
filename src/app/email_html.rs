@@ -183,6 +183,12 @@ pub fn parse_contact_list(raw: &str) -> Vec<ContactEntry> {
 
 /// Parses `From`, `To`, and `Cc` participants from `sender`, `recipients`, and optional top-of-body headers.
 pub fn parse_email_participants(sender: &str, recipients: &str, body: &str) -> ParsedParticipants {
+    let sender = repair_text_encoding(sender);
+    let sender = sender.as_str();
+    let recipients = repair_text_encoding(recipients);
+    let recipients = recipients.as_str();
+    let body = repair_text_encoding(body);
+    let body = body.as_str();
     let from = {
         let s = sender.trim();
         if s.is_empty() {
@@ -494,7 +500,8 @@ pub fn is_html_email(raw: &str) -> bool {
 /// Formats an email body (either raw HTML or plain text) into safe, styled HTML
 /// suitable for rendering in the reading pane.
 pub fn format_email_body_html(raw: &str) -> String {
-    let trimmed = raw.trim();
+    let repaired = repair_text_encoding(raw);
+    let trimmed = repaired.trim();
     if trimmed.is_empty() {
         return String::new();
     }
@@ -508,8 +515,10 @@ pub fn format_email_body_html(raw: &str) -> String {
 /// Converts an HTML email body into clean plain text for search excerpts and LLM context.
 /// If the input is already plain text, returns it unchanged.
 pub fn html_to_plain_text(raw: &str) -> String {
+    let repaired = repair_text_encoding(raw);
+    let raw = repaired.as_str();
     if !is_html_email(raw) {
-        return raw.to_string();
+        return repaired;
     }
 
     let cleaned = strip_ignored_blocks(raw);
@@ -580,7 +589,8 @@ pub fn html_to_plain_text(raw: &str) -> String {
 
 /// Sanitizes raw HTML email markup so it is safe and readable inside the application's dark theme.
 pub fn sanitize_html_email(raw: &str) -> String {
-    let without_blocks = strip_ignored_blocks(raw);
+    let repaired = repair_text_encoding(raw);
+    let without_blocks = strip_ignored_blocks(&repaired);
     let body_slice = extract_body_inner(&without_blocks);
 
     let mut out = String::with_capacity(body_slice.len());
@@ -1055,7 +1065,8 @@ fn parse_html_attributes(attr_str: &str) -> Vec<(String, String)> {
 /// Converts a plain-text email body into rich semantic HTML with structured reply headers,
 /// nested blockquotes, lists, clickable links, signatures, and legal disclaimer styling.
 pub fn format_plain_text_email_html(raw: &str) -> String {
-    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let repaired = repair_text_encoding(raw);
+    let normalized = repaired.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = normalized.lines().map(|l| l.trim_end()).collect();
     format_plain_lines(&lines)
 }
@@ -1270,7 +1281,7 @@ fn is_reply_banner(trimmed: &str) -> bool {
     if !trimmed.starts_with("---") && !trimmed.starts_with("___") {
         return false;
     }
-    let lower = trimmed.to_ascii_lowercase();
+    let lower = trimmed.to_lowercase();
     lower.contains("original message")
         || lower.contains("message d'origine")
         || lower.contains("forwarded message")
@@ -1548,37 +1559,315 @@ fn resolve_html_entity(entity: &str) -> Option<String> {
         .or_else(|| entity.strip_prefix("#X"))
     {
         let code = u32::from_str_radix(hex, 16).ok()?;
-        let ch = if code == 160 {
-            ' '
-        } else {
-            char::from_u32(code)?
-        };
-        return Some(ch.to_string());
+        return decode_numeric_entity(code).map(|ch| ch.to_string());
     }
     if let Some(dec) = entity.strip_prefix('#') {
         let code = dec.parse::<u32>().ok()?;
-        let ch = if code == 160 {
-            ' '
+        return decode_numeric_entity(code).map(|ch| ch.to_string());
+    }
+    let ch = match entity {
+        "nbsp" | "ensp" | "emsp" | "thinsp" => " ",
+        "amp" => "&",
+        "lt" => "<",
+        "gt" => ">",
+        "quot" => "\"",
+        "apos" => "'",
+        "ndash" => "–",
+        "mdash" => "—",
+        "hellip" => "…",
+        "rsquo" | "lsquo" => "’",
+        "rdquo" | "ldquo" => "”",
+        "sbquo" => "‚",
+        "bdquo" => "„",
+        "lsaquo" => "‹",
+        "rsaquo" => "›",
+        "laquo" => "«",
+        "raquo" => "»",
+        "bull" => "•",
+        "copy" => "©",
+        "reg" => "®",
+        "trade" => "™",
+        "euro" => "€",
+        "pound" => "£",
+        "yen" => "¥",
+        "cent" => "¢",
+        "curren" => "¤",
+        "deg" => "°",
+        "ordm" => "º",
+        "ordf" => "ª",
+        "sect" => "§",
+        "para" => "¶",
+        "middot" => "·",
+        "iexcl" => "¡",
+        "iquest" => "¿",
+        "times" => "×",
+        "divide" => "÷",
+        "plusmn" => "±",
+        "sup1" => "¹",
+        "sup2" => "²",
+        "sup3" => "³",
+        "frac14" => "¼",
+        "frac12" => "½",
+        "frac34" => "¾",
+        "micro" => "µ",
+        "brvbar" => "¦",
+        "not" => "¬",
+        "macr" => "¯",
+        "acute" => "´",
+        "cedil" => "¸",
+        "uml" => "¨",
+        "dagger" => "†",
+        "Dagger" => "‡",
+        "permil" => "‰",
+        "prime" => "′",
+        "Prime" => "″",
+        "shy" | "zwnj" | "zwj" | "lrm" | "rlm" => "",
+        // Latin-1 & French accented characters
+        "Agrave" => "À",
+        "Aacute" => "Á",
+        "Acirc" => "Â",
+        "Atilde" => "Ã",
+        "Auml" => "Ä",
+        "Aring" => "Å",
+        "AElig" => "Æ",
+        "Ccedil" => "Ç",
+        "Egrave" => "È",
+        "Eacute" => "É",
+        "Ecirc" => "Ê",
+        "Euml" => "Ë",
+        "Igrave" => "Ì",
+        "Iacute" => "Í",
+        "Icirc" => "Î",
+        "Iuml" => "Ï",
+        "ETH" => "Ð",
+        "Ntilde" => "Ñ",
+        "Ograve" => "Ò",
+        "Oacute" => "Ó",
+        "Ocirc" => "Ô",
+        "Otilde" => "Õ",
+        "Ouml" => "Ö",
+        "Oslash" => "Ø",
+        "Ugrave" => "Ù",
+        "Uacute" => "Ú",
+        "Ucirc" => "Û",
+        "Uuml" => "Ü",
+        "Yacute" => "Ý",
+        "THORN" => "Þ",
+        "szlig" => "ß",
+        "agrave" => "à",
+        "aacute" => "á",
+        "acirc" => "â",
+        "atilde" => "ã",
+        "auml" => "ä",
+        "aring" => "å",
+        "aelig" => "æ",
+        "ccedil" => "ç",
+        "egrave" => "è",
+        "eacute" => "é",
+        "ecirc" => "ê",
+        "euml" => "ë",
+        "igrave" => "ì",
+        "iacute" => "í",
+        "icirc" => "î",
+        "iuml" => "ï",
+        "eth" => "ð",
+        "ntilde" => "ñ",
+        "ograve" => "ò",
+        "oacute" => "ó",
+        "ocirc" => "ô",
+        "otilde" => "õ",
+        "ouml" => "ö",
+        "oslash" => "ø",
+        "ugrave" => "ù",
+        "uacute" => "ú",
+        "ucirc" => "û",
+        "uuml" => "ü",
+        "yacute" => "ý",
+        "thorn" => "þ",
+        "yuml" => "ÿ",
+        // Latin Extended-A (French ligatures & common European characters)
+        "OElig" => "Œ",
+        "oelig" => "œ",
+        "Scaron" => "Š",
+        "scaron" => "š",
+        "Yuml" => "Ÿ",
+        _ => return None,
+    };
+    Some(ch.to_string())
+}
+
+fn decode_numeric_entity(code: u32) -> Option<char> {
+    if code == 0 {
+        return None;
+    }
+    if code == 160 {
+        return Some(' ');
+    }
+    if (0x80..=0x9F).contains(&code)
+        && let Some(ch) = win1252_c1_char(code as u8)
+    {
+        return Some(ch);
+    }
+    char::from_u32(code)
+}
+
+const WIN1252_C1: [Option<char>; 32] = [
+    Some('€'), // 0x80
+    None,      // 0x81
+    Some('‚'), // 0x82
+    Some('ƒ'), // 0x83
+    Some('„'), // 0x84
+    Some('…'), // 0x85
+    Some('†'), // 0x86
+    Some('‡'), // 0x87
+    Some('ˆ'), // 0x88
+    Some('‰'), // 0x89
+    Some('Š'), // 0x8A
+    Some('‹'), // 0x8B
+    Some('Œ'), // 0x8C
+    None,      // 0x8D
+    Some('Ž'), // 0x8E
+    None,      // 0x8F
+    None,      // 0x90
+    Some('‘'), // 0x91
+    Some('’'), // 0x92
+    Some('“'), // 0x93
+    Some('”'), // 0x94
+    Some('•'), // 0x95
+    Some('–'), // 0x96
+    Some('—'), // 0x97
+    Some('˜'), // 0x98
+    Some('™'), // 0x99
+    Some('š'), // 0x9A
+    Some('›'), // 0x9B
+    Some('œ'), // 0x9C
+    None,      // 0x9D
+    Some('ž'), // 0x9E
+    Some('Ÿ'), // 0x9F
+];
+
+fn win1252_c1_char(byte: u8) -> Option<char> {
+    (0x80..=0x9F)
+        .contains(&byte)
+        .then(|| WIN1252_C1[(byte - 0x80) as usize])
+        .flatten()
+}
+
+fn char_to_win1252_byte(ch: char) -> Option<u8> {
+    let cp = ch as u32;
+    if cp <= 0xFF {
+        return Some(cp as u8);
+    }
+    for (idx, mapped) in WIN1252_C1.iter().enumerate() {
+        if *mapped == Some(ch) {
+            return Some(0x80 + idx as u8);
+        }
+    }
+    None
+}
+
+fn map_c1_and_strip_nul(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if ch == '\0' {
+            continue;
+        }
+        let cp = ch as u32;
+        if (0x80..=0x9F).contains(&cp) {
+            if let Some(mapped) = win1252_c1_char(cp as u8) {
+                out.push(mapped);
+            }
         } else {
-            char::from_u32(code)?
-        };
-        return Some(ch.to_string());
+            out.push(ch);
+        }
     }
-    match entity {
-        "nbsp" => Some(" ".to_string()),
-        "amp" => Some("&".to_string()),
-        "lt" => Some("<".to_string()),
-        "gt" => Some(">".to_string()),
-        "quot" => Some("\"".to_string()),
-        "apos" | "#39" => Some("'".to_string()),
-        "ndash" => Some("–".to_string()),
-        "mdash" => Some("—".to_string()),
-        "hellip" => Some("…".to_string()),
-        "rsquo" | "lsquo" => Some("'".to_string()),
-        "rdquo" | "ldquo" => Some("\"".to_string()),
-        "bull" => Some("•".to_string()),
-        "copy" => Some("©".to_string()),
-        "euro" => Some("€".to_string()),
-        _ => None,
+    out
+}
+
+/// Repairs common PST/email encoding artifacts without altering valid UTF-8 text:
+/// 1. Recovers UTF-8 text that was previously decoded byte-for-byte as Latin-1 or Windows-1252
+///    (e.g., `"Ã©"` -> `"é"`, `"Ã "` -> `"à"`, `"â€™"` -> `"’"`).
+/// 2. Maps C1 control characters (`U+0080..=U+009F`) to their Windows-1252 characters (`€`, `’`, `œ`, …).
+pub fn repair_text_encoding(input: &str) -> String {
+    if input.is_ascii() && !input.contains('\0') {
+        return input.to_string();
     }
+
+    // Fast path: whole string is representable as Latin-1/Windows-1252 single bytes and
+    // forms valid UTF-8 containing multi-byte sequences.
+    let mut raw_bytes = Vec::with_capacity(input.len());
+    let mut all_single_byte = true;
+    for ch in input.chars() {
+        if ch == '\0' {
+            continue;
+        }
+        if let Some(b) = char_to_win1252_byte(ch) {
+            raw_bytes.push(b);
+        } else {
+            all_single_byte = false;
+            break;
+        }
+    }
+    if all_single_byte
+        && raw_bytes.iter().any(|&b| b >= 0x80)
+        && let Ok(recovered) = std::str::from_utf8(&raw_bytes)
+        && recovered != input
+    {
+        return map_c1_and_strip_nul(recovered);
+    }
+
+    // Fallback for mixed strings (e.g., valid UTF-8 headers around a mojibake quoted section):
+    // collapse contiguous 2–4 byte UTF-8 mojibake runs and normalize stray C1 control chars.
+    let chars: Vec<char> = input.chars().filter(|&c| c != '\0').collect();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if let Some(lead) = char_to_win1252_byte(ch)
+            && (0xC2..=0xF4).contains(&lead)
+        {
+            let expected_len = if lead < 0xE0 {
+                2
+            } else if lead < 0xF0 {
+                3
+            } else {
+                4
+            };
+            if i + expected_len <= chars.len() {
+                let mut seq = [0u8; 4];
+                seq[0] = lead;
+                let mut ok = true;
+                for offset in 1..expected_len {
+                    if let Some(cont) = char_to_win1252_byte(chars[i + offset])
+                        && (0x80..=0xBF).contains(&cont)
+                    {
+                        seq[offset] = cont;
+                    } else {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok
+                    && let Ok(s) = std::str::from_utf8(&seq[..expected_len])
+                    && let Some(decoded_ch) = s.chars().next()
+                    && !((0x80..=0x9F).contains(&(decoded_ch as u32)))
+                {
+                    out.push(decoded_ch);
+                    i += expected_len;
+                    continue;
+                }
+            }
+        }
+
+        let cp = ch as u32;
+        if (0x80..=0x9F).contains(&cp) {
+            if let Some(mapped) = win1252_c1_char(cp as u8) {
+                out.push(mapped);
+            }
+        } else {
+            out.push(ch);
+        }
+        i += 1;
+    }
+    out
 }

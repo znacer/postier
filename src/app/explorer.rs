@@ -23,7 +23,7 @@ use super::{
     DispatchMessage, PstRagApp,
     email_html::{
         ContactEntry, format_email_body_html, format_email_datetime, parse_contact,
-        parse_email_participants,
+        parse_email_participants, repair_text_encoding,
     },
     theme::*,
 };
@@ -579,24 +579,27 @@ impl PstRagApp {
         let is_selected = self.selected_message_id == Some(email.id);
         let is_checked = self.checked_message_ids.contains(&email.id);
         let email_id = email.id;
-        let subject = if email.subject.trim().is_empty() {
+        let repaired_subject = repair_text_encoding(&email.subject);
+        let subject = if repaired_subject.trim().is_empty() {
             tr.no_subject()
         } else {
-            email.subject.as_str()
+            repaired_subject.as_str()
         };
-        let sender_contact = if email.sender.trim().is_empty() {
+        let repaired_sender = repair_text_encoding(&email.sender);
+        let sender_contact = if repaired_sender.trim().is_empty() {
             None
         } else {
-            Some(parse_contact(&email.sender))
+            Some(parse_contact(&repaired_sender))
         };
         let sender = sender_contact
             .as_ref()
             .map(ContactEntry::display_primary)
             .unwrap_or_else(|| tr.unknown_sender());
-        let folder = if email.folder.trim().is_empty() {
+        let repaired_folder = repair_text_encoding(&email.folder);
+        let folder = if repaired_folder.trim().is_empty() {
             tr.root_folder()
         } else {
-            email.folder.as_str()
+            repaired_folder.as_str()
         };
         let date_short = format_email_datetime(email.sent_at.as_deref(), tr)
             .map(|dt| dt.table_short)
@@ -731,19 +734,21 @@ impl PstRagApp {
             };
         };
 
-        let subject = if email.subject.trim().is_empty() {
+        let repaired_subject = repair_text_encoding(&email.subject);
+        let subject = if repaired_subject.trim().is_empty() {
             tr.no_subject().to_owned()
         } else {
-            email.subject.clone()
+            repaired_subject
         };
         let source_name = std::path::Path::new(&email.source_key)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(&email.source_key);
-        let folder_display = if email.folder.trim().is_empty() {
+        let repaired_folder = repair_text_encoding(&email.folder);
+        let folder_display = if repaired_folder.trim().is_empty() {
             tr.root_folder()
         } else {
-            email.folder.as_str()
+            repaired_folder.as_str()
         };
         let archive_folder_meta = format!("{source_name} / {folder_display}");
 
@@ -840,8 +845,8 @@ impl PstRagApp {
         let formatted_dt = format_email_datetime(email.sent_at.as_deref(), tr);
         let unknown_date_lbl = tr.unknown_date_full();
 
-        let attachment_chips: Vec<String> = email
-            .attachment_names
+        let repaired_attachments = repair_text_encoding(&email.attachment_names);
+        let attachment_chips: Vec<String> = repaired_attachments
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
