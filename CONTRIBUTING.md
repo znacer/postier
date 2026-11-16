@@ -1,4 +1,4 @@
-# Contributing to PoSTier (`pst-rag`)
+# Contributing to PoSTier (`postier`)
 
 Thank you for your interest in contributing to **PoSTier**! This document outlines the project structure, setup instructions, coding conventions, and Dioxus (`dx`) development workflow.
 
@@ -79,7 +79,7 @@ src/
 ├── components/             # Styled Dioxus UI component library (dioxus-primitives + dioxus-icons)
 │   ├── mod.rs              # Exports Avatar, Badge, Button, Checkbox, Collapsible, DropdownMenu, Input, Item,
 │   │                       # Label, ScrollArea, Separator, Sheet, Sidebar, Skeleton, Switch, ToggleGroup, Toolbar, Tooltip
-│   └── <component>/        # Component implementation (component.rs) and scoped CSS module (style.css)
+│   └── <component>/        # Component module, implementation, and CSS (mod.rs, component.rs, style.css)
 ├── app.rs                  # Dioxus 0.7 desktop root component, state management, resize & worker tasks
 ├── app/
 │   ├── actions.rs          # State transitions, async workers, file pickers, and DB queries
@@ -109,7 +109,7 @@ dx serve --platform desktop
 # Validate RSX components and Dioxus rules
 dx check
 
-# Format RSX macros in source files
+# Check RSX and Rust formatting
 dx fmt --check
 
 # Build release binary for desktop
@@ -150,11 +150,15 @@ Before opening a pull request, run the verification checks locally:
 # 1. Validate Dioxus RSX and formatting
 dx check
 dx fmt --check
+cargo fmt -- --check
 
-# 2. Run the test suite
+# 2. Lint with Clippy
+cargo clippy --all-targets -- -W clippy::all
+
+# 3. Run the test suite
 cargo test
 
-# 3. Build the desktop target with dx
+# 4. Build the desktop target with dx
 dx build --platform desktop
 ```
 
@@ -168,5 +172,5 @@ dx build --platform desktop
 
 1. Create a descriptive branch from `main` (or the active feature branch).
 2. Keep commits focused and atomic.
-3. Ensure `dx check`, `dx fmt --check`, and `cargo test` pass without errors.
+3. Ensure `dx check`, `dx fmt --check`, `cargo fmt -- --check`, `cargo clippy --all-targets -- -W clippy::all`, and `cargo test` pass without errors.
 4. Describe what changed, why it changed, and how it was tested in your PR description.

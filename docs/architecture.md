@@ -7,7 +7,7 @@
 The desktop interface is organized as a 3-pane workspace rendered via Dioxus 0.7 Desktop and styled primitives from `src/components/` (`dioxus-primitives` + `dioxus-icons` with CSS modules and theme variables in `assets/dx-components-theme.css` / `src/app/theme.rs`):
 
 - **Left Sidebar (`src/app/sidebar.rs`)**: Structured with `SidebarHeader`, `SidebarContent`, `SidebarGroup`, `SidebarGroupContent`, `SidebarMenu`, `SidebarMenuItem`, `SidebarMenuBadge`, `SidebarMenuSub`, and `SidebarMenuSubItem` inside a `ScrollArea`. Collapsible sections (`Mailboxes`, `Labels`, and `Settings` — collapsed by default and grouping `LLM Judge and RAG`, `Laya Decision Model`, and `Storage`) use `Collapsible`, `CollapsibleTrigger`, and `CollapsibleContent`. Form controls and filters use `ToggleGroup` / `ToggleItem`, `Checkbox`, `Switch`, `Input`, `Label`, `Badge`, and `Separator`, including endpoint, model, bearer token, and `max_context_tokens` controls.
-- **Center Explorer & Reading Pane (`src/app/explorer.rs`)**: Uses `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `ToggleGroup`, `Input`, and `Button` for quick-filtering and batch/focused labeling controls. The message table and reading pane use `Checkbox`, `Avatar` / `AvatarFallback`, `Badge`, `Separator`, and `ScrollArea` separated by draggable horizontal splitters.
+- **Center Explorer & Reading Pane (`src/app/explorer.rs`)**: Uses `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `ToggleGroup`, `Input`, and `Button` for quick-filtering and batch/focused labeling controls. The message table loads lightweight summaries (`Index::list_message_summaries`, bounded by `explorer_message_limit`), fetches the selected message body on demand (`Index::get_message`), and reuses `CachedExplorerRow` / `CachedReaderView` caches across re-renders. The table and reading pane use `Checkbox`, `Avatar` / `AvatarFallback`, `Badge`, `Separator`, and `ScrollArea` separated by draggable horizontal splitters.
 - **Right RAG Chat Pane (`src/app/chat.rs`, `src/app/markdown.rs`)**: Uses `ScrollArea`, `Avatar` / `AvatarFallback`, `Input`, `Checkbox`, `Label`, `Separator`, and `Collapsible` + `ItemGroup` (`Item`, `ItemHeader`, `ItemMedia`, `ItemContent`, `ItemTitle`, `ItemDescription`, `ItemActions`) for cited email evidence cards, inline `[#id](mail://id)` citation links that open the referenced message in the reading pane, and expandable tool-call trace inspection.
 
 ## Retrieval, Storage, Tool-Calling Agent & Context Engineering
@@ -32,6 +32,45 @@ When the user asks a question (`llm::run_agent`), a Rig agent is constructed wit
 - **`read_email` (`ReadEmailTool`)**: Fetches a single email by ID (`Index::get_hit`), cleans its body via `clean_email_body`, and truncates to the effective `read_email_max_chars` budget. Marks the hit as `read = true`.
 - **`get_thread` (`GetThreadTool`)**: Fetches chronological conversation messages by `thread_id` or `email_id` (`Index::get_thread`, keeping the root message and most recent tail for long threads) with quoted replies removed and bodies scaled within the effective `thread_total_chars` budget. Marks all returned messages as `read = true`.
 - **`email_stats` (`EmailStatsTool`)**: Counts messages matching strict `AND` keywords and filters (`Index::email_stats`), optionally grouped by `sender`, `month`, `year`, `folder`, or `label` (capped by the effective group limit) so the model never has to count search results manually.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant UI as Dioxus UI & Worker
+    participant Agent as run_agent + TokenBudgetHook
+    participant DB as SQLite Index & Evidence
+    participant LLM as OpenAI-Compatible LLM
+
+    User->>UI: Submit question (Send)
+    UI->>Agent: run_agent(config, db_path, question, history, cancel)
+    Agent->>Agent: EffectiveBudgets::from_config & validate_endpoint
+    Agent->>Agent: Build bilingual preamble + strip_mail_links(history)
+
+    loop Up to max_turns (raced against cancel flag)
+        Agent->>Agent: on_completion_call trims history & sets max_tokens
+        Agent->>LLM: Chat completion turn with 4 tool schemas
+        alt Model calls local tool
+            LLM-->>Agent: search_emails / read_email / get_thread / email_stats
+            Agent->>DB: Query SQLite scoped to enabled sources/folders
+            DB-->>Agent: Ranked hits, cleaned body, thread, or stats
+            Agent->>DB: Record hits in Evidence & log step in trace
+            Agent->>Agent: on_tool_result caps payload to single_tool_result_max_tokens
+        else Model produces final answer
+            LLM-->>Agent: Markdown answer with [#id] citations
+        end
+    end
+
+    opt PromptError::MaxTurnsError (budget exhausted)
+        Agent->>DB: Evidence::for_context (prioritize full-read emails)
+        Agent->>Agent: build_context (thread-grouped water-filling allocation)
+        Agent->>LLM: ask_with_history final synthesis call
+        LLM-->>Agent: Grounded Markdown answer
+    end
+
+    Agent->>DB: extract_citation_ids resolves earlier-turn IDs via get_hit
+    Agent->>Agent: linkify_citations -> [#id](mail://id) + Evidence::ordered
+    Agent-->>UI: AgentAnswer (answer, ordered evidence, trace)
+```
 
 ### 3. Adaptive Token Budgeting, Context Engineering & Citation Grounding (`src/llm/budget.rs`, `src/llm/context.rs`, `src/llm/agent.rs`)
 

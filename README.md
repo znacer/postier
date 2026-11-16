@@ -13,21 +13,65 @@ Portable, local-first desktop mail explorer (3-pane web-standard layout built wi
   - **Center Message Table & Rich Email Reader**:
     - Action bar powered by `Toolbar`, `ToolbarGroup`, `ToolbarSeparator`, `ToggleGroup`, `Input`, and `Button` components, with a quick-filter bar (FTS5/BM25 with `/` keyboard shortcut), multi-select `Checkbox` rows, `Shift`-key range selection (`Shift + Click` or `Shift + ↑/↓`), and sortable columns (`Subject`, `From`, `Folder`, `Labels`, `Date`).
     - **Structured Envelope Header**: Displays sender `Avatar` / `AvatarFallback` initials, parsed `From` (`De`), `To` (`À`), and `Cc` (`Cc`) contact pills (display name + `<email@domain>`), localized human-readable date and time badges (`chrono`), folder path pill, attachment `Badge` chips, and manual/automatic label controls.
-    - **Rich HTML & Plain-Text Email Rendering**: Sanitizes raw HTML emails (stripping scripts, trackers, external images, unsafe attributes, and light-mode-only inline color overrides while preserving tables, lists, headings, blockquotes, and links) and upgrades plain-text emails into semantic HTML with structured reply/forward header cards, nested blockquotes, clickable URLs/emails, signatures, and legal disclaimer blocks inside a `ScrollArea`.
+    - **Rich HTML & Plain-Text Email Rendering**: Sanitizes raw HTML emails with `html5ever` (stripping scripts, trackers, external images, unsafe attributes, and light-mode-only inline color overrides while preserving tables, lists, headings, blockquotes, and links) and upgrades plain-text emails into semantic HTML with structured reply/forward header cards, nested blockquotes, clickable URLs/emails, signatures, and legal disclaimer blocks inside a `ScrollArea`.
     - **Draggable Splitters**: Smoothly resize the message table height, mail header height, and chat pane width directly with the mouse.
   - **Right Collapsible & Resizable RAG Chat Pane**: Collapse into a `42px` rail or drag-resize the width (`310px` to window bounds). Includes suggested starter prompts, `Avatar`-badged message bubbles with Markdown-formatted assistant responses, clickable `[#id](mail://id)` inline citations that open the referenced email in the reader, expandable tool-call trace inspection (`Checkbox` + `Label`), and collapsible cited evidence cards (`Collapsible` + `ItemGroup` / `Item` components) with one-click `Open Mail` navigation.
 - **Tool-Calling RAG Research Agent (`src/llm/agent.rs`, `src/llm/context.rs`, `src/llm/budget.rs`)**:
-  - Built on `rig-core` with four local archive tools (`search_emails`, `read_email`, `get_thread`, `email_stats`) so the model iteratively searches, inspects full emails or conversation threads, and computes aggregate counts/groupings before answering.
+  - Built on `rig` (`0.42`) with four local archive tools (`search_emails`, `read_email`, `get_thread`, `email_stats`) so the model iteratively searches, inspects full emails or conversation threads, and computes aggregate counts/groupings before answering.
   - Automatically adapts system prompts, tool schemas, tool output limits, multi-turn history, fallback RAG context, and per-request `max_tokens` to the configured LLM context window (`max_context_tokens`, editable in `config.toml` and the Settings sidebar, supporting everything from ~1k-token models up to 32k+ or `0` for unlimited).
-  - Enforces grounded `[#id]` citations verified against retrieved evidence, strips legal disclaimers and deep quote chains to maximize context density, preserves multi-turn conversation history, and falls back to water-filling context synthesis if the tool-call budget (`max_turns` in `config.toml`) is exhausted.
+  - Enforces grounded `[#id]` citations verified against retrieved evidence, strips legal disclaimers and deep quote chains to maximize context density, preserves multi-turn conversation history, and falls back to water-filling context synthesis if the tool-call budget (`[agent].max_turns` in `config.toml`) is exhausted.
 - **Email Labeling (`Laya-GGUF` or `LLM as a Judge`)**:
   - **Laya Decision Model (`ggml-org/Laya-GGUF`)**: In-process pure-Rust GGUF v3 reader and ModernBERT + Laya Decision Head inference engine (`F32`, `F16`, `BF16`, `Q8_0` tensors, BPE tokenizer from `tokenizer.ggml.*` metadata, `[CLS] choice question: ... [SEP] [MASK] opt ... [SEP] state [SEP]` prompt formatting, and temperature scaling). Ships with a packaged in-process GGUF decision model that works offline out of the box, and can load local `Laya-bf16.gguf` / `Laya-Q8_0.gguf` weights from [`ggml-org/Laya-GGUF`](https://huggingface.co/ggml-org/Laya-GGUF).
   - **LLM as a Judge**: Structured JSON classification against user-defined label definitions (`name`, `description`/criteria, `color`) using the configured OpenAI-compatible endpoint.
   - Label a single email, a multi-checked selection, or batch-label the current filtered explorer view with background progress and cancellation support.
 - **PST & Search Infrastructure**:
-  - Pure-Rust read-only PST extraction (`outlook-pst`), streaming batch ingestion (`250` messages per batch), sender & `To`/`Cc` recipient resolution, conversation thread and attachment extraction from MAPI properties, multi-PST index management, bundled SQLite with FTS5/BM25 and English/French Snowball stemming, structured search operators (`from:`, `to:`, `after:`, `before:`, `folder:`, `label:`, `has:attachment`), thread-collapsed ranking, content-hash deduplication, and an isolated mail-source interface.
+  - Pure-Rust read-only PST extraction (`outlook-pst`), streaming batch ingestion (`500` messages per batch), sender & `To`/`Cc`/`Bcc` recipient resolution, conversation thread and attachment extraction from MAPI properties, multi-PST index management, bundled SQLite with FTS5/BM25 and English/French Snowball stemming, structured search operators (`from:`, `to:`, `after:`, `before:`, `folder:`, `label:`, `has:attachment`), thread-collapsed ranking, content-hash deduplication, and an isolated mail-source interface.
 
 For safe end-to-end development, the file picker also accepts `.jsonl` fixtures with one `Email` object per line.
+
+## How RAG & the Research Agent Work
+
+All indexing happens locally in SQLite (`messages` + `messages_fts` with English/French Snowball `stems`). From the Chat pane, a query either runs **100% locally** (`Search only`) or triggers the **Rig tool-calling research agent** (`Send` -> `llm::run_agent`), which iteratively queries the local index within an adaptive token budget, falls back to water-filling context synthesis if `max_turns` is exhausted, and verifies `[#id]` citations before rendering clickable links and evidence cards.
+
+```mermaid
+flowchart TD
+    subgraph Indexing["1. Local Indexing (PST or JSONL to SQLite + FTS5)"]
+        SRC["Read-only PST or JSONL (batches of 500)"] --> NORM["text::index_body and EN/FR Snowball stems"]
+        NORM --> DB[("SQLite index.sqlite: messages + messages_fts + labels")]
+    end
+
+    Q["User query in Chat Pane"] --> MODE{"Action"}
+
+    MODE -->|"Search only (100% local)"| LOCAL["Index::search: FTS5/BM25 AND then OR fallback, 1 hit per thread"]
+    LOCAL --> CARDS["Render ranked SearchHit cards (zero LLM calls)"]
+
+    MODE -->|"Send (Agentic RAG)"| PREP["EffectiveBudgets::from_config & validate_endpoint (HTTPS or 127.0.0.1)"]
+    PREP --> LOOP["Rig Agent Loop (max_turns, cancellable via tokio::select!)"]
+
+    LOOP -->|"Before completion: on_completion_call"| HOOK["TokenBudgetHook: trim history, compact old tool results, set max_tokens"]
+    HOOK --> LLM["OpenAI-compatible /v1/chat/completions"]
+
+    LLM -->|"Tool call (JSON args)"| TOOLS{"4 Local PortableTools (Arc Shared)"}
+    TOOLS -->|"search_emails"| T1["BM25 + filters, best_passages snippet -> Evidence (read=false)"]
+    TOOLS -->|"read_email"| T2["get_hit + clean_email_body -> Evidence (read=true)"]
+    TOOLS -->|"get_thread"| T3["Chronological root + tail -> Evidence (read=true)"]
+    TOOLS -->|"email_stats"| T4["SQL count/group by sender, month, year, folder, label"]
+
+    T1 --> TRES["on_tool_result: cap payload to single_tool_result_max_tokens"]
+    T2 --> TRES
+    T3 --> TRES
+    T4 --> TRES
+    TRES --> LOOP
+
+    LLM -->|"Final answer"| CITE
+    LOOP -->|"PromptError::MaxTurnsError"| FALLBACK["Evidence::for_context -> build_context (water-filling) -> ask_with_history"]
+    FALLBACK --> CITE
+
+    CITE["extract_citation_ids + DB lookup + linkify_citations"] --> OUT["Chat UI: Markdown with clickable [#id](mail://id), trace, ordered Evidence cards"]
+    DB -.->|"Scoped to enabled archives & folders"| LOCAL
+    DB -.->|"Scoped to enabled archives & folders"| TOOLS
+    DB -.->|"Resolve cited IDs"| CITE
+```
 
 ## Keyboard Shortcuts
 
@@ -73,7 +117,7 @@ dx build --platform desktop --release
 dx bundle --platform desktop --release
 ```
 
-When started in development mode (`dx serve`), debug builds print sanitized Rig request diagnostics and tool-call logs to the terminal. They include the HTTP method, endpoint path, model, authentication presence, and payload sizes, but never the bearer token, question, or email bodies.
+When started in development mode (`dx serve`), debug builds print sanitized Rig request diagnostics to the terminal. They include the HTTP method, endpoint path, model, authentication presence, and payload sizes, but never the bearer token, question, or email bodies (and full tool-call traces are displayed in the Chat UI).
 
 The release profile enables LTO, stripping, size optimization, and abort-on-panic. SQLite is compiled into the executable (`rusqlite` bundled) and HTTP uses `rustls`, so no external database or TLS runtime is required.
 
