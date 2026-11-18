@@ -1,0 +1,136 @@
+name: Release Bundle
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      create_github_release:
+        description: "Publish bundled artifacts to a GitHub Release (requires a tag ref or tag_name)"
+        required: false
+        default: false
+        type: boolean
+      tag_name:
+        description: "Tag name for the GitHub Release when triggered manually (e.g., v0.1.0)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundle:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-22.04
+          - platform: windows
+            os: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            patchelf \
+            desktop-file-utils \
+            libgdk-pixbuf2.0-dev \
+            rpm \
+            file \
+            squashfs-tools \
+            xdg-utils \
+            build-essential \
+            curl \
+            wget
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Dioxus CLI (dx)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: dioxus-cli
+
+      - name: Bundle Linux application with dx
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          mkdir -p dist/linux
+          dx bundle --platform desktop --release --package-types deb --package-types rpm --package-types appimage --out-dir dist/linux
+          ls -la dist/linux
+
+      - name: Build standalone Windows .exe with dx
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          mkdir -p dist/windows
+          dx build --platform desktop --release --windows-subsystem WINDOWS
+          EXE_PATH=$(find target/dx/postier/release/windows -name "postier.exe" -type f | head -n 1)
+          if [ -z "$EXE_PATH" ]; then
+            echo "postier.exe not found in target/dx/postier/release/windows"
+            exit 1
+          fi
+          cp -v "$EXE_PATH" dist/windows/postier.exe
+          ls -la dist/windows
+
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: postier-${{ matrix.platform }}-bundles
+          path: |
+            dist/${{ matrix.platform }}/*
+            !dist/${{ matrix.platform }}/*.app
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: bundle
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_github_release == true && inputs.tag_name != '')
+    steps:
+      - name: Download all bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -maxdepth 2 -type f \( \
+            -name "*.deb" -o \
+            -name "*.rpm" -o \
+            -name "*.AppImage" -o \
+            -name "*.exe" \
+          \) -exec cp -v {} release-assets/ \;
+          ls -la release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag_name != '' && inputs.tag_name || github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/*
