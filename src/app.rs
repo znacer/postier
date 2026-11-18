@@ -904,15 +904,6 @@ impl PstRagApp {
                 self.config.embedding_model = value;
                 AppTask::none()
             }
-            SidebarMessage::ContextEmailsChanged(value) => {
-                if let Ok(count) = value.trim().parse::<usize>() {
-                    self.config.max_context_emails = count.clamp(
-                        crate::llm::MIN_CONTEXT_EMAILS,
-                        self.config.max_search_results_limit(),
-                    );
-                }
-                AppTask::none()
-            }
             SidebarMessage::MaxContextTokensChanged(value) => {
                 if let Ok(tokens) = value.trim().parse::<usize>() {
                     self.config.max_context_tokens = tokens;
