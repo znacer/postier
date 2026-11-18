@@ -24,14 +24,14 @@ env:
 
 jobs:
   bundle:
-    name: Build (${{ matrix.platform }})
+    name: BuildBuild (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux
-            os: ubuntu-22.04
+            os: ubuntu-24.04
           - platform: windows
             os: windows-latest
 
@@ -54,7 +54,7 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             patchelf \
             desktop-file-utils \
-            libgdk-pixbuf2.0-dev \
+            libgdk-pixbuf-2.0-dev \
             rpm \
             file \
             squashfs-tools \
@@ -74,10 +74,27 @@ jobs:
         with:
           tool: dioxus-cli
 
-      - name: Bundle Linux application with dx
+      - name: Bundle LinuxLinux application with dx
         if: matrix.platform == 'linux'
         shell: bash
         run: |
+          mkdir -p dist/linux
+          dx bundle --platform desktop --release --package-types deb --package-types rpm --package-types appimage --out-dir dist/linux
+          ls -la dist/linux
+
+      - name: Build standalone Windows .exe with dx
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          mkdir -p dist/windows
+          dx build --platform desktop --release --windows-subsystem WINDOWS
+          EXE_PATH=$(find target/dx/postier/release/windows -name "postier.exe" -type f | head -n 1)
+          if [ -z "$EXE_PATH" ]; then
+            echo "postier.exe not found in target/dx/postier/release/windows"
+            exit 1
+          fi
+          cp -v "$EXE_PATH" dist/windows/postier.exe
+          ls -la dist/windows
           mkdir -p dist/linux
           dx bundle --platform desktop --release --package-types deb --package-types rpm --package-types appimage --out-dir dist/linux
           ls -la dist/linux

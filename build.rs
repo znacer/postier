@@ -10,6 +10,14 @@ fn main() {
         return;
     }
 
+    // When building via `dx` (Dioxus CLI), `dx` already compiles and links the
+    // Windows icon resource from `Dioxus.toml` (`.winres/resource.lib` with ICON 1).
+    // Skipping our custom resource compilation prevents `CVT1100: duplicate resource`
+    // and `LNK1123` linker errors on Windows MSVC.
+    if env::var_os("DX_RUSTC").is_some() || env::var_os("DIOXUS_CLI_ENABLED").is_some() {
+        return;
+    }
+
     let manifest_dir = match env::var("CARGO_MANIFEST_DIR") {
         Ok(dir) => PathBuf::from(dir),
         Err(_) => return,
