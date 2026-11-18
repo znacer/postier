@@ -40,6 +40,38 @@ pub struct EffectiveBudgets {
     pub hit_recipients_max_chars: usize,
 }
 
+/// Allocates `remaining` units fairly across items of given `lengths`, filling smaller
+/// items completely first so small bodies or small attachments are never starved.
+pub fn water_fill_quotas(lengths: &[usize], mut remaining: usize) -> Vec<usize> {
+    let mut quotas = vec![0usize; lengths.len()];
+    while remaining > 0 {
+        let needy: Vec<usize> = lengths
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &len)| (quotas[i] < len).then_some(i))
+            .collect();
+        if needy.is_empty() {
+            break;
+        }
+        let share = (remaining / needy.len()).max(1);
+        let mut allocated = 0usize;
+        for i in needy {
+            if remaining == 0 {
+                break;
+            }
+            let needed = lengths[i] - quotas[i];
+            let add = needed.min(share).min(remaining);
+            quotas[i] += add;
+            remaining -= add;
+            allocated += add;
+        }
+        if allocated == 0 {
+            break;
+        }
+    }
+    quotas
+}
+
 /// Conservative token estimator for mixed English/French prose and JSON payloads.
 /// Uses UTF-8 byte length / 3 (rounded up) so accented French text and JSON
 /// punctuation are never undercounted.
@@ -237,9 +269,9 @@ impl EffectiveBudgets {
         let judge_output_reserve_tokens = (window / 5).clamp(128, 384).min(window / 2);
 
         let estimated_overhead = match prompt_density {
-            PromptDensity::UltraCompact => 380,
-            PromptDensity::Compact => 650,
-            PromptDensity::Full => 2050,
+            PromptDensity::UltraCompact => 430,
+            PromptDensity::Compact => 710,
+            PromptDensity::Full => 2160,
         };
         let working_tokens = input_budget_tokens
             .saturating_sub(estimated_overhead)

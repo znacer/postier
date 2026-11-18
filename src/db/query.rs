@@ -15,7 +15,10 @@ use rusqlite::types::Value;
 use serde::{Deserialize, Serialize};
 
 use super::{BM25_RANK, Index};
-use crate::{model::SearchHit, text};
+use crate::{
+    model::{AttachmentText, SearchHit},
+    text,
+};
 
 const ENABLED_SOURCES: &str = "s.enabled = 1
    AND NOT EXISTS (
@@ -398,6 +401,7 @@ fn map_hit(r: &rusqlite::Row<'_>, score: f64) -> rusqlite::Result<SearchHit> {
         labels: Vec::new(),
         score,
         thread_matches: 1,
+        attachments: Vec::new(),
     })
 }
 
@@ -444,6 +448,53 @@ pub struct StatsBucket {
 }
 
 impl Index {
+    fn fetch_attachments_for_ids(&self, ids: &[i64]) -> Result<HashMap<i64, Vec<AttachmentText>>> {
+        let mut by_id: HashMap<i64, Vec<AttachmentText>> = HashMap::with_capacity(ids.len());
+        if ids.is_empty() {
+            return Ok(by_id);
+        }
+        for chunk in ids.chunks(500) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let sql = format!(
+                "SELECT message_id, filename, mime_type, size_bytes, extracted_text
+                 FROM message_attachments
+                 WHERE message_id IN ({placeholders})
+                 ORDER BY message_id ASC, id ASC"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let bind_values = chunk.iter().copied().map(Value::Integer);
+            let rows = stmt.query_map(rusqlite::params_from_iter(bind_values), |row| {
+                let size_i64: i64 = row.get(3)?;
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    AttachmentText {
+                        filename: row.get(1)?,
+                        mime_type: row.get(2)?,
+                        size_bytes: size_i64.max(0) as u64,
+                        text: row.get(4)?,
+                    },
+                ))
+            })?;
+            for row in rows {
+                let (message_id, att) = row?;
+                by_id.entry(message_id).or_default().push(att);
+            }
+        }
+        Ok(by_id)
+    }
+
+    pub(super) fn attach_search_hit_attachments(&self, hits: &mut [SearchHit]) -> Result<()> {
+        if hits.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<i64> = hits.iter().map(|h| h.id).collect();
+        let mut by_id = self.fetch_attachments_for_ids(&ids)?;
+        for hit in hits {
+            hit.attachments = by_id.remove(&hit.id).unwrap_or_default();
+        }
+        Ok(())
+    }
+
     fn query_hits(
         &self,
         fts: Option<&str>,
@@ -490,6 +541,7 @@ impl Index {
         }
         let mut hits = collapse_threads(ranked, limit);
         self.attach_search_hit_labels(&mut hits)?;
+        self.attach_search_hit_attachments(&mut hits)?;
         Ok(hits)
     }
 
@@ -592,6 +644,7 @@ impl Index {
             all.extend(tail);
         }
         self.attach_search_hit_labels(&mut all)?;
+        self.attach_search_hit_attachments(&mut all)?;
         Ok((total, all))
     }
 
@@ -608,6 +661,7 @@ impl Index {
         };
         let mut hits = vec![hit];
         self.attach_search_hit_labels(&mut hits)?;
+        self.attach_search_hit_attachments(&mut hits)?;
         Ok(hits.pop())
     }
 }

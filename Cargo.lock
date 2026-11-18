@@ -6820,15 +6820,18 @@ name = "postier"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cfb",
  "chrono",
  "dioxus",
  "dioxus-icons",
  "dioxus-primitives",
  "dioxus-ssr",
  "encoding_rs",
+ "flate2",
  "html5ever",
  "image",
  "outlook-pst",
+ "quick-xml",
  "reqwest 0.13.5",
  "rfd 0.15.4",
  "rig",

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::{
     db::Index,
-    model::{AssignedLabel, Email, LabelFilter, MailScope, MailSort},
+    model::{AssignedLabel, AttachmentText, Email, LabelFilter, MailScope, MailSort},
 };
 
 #[test]
@@ -229,6 +229,7 @@ fn search_populates_rich_metadata_labels_and_expands_threads() {
             sent_at: Some("2026-04-01T09:00:00Z".into()),
             body: "We are migrating the database server tonight.".into(),
             attachment_names: "migration_guide.pdf".into(),
+            attachments: Vec::new(),
             conversation_id: "thread-migration-42".into(),
             message_id: "msg-001@example.test".into(),
         },
@@ -241,6 +242,7 @@ fn search_populates_rich_metadata_labels_and_expands_threads() {
             sent_at: Some("2026-04-01T10:00:00Z".into()),
             body: "Backup completed successfully. Ready to proceed.".into(),
             attachment_names: "backup_checksums.txt".into(),
+            attachments: Vec::new(),
             conversation_id: "thread-migration-42".into(),
             message_id: "msg-002@example.test".into(),
         },
@@ -372,4 +374,144 @@ fn dedup_hash_is_source_scoped_after_removing_earlier_source() {
     // Re-indexing b.pst after removing a.pst must still deduplicate cleanly to 0 new rows.
     assert_eq!(db.index_batch(&[second]).unwrap(), 0);
     assert_eq!(db.count().unwrap(), 1);
+}
+
+#[test]
+fn indexes_and_searches_attachments_with_stemming_and_cascade_cleanup() {
+    let mut db = Index::open(Path::new(":memory:")).unwrap();
+    let mail = Email {
+        source_key: "/archives/docs.pst".into(),
+        message_id: "att-1@example.test".into(),
+        conversation_id: "conv-att-1".into(),
+        folder: "Mailbox/Inbox".into(),
+        subject: "See attached memo".into(),
+        sender: "alice@example.test".into(),
+        recipients: "bob@example.test".into(),
+        sent_at: Some("2026-05-01T11:00:00Z".into()),
+        body: "Please read the small note.".into(),
+        attachment_names: "approval.txt".into(),
+        attachments: vec![AttachmentText {
+            filename: "approval.txt".into(),
+            mime_type: "text/plain".into(),
+            size_bytes: 58,
+            text: "Budgetary allocations finalized for datacenter migration.".into(),
+        }],
+    };
+
+    assert_eq!(db.index_batch(&[mail]).unwrap(), 1);
+
+    // Search by term present only in the attachment (and stemmed variant "allocate").
+    let hits = db.search("allocating", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].attachments.len(), 1);
+    assert_eq!(hits[0].attachments[0].filename, "approval.txt");
+    assert!(hits[0].attachments[0].text.contains("datacenter migration"));
+
+    let hit_by_id = db.get_hit(hits[0].id).unwrap().unwrap();
+    assert_eq!(hit_by_id.attachments.len(), 1);
+
+    let (total, thread_hits) = db.get_thread("conv-att-1", 10).unwrap();
+    assert_eq!(total, 1);
+    assert_eq!(thread_hits[0].attachments.len(), 1);
+
+    assert_eq!(db.remove_source("/archives/docs.pst").unwrap(), 1);
+    assert!(db.search("datacenter", 10).unwrap().is_empty());
+}
+
+#[test]
+fn backfills_attachments_when_reindexing_existing_message() {
+    let mut db = Index::open(Path::new(":memory:")).unwrap();
+    let without_att = Email {
+        source_key: "/archives/backfill.pst".into(),
+        message_id: "bf-1@example.test".into(),
+        conversation_id: "conv-bf".into(),
+        folder: "Mailbox/Inbox".into(),
+        subject: "Contract".into(),
+        sender: "legal@example.test".into(),
+        recipients: "team@example.test".into(),
+        sent_at: Some("2026-05-02T09:00:00Z".into()),
+        body: "Attached for review.".into(),
+        attachment_names: "terms.docx".into(),
+        attachments: Vec::new(),
+    };
+    assert_eq!(db.index_batch(std::slice::from_ref(&without_att)).unwrap(), 1);
+    assert!(db.search("indemnity", 10).unwrap().is_empty());
+
+    let with_att = Email {
+        attachments: vec![AttachmentText {
+            filename: "terms.docx".into(),
+            mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                .into(),
+            size_bytes: 1200,
+            text: "Mutual indemnity clause applies for twenty-four months.".into(),
+        }],
+        ..without_att
+    };
+
+    // Content hash matches the existing row, so added count is 0 while attachment text is backfilled.
+    assert_eq!(db.index_batch(&[with_att]).unwrap(), 0);
+    let hits = db.search("indemnity", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].attachments.len(), 1);
+    assert_eq!(hits[0].attachments[0].filename, "terms.docx");
+}
+
+#[test]
+fn migrates_v2_database_to_v3_and_preserves_searchability() {
+    let dir = std::env::temp_dir().join(format!("postier_db_v2_mig_{}", std::process::id()));
+    let db_path = dir.join("v2.sqlite");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE messages (
+               id INTEGER PRIMARY KEY,
+               source_key TEXT NOT NULL,
+               message_id TEXT NOT NULL DEFAULT '',
+               conversation_id TEXT NOT NULL DEFAULT '',
+               folder TEXT NOT NULL DEFAULT '',
+               subject TEXT NOT NULL DEFAULT '',
+               sender TEXT NOT NULL DEFAULT '',
+               recipients TEXT NOT NULL DEFAULT '',
+               sent_at TEXT,
+               body TEXT NOT NULL DEFAULT '',
+               attachment_names TEXT NOT NULL DEFAULT '',
+               content_hash TEXT NOT NULL UNIQUE,
+               body_text TEXT NOT NULL DEFAULT '',
+               stems TEXT NOT NULL DEFAULT ''
+             );
+             CREATE VIRTUAL TABLE messages_fts USING fts5(
+               subject, sender, recipients, body_text, attachment_names, stems,
+               content='messages', content_rowid='id'
+             );
+             CREATE TABLE indexed_sources (
+               source_key TEXT PRIMARY KEY,
+               display_name TEXT NOT NULL,
+               enabled INTEGER NOT NULL DEFAULT 1
+             );
+             CREATE TABLE source_folder_settings (
+               source_key TEXT NOT NULL,
+               folder TEXT NOT NULL,
+               enabled INTEGER NOT NULL DEFAULT 1,
+               PRIMARY KEY(source_key, folder)
+             );
+             INSERT INTO indexed_sources(source_key, display_name, enabled)
+             VALUES('/old/v2.pst', 'v2.pst', 1);
+             INSERT INTO messages(source_key, message_id, conversation_id, folder, subject, sender, recipients, sent_at, body, attachment_names, content_hash, body_text, stems)
+             VALUES('/old/v2.pst', 'v2-msg', 'conv-v2', 'Inbox', 'Legacy roadmap', 'ceo@example.test', 'all@example.test', '2025-01-10T08:00:00Z', 'We are launching Helios next quarter.', 'roadmap.ppt', 'hash-v2-1', '', '');
+             PRAGMA user_version = 2;",
+        )
+        .unwrap();
+    }
+
+    let db = Index::open(&db_path).unwrap();
+    let hits = db.search("Helios", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].subject, "Legacy roadmap");
+    assert!(hits[0].attachments.is_empty());
+    drop(db);
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-use super::budget::PromptDensity;
+use super::budget::{PromptDensity, water_fill_quotas};
 use crate::{i18n::Language, model::SearchHit};
 
 pub const AGENT_SYSTEM_PROMPT: &str = r#"You are an expert research assistant for the user's email archive. You answer questions by investigating the archive with tools, then writing a grounded, cited answer.
 
 Tools:
-- search_emails: keyword (BM25) search with optional filters (sender, recipient, dates, folder, label, attachments). Returns one result per thread with an id, metadata and a snippet.
-- read_email: full text of one email by id.
+- search_emails: keyword (BM25) search across email bodies and common attachments (Word, PowerPoint, LibreOffice, text files), with optional filters (sender, recipient, dates, folder, label, attachments). Returns one result per thread with an id, metadata and snippets.
+- read_email: full text of one email by id, including extracted text from its supported attachments (small attachments appear in full).
+- read_attachment: read or search inside a specific or large attachment on an email by id (with optional filename, query, or character offset).
 - get_thread: all messages of a conversation in chronological order.
 - email_stats: number of matching emails, optionally grouped by sender, month, year, folder or label.
 
@@ -16,13 +17,13 @@ Research method:
 2. Search with 2-5 distinctive keywords (names, project codes, specific nouns), not full sentences. The search is lexical: when the archive may use other words, run additional searches with synonyms, abbreviations, spelling variants and the other language (French/English).
 3. Put people, dates, folders, labels and attachments in the filters rather than in the keywords (e.g. from="alice", date_from="2024-03"). Resolve relative dates ("last month") from today's date.
 4. If results are empty or off-topic, reformulate: fewer keywords, different keywords, or relaxed filters. Run separate searches for the different parts of a question.
-5. Snippets are partial. Read an email with read_email before relying on it. For discussions, decisions or status questions use get_thread: the latest messages usually hold the outcome.
+5. Snippets are partial. Read an email with read_email before relying on it; if an attachment is truncated, use read_attachment. For discussions, decisions or status questions use get_thread: the latest messages usually hold the outcome.
 6. For how-many, who-most, since-when or trend questions use email_stats instead of counting search results.
 7. Stop researching once the evidence is sufficient, and never repeat an identical search.
 8. Earlier answers in this conversation or the user's question may cite emails as [#id]: read those emails directly with read_email.
 
 Answer rules:
-- Base every statement strictly on emails seen through the tools. Never invent facts, names or dates.
+- Base every statement strictly on emails and attachments seen through the tools. Never invent facts, names or dates.
 - Cite sources right after each claim with the email id in brackets, e.g. [#1234] or [#1234, #1301]. Only cite ids returned by the tools.
 - Pay attention to dates: later emails may revise or supersede earlier ones. State timelines explicitly when relevant (e.g. "first planned for May [#12], then postponed to June [#40]").
 - Use metadata (sender, recipients, date, folder, attachments, labels) when relevant.
@@ -33,8 +34,9 @@ Answer rules:
 pub const AGENT_SYSTEM_PROMPT_FR: &str = r#"Vous êtes un assistant de recherche expert pour l'archive de courriels de l'utilisateur. Vous répondez aux questions en explorant l'archive à l'aide d'outils, puis en rédigeant une réponse fondée et sourcée.
 
 Outils :
-- search_emails : recherche par mots-clés (BM25) avec filtres optionnels (expéditeur, destinataire, dates, dossier, étiquette, pièces jointes). Renvoie un résultat par fil de discussion avec un identifiant, des métadonnées et un extrait.
-- read_email : texte complet d'un courriel par identifiant.
+- search_emails : recherche par mots-clés (BM25) dans les courriels et les pièces jointes courantes (Word, PowerPoint, LibreOffice, fichiers texte), avec filtres optionnels (expéditeur, destinataire, dates, dossier, étiquette, pièces jointes). Renvoie un résultat par fil de discussion avec un identifiant, des métadonnées et des extraits.
+- read_email : texte complet d'un courriel par identifiant, y compris le texte extrait de ses pièces jointes prises en charge (les petites pièces jointes sont incluses en entier).
+- read_attachment : lire ou rechercher dans une pièce jointe spécifique ou volumineuse d'un courriel par identifiant (avec nom de fichier, requête ou décalage optionnels).
 - get_thread : tous les messages d'une conversation dans l'ordre chronologique.
 - email_stats : nombre de courriels correspondants, éventuellement regroupés par expéditeur, mois, année, dossier ou étiquette.
 
@@ -43,13 +45,13 @@ Méthode de recherche :
 2. Cherchez avec 2 à 5 mots-clés distinctifs (noms, codes de projet, noms précis), pas avec des phrases. La recherche est lexicale : si l'archive peut employer d'autres mots, lancez d'autres recherches avec des synonymes, abréviations, variantes orthographiques et l'autre langue (français/anglais).
 3. Placez les personnes, dates, dossiers, étiquettes et pièces jointes dans les filtres plutôt que dans les mots-clés (ex. from="alice", date_from="2024-03"). Interprétez les dates relatives (« le mois dernier ») à partir de la date du jour.
 4. Si les résultats sont vides ou hors sujet, reformulez : moins de mots-clés, d'autres mots-clés ou des filtres assouplis. Faites des recherches distinctes pour les différentes parties d'une question.
-5. Les extraits sont partiels. Lisez un courriel avec read_email avant de vous appuyer dessus. Pour les discussions, décisions ou questions d'avancement, utilisez get_thread : les derniers messages contiennent généralement l'issue.
+5. Les extraits sont partiels. Lisez un courriel avec read_email avant de vous appuyer dessus ; si une pièce jointe est tronquée, utilisez read_attachment. Pour les discussions, décisions ou questions d'avancement, utilisez get_thread : les derniers messages contiennent généralement l'issue.
 6. Pour les questions de type combien, qui le plus, depuis quand ou tendance, utilisez email_stats au lieu de compter les résultats de recherche.
 7. Arrêtez la recherche dès que les preuves suffisent et ne répétez jamais une recherche identique.
 8. Les réponses précédentes de cette conversation ou la question de l'utilisateur peuvent citer des courriels sous la forme [#id] : lisez directement ces courriels avec read_email.
 
 Règles de réponse :
-- Fondez chaque affirmation strictement sur les courriels consultés via les outils. N'inventez jamais de faits, de noms ou de dates.
+- Fondez chaque affirmation strictement sur les courriels et pièces jointes consultés via les outils. N'inventez jamais de faits, de noms ou de dates.
 - Citez vos sources juste après chaque affirmation avec l'identifiant du courriel entre crochets, ex. [#1234] ou [#1234, #1301]. Ne citez que des identifiants renvoyés par les outils.
 - Soyez attentif aux dates : les courriels ultérieurs peuvent réviser ou remplacer les précédents. Explicitez la chronologie lorsque c'est pertinent (ex. « d'abord prévu en mai [#12], puis reporté à juin [#40] »).
 - Exploitez les métadonnées (expéditeur, destinataires, date, dossier, pièces jointes, étiquettes) lorsqu'elles sont pertinentes.
@@ -57,21 +59,21 @@ Règles de réponse :
 - Si les preuves sont insuffisantes ou contradictoires, indiquez ce qui est établi, ce qui n'a pas pu être trouvé et ce que vous avez cherché.
 "#;
 
-pub const AGENT_SYSTEM_PROMPT_COMPACT: &str = r#"You research the user's email archive with tools and write concise, grounded answers.
+pub const AGENT_SYSTEM_PROMPT_COMPACT: &str = r#"You research the user's email archive (bodies and common attachments) with tools and write concise, grounded answers.
 Rules:
 1. Always search before answering; use 2-5 keywords plus filters (`from`, `to`, `date_from`, `date_to`, `folder`, `label`). Reformulate with synonyms or EN/FR variants if empty.
-2. Read promising emails with `read_email` or full discussions with `get_thread`. Use `email_stats` for counts/rankings. Never repeat an identical search.
+2. Read emails (and their attachments) with `read_email`, large attachments with `read_attachment`, or full threads with `get_thread`. Use `email_stats` for counts. Never repeat an identical search.
 3. Base every claim strictly on tool outputs. Cite email IDs inline as `[#123]`. Note dates if later emails supersede earlier ones; state clearly if evidence is missing."#;
 
-pub const AGENT_SYSTEM_PROMPT_COMPACT_FR: &str = r#"Vous explorez l'archive de courriels avec les outils pour rédiger des réponses concises et sourcées en français.
+pub const AGENT_SYSTEM_PROMPT_COMPACT_FR: &str = r#"Vous explorez l'archive de courriels (corps et pièces jointes courantes) avec les outils pour rédiger des réponses concises et sourcées en français.
 Règles :
 1. Cherchez toujours avant de répondre : 2 à 5 mots-clés et filtres (`from`, `to`, `date_from`, `date_to`, `folder`, `label`). Reformulez (synonymes, FR/EN) si vide.
-2. Lisez les courriels clés avec `read_email` ou les fils avec `get_thread`. Utilisez `email_stats` pour compter/classer. Ne répétez pas une recherche identique.
+2. Lisez les courriels (et pièces jointes) avec `read_email`, les pièces jointes longues avec `read_attachment`, ou les fils avec `get_thread`. Utilisez `email_stats` pour compter. Ne répétez pas une recherche identique.
 3. Appuyez chaque fait uniquement sur les outils. Citez avec `[#123]`. Mentionnez les dates si un message en remplace un autre ; signalez les manques."#;
 
-pub const AGENT_SYSTEM_PROMPT_ULTRA: &str = r#"Email archive assistant. Use tools (`search_emails`, `read_email`, `get_thread`, `email_stats`) before answering. Base facts strictly on tool results, cite `[#id]`, be brief."#;
+pub const AGENT_SYSTEM_PROMPT_ULTRA: &str = r#"Email archive assistant. Use tools (`search_emails`, `read_email`, `read_attachment`, `get_thread`, `email_stats`) before answering. Base facts strictly on tool results, cite `[#id]`, be brief."#;
 
-pub const AGENT_SYSTEM_PROMPT_ULTRA_FR: &str = r#"Assistant d'archive mail. Utilisez les outils (`search_emails`, `read_email`, `get_thread`, `email_stats`) avant de répondre en français. Fondez tout sur les résultats, citez `[#id]`, soyez bref."#;
+pub const AGENT_SYSTEM_PROMPT_ULTRA_FR: &str = r#"Assistant d'archive mail. Utilisez les outils (`search_emails`, `read_email`, `read_attachment`, `get_thread`, `email_stats`) avant de répondre en français. Fondez tout sur les résultats, citez `[#id]`, soyez bref."#;
 
 pub const RAG_SYSTEM_PROMPT: &str = r#"You answer questions strictly from the retrieved email evidence supplied below.
 - Never invent facts, names, dates, or ids.
@@ -244,6 +246,30 @@ pub fn clean_email_body(raw: &str) -> String {
     result.trim().to_string()
 }
 
+fn push_truncated_slice(out: &mut String, text: &str, quota: usize, max_total_len: usize) {
+    if text.len() <= quota {
+        out.push_str(text);
+        return;
+    }
+    let footer_reserve = 48;
+    let target_bytes = quota.saturating_sub(footer_reserve);
+    let mut kept_bytes = 0usize;
+    for ch in text.chars() {
+        let ch_len = ch.len_utf8();
+        if kept_bytes + ch_len > target_bytes {
+            break;
+        }
+        kept_bytes += ch_len;
+    }
+    let truncated_slice = &text[..kept_bytes];
+    let omitted_chars = text[kept_bytes..].chars().count();
+    let footer = format!("\n[... truncated ({omitted_chars} chars omitted) ...]");
+    out.push_str(truncated_slice);
+    if out.len() + footer.len() + 2 <= max_total_len {
+        out.push_str(&footer);
+    }
+}
+
 pub fn build_context(hits: &[SearchHit], max_chars: usize) -> String {
     if hits.is_empty() {
         return "No relevant emails were found matching the query.".into();
@@ -279,12 +305,12 @@ pub fn build_context(hits: &[SearchHit], max_chars: usize) -> String {
         archive_summary
     );
 
-    // 2. Prepare headers and cleaned bodies for each hit
+    // 2. Prepare headers, cleaned bodies, and attachment sections for each hit
     struct HitContextItem<'a> {
         header: String,
         cleaned_body: String,
-        #[allow(dead_code)]
-        hit: &'a SearchHit,
+        attachments: Vec<(String, &'a str)>,
+        content_bytes: usize,
     }
 
     // Group by thread (in order of first appearance), chronological within a thread.
@@ -375,11 +401,26 @@ pub fn build_context(hits: &[SearchHit], max_chars: usize) -> String {
         }
 
         header.push_str("Body:\n");
-        let cleaned = clean_email_body(&hit.body);
+        let cleaned_body = clean_email_body(&hit.body);
+        let attachments: Vec<(String, &str)> = hit
+            .attachments
+            .iter()
+            .filter(|a| !a.text.trim().is_empty())
+            .map(|a| {
+                let heading = format!("\n\n[Attachment: {}]\n", a.filename);
+                (heading, a.text.trim())
+            })
+            .collect();
+        let content_bytes = cleaned_body.len()
+            + attachments
+                .iter()
+                .map(|(h, t)| h.len() + t.len())
+                .sum::<usize>();
         items.push(HitContextItem {
             header,
-            cleaned_body: cleaned,
-            hit,
+            cleaned_body,
+            attachments,
+            content_bytes,
         });
     }
 
@@ -405,40 +446,9 @@ pub fn build_context(hits: &[SearchHit], max_chars: usize) -> String {
             .iter()
             .map(|it| it.header.len() + 2)
             .sum::<usize>();
-    let mut remaining_budget = max_chars.saturating_sub(active_headers_len);
-
-    let mut quotas = vec![0usize; count_to_include];
-    while remaining_budget > 0 {
-        let needy_indices: Vec<usize> = active_items
-            .iter()
-            .enumerate()
-            .filter_map(|(i, item)| (quotas[i] < item.cleaned_body.len()).then_some(i))
-            .collect();
-        if needy_indices.is_empty() {
-            break;
-        }
-        let share = (remaining_budget / needy_indices.len()).max(1);
-        let mut allocated_this_round = 0usize;
-        for i in needy_indices {
-            if remaining_budget == 0 {
-                break;
-            }
-            let needed = active_items[i].cleaned_body.len() - quotas[i];
-            let add = needed.min(share).min(remaining_budget);
-            quotas[i] += add;
-            remaining_budget -= add;
-            allocated_this_round += add;
-        }
-        if allocated_this_round == 0 {
-            break;
-        }
-    }
-    if remaining_budget > 0 && !quotas.is_empty() {
-        let bonus = remaining_budget / quotas.len();
-        for q in &mut quotas {
-            *q += bonus;
-        }
-    }
+    let remaining_budget = max_chars.saturating_sub(active_headers_len);
+    let item_lengths: Vec<usize> = active_items.iter().map(|it| it.content_bytes).collect();
+    let quotas = water_fill_quotas(&item_lengths, remaining_budget);
 
     // 4. Assemble context string within max_chars byte budget
     let mut out = overview;
@@ -450,26 +460,30 @@ pub fn build_context(hits: &[SearchHit], max_chars: usize) -> String {
 
         let remaining_for_item = max_chars.saturating_sub(out.len() + 2);
         let quota = quotas[i].min(remaining_for_item);
-        let body_bytes = item.cleaned_body.len();
-        if body_bytes <= quota {
-            out.push_str(&item.cleaned_body);
+        if item.attachments.is_empty() {
+            push_truncated_slice(&mut out, &item.cleaned_body, quota, max_chars);
         } else {
-            let footer_reserve = 48;
-            let target_bytes = quota.saturating_sub(footer_reserve);
-            let mut kept_bytes = 0usize;
-            for ch in item.cleaned_body.chars() {
-                let ch_len = ch.len_utf8();
-                if kept_bytes + ch_len > target_bytes {
+            // Water-fill within this hit so small attachments fit completely even if the body is long.
+            let att_headers_len: usize = item.attachments.iter().map(|(h, _)| h.len()).sum();
+            let text_budget = quota.saturating_sub(att_headers_len.min(quota / 2));
+            let mut lengths = Vec::with_capacity(1 + item.attachments.len());
+            lengths.push(item.cleaned_body.len());
+            lengths.extend(item.attachments.iter().map(|(_, t)| t.len()));
+            let sub_quotas = water_fill_quotas(&lengths, text_budget);
+
+            push_truncated_slice(&mut out, &item.cleaned_body, sub_quotas[0], max_chars);
+            for (idx, (att_heading, att_text)) in item.attachments.iter().enumerate() {
+                let att_quota = sub_quotas[idx + 1];
+                if att_quota == 0 {
+                    continue;
+                }
+                let avail = max_chars.saturating_sub(out.len() + 2);
+                if avail <= att_heading.len() + 16 {
                     break;
                 }
-                kept_bytes += ch_len;
-            }
-            let truncated_slice = &item.cleaned_body[..kept_bytes];
-            let omitted_chars = item.cleaned_body[kept_bytes..].chars().count();
-            let footer = format!("\n[... truncated ({omitted_chars} chars omitted) ...]");
-            out.push_str(truncated_slice);
-            if out.len() + footer.len() + 2 <= max_chars {
-                out.push_str(&footer);
+                out.push_str(att_heading);
+                let safe_quota = att_quota.min(max_chars.saturating_sub(out.len() + 2));
+                push_truncated_slice(&mut out, att_text, safe_quota, max_chars);
             }
         }
         out.push_str("\n\n");

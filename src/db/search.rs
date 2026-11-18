@@ -128,6 +128,7 @@ impl Index {
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         hits.truncate(limit);
         self.attach_search_hit_labels(&mut hits)?;
+        self.attach_search_hit_attachments(&mut hits)?;
         Ok(hits)
     }
 }

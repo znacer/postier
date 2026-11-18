@@ -1526,6 +1526,17 @@ impl Language {
         }
     }
 
+    pub fn agent_progress_attachment(self, id: i64, filename: Option<&str>) -> String {
+        match (self, filename) {
+            (Self::English, Some(name)) => format!("Reading attachment '{name}' on #{id}..."),
+            (Self::English, None) => format!("Reading attachment on #{id}..."),
+            (Self::French, Some(name)) => {
+                format!("Lecture de la pièce jointe « {name} » (#{id})...")
+            }
+            (Self::French, None) => format!("Lecture de la pièce jointe (#{id})..."),
+        }
+    }
+
     pub fn agent_progress_thread(self, count: usize) -> String {
         match self {
             Self::English => format!(

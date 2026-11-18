@@ -6,14 +6,26 @@ use std::{
     rc::Rc,
 };
 
-use crate::{email_html::repair_text_encoding, model::Email};
+use crate::{
+    attachments::{
+        MAX_ATTACHMENT_RAW_BYTES, MAX_EMAIL_ATTACHMENT_CHARS, attachment_mime_type,
+        extract_attachment_text, is_supported_attachment,
+    },
+    email_html::repair_text_encoding,
+    model::{AttachmentText, Email},
+};
 use anyhow::{Context, Result, bail};
 use encoding_rs::Encoding;
 use outlook_pst::{
+    AnsiPstFile, UnicodePstFile,
     ltp::{prop_context::PropertyValue, table_context::TableContext},
     messaging::{
-        folder::Folder,
-        store::{EntryId, Store},
+        attachment::{
+            AnsiAttachment, Attachment, AttachmentData, AttachmentMethod, UnicodeAttachment,
+        },
+        folder::{AnsiFolder, Folder, UnicodeFolder},
+        message::{AnsiMessage, Message, UnicodeMessage},
+        store::{AnsiStore, EntryId, Store, UnicodeStore},
     },
     ndb::node_id::NodeId,
 };
@@ -73,53 +85,128 @@ impl MailSource for JsonlSource {
 
 pub struct PstSource;
 
+trait ConcretePst: Sized {
+    type Store: Store;
+    type Folder: Folder;
+    type Message: Message;
+    type Attachment: Attachment;
+
+    fn open_store(path: &Path) -> Result<Rc<Self::Store>>;
+    fn open_folder(store: &Rc<Self::Store>, entry_id: &EntryId) -> Result<Rc<Self::Folder>>;
+    fn open_message(store: &Rc<Self::Store>, entry_id: &EntryId) -> Result<Rc<Self::Message>>;
+    fn open_attachment(msg: &Rc<Self::Message>, sub_node: NodeId) -> Result<Rc<Self::Attachment>>;
+}
+
+struct UnicodePstBackend;
+
+impl ConcretePst for UnicodePstBackend {
+    type Store = UnicodeStore;
+    type Folder = UnicodeFolder;
+    type Message = UnicodeMessage;
+    type Attachment = UnicodeAttachment;
+
+    fn open_store(path: &Path) -> Result<Rc<Self::Store>> {
+        let pst = UnicodePstFile::open(path)?;
+        Ok(UnicodeStore::read(Rc::new(pst))?)
+    }
+
+    fn open_folder(store: &Rc<Self::Store>, entry_id: &EntryId) -> Result<Rc<Self::Folder>> {
+        Ok(UnicodeFolder::read(store.clone(), entry_id)?)
+    }
+
+    fn open_message(store: &Rc<Self::Store>, entry_id: &EntryId) -> Result<Rc<Self::Message>> {
+        Ok(UnicodeMessage::read(store.clone(), entry_id, None)?)
+    }
+
+    fn open_attachment(msg: &Rc<Self::Message>, sub_node: NodeId) -> Result<Rc<Self::Attachment>> {
+        Ok(UnicodeAttachment::read(msg.clone(), sub_node, None)?)
+    }
+}
+
+struct AnsiPstBackend;
+
+impl ConcretePst for AnsiPstBackend {
+    type Store = AnsiStore;
+    type Folder = AnsiFolder;
+    type Message = AnsiMessage;
+    type Attachment = AnsiAttachment;
+
+    fn open_store(path: &Path) -> Result<Rc<Self::Store>> {
+        let pst = AnsiPstFile::open(path)?;
+        Ok(AnsiStore::read(Rc::new(pst))?)
+    }
+
+    fn open_folder(store: &Rc<Self::Store>, entry_id: &EntryId) -> Result<Rc<Self::Folder>> {
+        Ok(AnsiFolder::read(store.clone(), entry_id)?)
+    }
+
+    fn open_message(store: &Rc<Self::Store>, entry_id: &EntryId) -> Result<Rc<Self::Message>> {
+        Ok(AnsiMessage::read(store.clone(), entry_id, None)?)
+    }
+
+    fn open_attachment(msg: &Rc<Self::Message>, sub_node: NodeId) -> Result<Rc<Self::Attachment>> {
+        Ok(AnsiAttachment::read(msg.clone(), sub_node, None)?)
+    }
+}
+
 impl MailSource for PstSource {
     fn stream_messages(
         &self,
         path: &Path,
         on_batch: &mut dyn FnMut(Vec<Email>) -> Result<()>,
     ) -> Result<usize> {
-        // outlook-pst opens the archive read-only and supports both ANSI and Unicode PSTs.
-        let store = outlook_pst::open_store(path).context("open PST read-only")?;
-        let root_id = store
-            .properties()
-            .ipm_sub_tree_entry_id()
-            .context("locate the PST mail subtree")?;
-        let root = store
-            .open_folder(&root_id)
-            .context("open the PST mail subtree")?;
-        let mut batch = Vec::with_capacity(IMPORT_BATCH_SIZE);
-        let mut total = 0usize;
-        let mut skipped = 0usize;
-        let mut visited = HashSet::new();
-        visited.insert(u32::from(root_id.node_id()));
-        walk_folder(
-            store,
-            root,
-            String::new(),
-            &path.to_string_lossy(),
-            0,
-            &mut visited,
-            &mut batch,
-            &mut total,
-            &mut skipped,
-            on_batch,
-        )?;
-        if !batch.is_empty() {
-            on_batch(batch)?;
+        // outlook-pst opens the archive read-only and supports both Unicode and ANSI PSTs.
+        match UnicodePstBackend::open_store(path) {
+            Ok(store) => stream_pst_store::<UnicodePstBackend>(store, path, on_batch),
+            Err(unicode_err) => match AnsiPstBackend::open_store(path) {
+                Ok(store) => stream_pst_store::<AnsiPstBackend>(store, path, on_batch),
+                Err(_) => Err(unicode_err).context("open PST read-only"),
+            },
         }
-        #[cfg(debug_assertions)]
-        if skipped > 0 {
-            eprintln!("[pstbeetle] PST import skipped {skipped} unreadable message(s)");
-        }
-        Ok(total)
     }
 }
 
+fn stream_pst_store<P: ConcretePst>(
+    store: Rc<P::Store>,
+    path: &Path,
+    on_batch: &mut dyn FnMut(Vec<Email>) -> Result<()>,
+) -> Result<usize> {
+    let root_id = store
+        .properties()
+        .ipm_sub_tree_entry_id()
+        .context("locate the PST mail subtree")?;
+    let root = P::open_folder(&store, &root_id).context("open the PST mail subtree")?;
+    let mut batch = Vec::with_capacity(IMPORT_BATCH_SIZE);
+    let mut total = 0usize;
+    let mut skipped = 0usize;
+    let mut visited = HashSet::new();
+    visited.insert(u32::from(root_id.node_id()));
+    walk_folder::<P>(
+        store,
+        root,
+        String::new(),
+        &path.to_string_lossy(),
+        0,
+        &mut visited,
+        &mut batch,
+        &mut total,
+        &mut skipped,
+        on_batch,
+    )?;
+    if !batch.is_empty() {
+        on_batch(batch)?;
+    }
+    #[cfg(debug_assertions)]
+    if skipped > 0 {
+        eprintln!("[pstbeetle] PST import skipped {skipped} unreadable message(s)");
+    }
+    Ok(total)
+}
+
 #[allow(clippy::too_many_arguments)]
-fn walk_folder(
-    store: Rc<dyn Store>,
-    folder: Rc<dyn Folder>,
+fn walk_folder<P: ConcretePst>(
+    store: Rc<P::Store>,
+    folder: Rc<P::Folder>,
     parent: String,
     source: &str,
     depth: usize,
@@ -150,7 +237,7 @@ fn walk_folder(
     };
     if let Some(contents) = folder.contents_table() {
         for row in contents.rows_matrix() {
-            match read_message(store.clone(), row, &path, source) {
+            match read_message::<P>(&store, row, &path, source) {
                 Ok(email) => {
                     batch.push(email);
                     *total += 1;
@@ -175,8 +262,8 @@ fn walk_folder(
             }
             let node = NodeId::from(raw_id);
             let entry_id = store.properties().make_entry_id(node)?;
-            if let Ok(child) = store.open_folder(&entry_id) {
-                walk_folder(
+            if let Ok(child) = P::open_folder(&store, &entry_id) {
+                walk_folder::<P>(
                     store.clone(),
                     child,
                     path.clone(),
@@ -194,15 +281,15 @@ fn walk_folder(
     Ok(())
 }
 
-fn read_message(
-    store: Rc<dyn Store>,
+fn read_message<P: ConcretePst>(
+    store: &Rc<P::Store>,
     row: &outlook_pst::ltp::table_context::TableRowData,
     folder: &str,
     source: &str,
 ) -> Result<Email> {
     let node = NodeId::from(u32::from(row.id()));
     let entry_id: EntryId = store.properties().make_entry_id(node)?;
-    let message = store.open_message(&entry_id, None)?;
+    let message = P::open_message(store, &entry_id)?;
     let props = message.properties();
     let msg_codepage = codepage_prop(props.get(0x3FFD));
     let inet_codepage = codepage_prop(props.get(0x3FDE));
@@ -236,10 +323,7 @@ fn read_message(
             )
         })
         .unwrap_or_else(|| combine_to_and_cc(display_to.as_deref(), display_cc.as_deref()));
-    let attachment_names = message
-        .attachment_table()
-        .map(|t| extract_attachment_names(t.as_ref(), text_cp))
-        .unwrap_or_default();
+    let (attachment_names, attachments) = extract_attachments::<P>(&message, text_cp);
     Ok(Email {
         source_key: source.into(),
         message_id,
@@ -251,6 +335,7 @@ fn read_message(
         sent_at,
         body,
         attachment_names,
+        attachments,
     })
 }
 
@@ -298,37 +383,157 @@ fn normalize_subject_topic(subject: &str) -> String {
     s.to_string()
 }
 
-fn extract_attachment_names(table: &dyn TableContext, codepage: Option<u32>) -> String {
-    let context = table.context();
-    let mut names = Vec::new();
-    for row in table.rows_matrix() {
+fn extract_attachments<P: ConcretePst>(
+    message: &Rc<P::Message>,
+    codepage: Option<u32>,
+) -> (String, Vec<AttachmentText>) {
+    struct AttCandidate {
+        order: usize,
+        row_size: Option<i32>,
+        sub_node: NodeId,
+        row_filename: Option<String>,
+    }
+
+    let Some(table) = message.attachment_table() else {
+        return (String::new(), Vec::new());
+    };
+    let table_ref = table.as_ref();
+    let context = table_ref.context();
+    let mut names: Vec<String> = Vec::new();
+    let mut candidates: Vec<AttCandidate> = Vec::new();
+
+    for (order, row) in table_ref.rows_matrix().enumerate() {
         let Ok(cols) = row.columns(context) else {
             continue;
         };
         let mut long_name: Option<String> = None;
         let mut short_name: Option<String> = None;
         let mut display_name: Option<String> = None;
+        let mut row_size: Option<i32> = None;
+        let mut row_method: Option<i32> = None;
+
         for (col, raw) in context.columns().iter().zip(cols) {
             let Some(raw_val) = raw else {
                 continue;
             };
-            let Ok(prop_val) = table.read_column(&raw_val, col.prop_type()) else {
+            let Ok(prop_val) = table_ref.read_column(&raw_val, col.prop_type()) else {
                 continue;
             };
             match col.prop_id() {
                 0x3707 => long_name = text_prop(Some(&prop_val), codepage),
                 0x3704 => short_name = text_prop(Some(&prop_val), codepage),
                 0x3001 => display_name = text_prop(Some(&prop_val), codepage),
+                0x0E20 => row_size = int_prop(Some(&prop_val)),
+                0x3705 => row_method = int_prop(Some(&prop_val)),
                 _ => {}
             }
         }
-        if let Some(name) = long_name.or(short_name).or(display_name)
-            && !names.contains(&name)
+
+        let row_filename = long_name
+            .or(short_name)
+            .or(display_name)
+            .map(|n| decode_rfc2047(&n));
+        if let Some(ref name) = row_filename
+            && !names.contains(name)
         {
-            names.push(decode_rfc2047(&name));
+            names.push(name.clone());
+        }
+
+        if let Some(sz) = row_size
+            && (sz < 0 || sz as usize > MAX_ATTACHMENT_RAW_BYTES)
+        {
+            continue;
+        }
+        if let Some(m) = row_method
+            && m != AttachmentMethod::ByValue as i32
+            && m != AttachmentMethod::Storage as i32
+        {
+            continue;
+        }
+        // Pre-filter on filename before decompressing PST sub-nodes when name is known in table.
+        if let Some(ref name) = row_filename
+            && !is_supported_attachment(name)
+        {
+            continue;
+        }
+
+        candidates.push(AttCandidate {
+            order,
+            row_size,
+            sub_node: NodeId::from(u32::from(row.id())),
+            row_filename,
+        });
+    }
+
+    // Extract smaller attachments first so large attachments cannot starve small notes under
+    // MAX_EMAIL_ATTACHMENT_CHARS, then restore table order afterward.
+    candidates.sort_by_key(|c| (c.row_size.filter(|&s| s > 0).unwrap_or(i32::MAX), c.order));
+
+    let mut extracted_ordered: Vec<(usize, AttachmentText)> = Vec::new();
+    let mut total_extracted_chars = 0usize;
+
+    for cand in candidates {
+        if total_extracted_chars >= MAX_EMAIL_ATTACHMENT_CHARS {
+            break;
+        }
+        let Ok(att) = P::open_attachment(message, cand.sub_node) else {
+            continue;
+        };
+        let props = att.properties();
+        if let Ok(sz) = props.attachment_size()
+            && (sz < 0 || sz as usize > MAX_ATTACHMENT_RAW_BYTES)
+        {
+            continue;
+        }
+
+        let resolved_name = cand
+            .row_filename
+            .or_else(|| text_prop(props.get(0x3707), codepage))
+            .or_else(|| text_prop(props.get(0x3704), codepage))
+            .or_else(|| text_prop(props.get(0x3001), codepage))
+            .map(|n| decode_rfc2047(&n));
+        let Some(filename) = resolved_name else {
+            continue;
+        };
+        if !names.contains(&filename) {
+            names.push(filename.clone());
+        }
+        if !is_supported_attachment(&filename) {
+            continue;
+        }
+
+        let Some(AttachmentData::Binary(bin)) = att.data() else {
+            continue;
+        };
+        let buf = bin.buffer();
+        if buf.is_empty() || buf.len() > MAX_ATTACHMENT_RAW_BYTES {
+            continue;
+        }
+
+        if let Some(mut text) = extract_attachment_text(&filename, buf) {
+            let remaining = MAX_EMAIL_ATTACHMENT_CHARS.saturating_sub(total_extracted_chars);
+            if remaining == 0 {
+                continue;
+            }
+            if text.chars().count() > remaining {
+                text = text.chars().take(remaining).collect();
+            }
+            total_extracted_chars += text.chars().count();
+            extracted_ordered.push((
+                cand.order,
+                AttachmentText {
+                    mime_type: attachment_mime_type(&filename).into(),
+                    filename,
+                    size_bytes: buf.len() as u64,
+                    text,
+                },
+            ));
         }
     }
-    names.join(", ")
+
+    extracted_ordered.sort_by_key(|(order, _)| *order);
+    let extracted: Vec<AttachmentText> = extracted_ordered.into_iter().map(|(_, att)| att).collect();
+    (names.join(", "), extracted)
 }
 
 fn format_name_and_email(name: Option<&str>, email: Option<&str>) -> String {

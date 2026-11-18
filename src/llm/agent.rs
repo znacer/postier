@@ -1,7 +1,8 @@
 //! Tool-calling research agent over the local BM25 index.
 //!
-//! The model gets four tools (`search_emails`, `read_email`, `get_thread`, `email_stats`)
-//! and loops — search, read, refine — until it can answer with `[#id]` citations.
+//! The model gets five tools (`search_emails`, `read_email`, `read_attachment`,
+//! `get_thread`, `email_stats`) and loops — search, read, refine — until it can
+//! answer with `[#id]` citations.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -31,12 +32,13 @@ use super::{
     ChatTurn, LlmConfig, PromptDensity, agent_system_prompt_for_density,
     budget::{
         cap_output_tokens, estimate_message_tokens, estimate_tokens, estimate_tool_def_tokens,
-        trim_rig_history_for_completion, truncate_to_token_budget,
+        trim_rig_history_for_completion, truncate_to_token_budget, water_fill_quotas,
     },
     build_context, build_http_client, clean_email_body, debug_log, endpoint_for_log,
     openai_base_url, to_rig_history, validate_endpoint,
 };
 use crate::{
+    attachments::combine_attachment_text,
     db::{
         Index,
         query::{self, ParsedQuery, SearchFilters, StatsGroup},
@@ -429,6 +431,67 @@ fn parse_id(value: &Value) -> Option<i64> {
     }
 }
 
+/// Formats body + attachments into `(body_value, optional_attachments_array)` using
+/// water-filling across their char lengths so small attachments are returned intact.
+fn format_body_and_attachments(
+    body_text: &str,
+    attachments: &[crate::model::AttachmentText],
+    total_char_budget: usize,
+    density: PromptDensity,
+) -> (String, Option<Vec<Value>>, bool) {
+    let body_chars = body_text.chars().count();
+    let non_empty: Vec<&crate::model::AttachmentText> = attachments
+        .iter()
+        .filter(|a| !a.text.trim().is_empty())
+        .collect();
+    if non_empty.is_empty() {
+        return (
+            text::truncate_chars(body_text, total_char_budget),
+            None,
+            false,
+        );
+    }
+
+    // Reserve minimal JSON overhead per attachment item so we fit cleanly inside budget.
+    let meta_reserve = non_empty.len().saturating_mul(48);
+    let content_budget = total_char_budget
+        .saturating_sub(meta_reserve)
+        .max(total_char_budget.min(120));
+    let mut lengths = Vec::with_capacity(1 + non_empty.len());
+    lengths.push(body_chars);
+    let att_char_counts: Vec<usize> = non_empty.iter().map(|a| a.text.chars().count()).collect();
+    lengths.extend(att_char_counts.iter().copied());
+
+    let quotas = water_fill_quotas(&lengths, content_budget);
+    let body_out = text::truncate_chars(body_text, quotas[0]);
+    let mut any_truncated = false;
+    let mut items = Vec::with_capacity(non_empty.len());
+    for (idx, att) in non_empty.iter().enumerate() {
+        let total = att_char_counts[idx];
+        let quota = quotas[idx + 1];
+        let truncated = total > quota;
+        if truncated {
+            any_truncated = true;
+        }
+        let content = text::truncate_chars(&att.text, quota);
+        let mut entry = Map::new();
+        entry.insert("filename".into(), json!(att.filename));
+        if density == PromptDensity::Full && !att.mime_type.is_empty() {
+            entry.insert("mime_type".into(), json!(att.mime_type));
+        }
+        if att.size_bytes > 0 && density != PromptDensity::UltraCompact {
+            entry.insert("size_bytes".into(), json!(att.size_bytes));
+        }
+        entry.insert("content".into(), json!(content));
+        if truncated {
+            entry.insert("truncated".into(), json!(true));
+            entry.insert("total_chars".into(), json!(total));
+        }
+        items.push(Value::Object(entry));
+    }
+    (body_out, Some(items), any_truncated)
+}
+
 // ---------------------------------------------------------------------------
 // search_emails
 
@@ -477,14 +540,29 @@ impl SearchEmailsTool {
                         );
                     }
                 }
+                let body_indexed = indexed_text(hit);
                 obj.insert(
                     "snippet".into(),
                     json!(text::best_passages(
-                        &indexed_text(hit),
+                        &body_indexed,
                         &tokens,
                         shared.snippet_chars
                     )),
                 );
+                let combined_att = combine_attachment_text(&hit.attachments);
+                if !combined_att.is_empty() {
+                    let att_budget = if body_indexed.chars().count() < 120 {
+                        shared.snippet_chars
+                    } else {
+                        (shared.snippet_chars * 3 / 4)
+                            .max(80)
+                            .min(shared.snippet_chars)
+                    };
+                    obj.insert(
+                        "attachment_snippet".into(),
+                        json!(text::best_passages(&combined_att, &tokens, att_budget)),
+                    );
+                }
                 Value::Object(obj)
             })
             .collect();
@@ -526,22 +604,23 @@ impl PortableTool for SearchEmailsTool {
     fn description(&self) -> String {
         match self.0.prompt_density {
             PromptDensity::Full => {
-                "Keyword (BM25) search over the email archive, with optional filters. Matching is \
-                 lexical with stemming (English and French): use 2-5 distinctive keywords rather than \
-                 sentences, and use the filters for people, dates, folders, labels and attachments. \
-                 Use \"double quotes\" in the query for exact phrases. Returns one result per thread \
-                 (best match), each with an id, metadata, thread_id and a snippet of the matching \
-                 passages. Snippets are partial: use read_email or get_thread before relying on an \
-                 email."
+                "Keyword (BM25) search over the email archive including common attachments (Word, \
+                 PowerPoint, LibreOffice, text files), with optional filters. Matching is lexical \
+                 with stemming (English and French): use 2-5 distinctive keywords rather than \
+                 sentences, and use the filters for people, dates, folders, labels and \
+                 attachments. Use \"double quotes\" in the query for exact phrases. Returns one \
+                 result per thread (best match), each with an id, metadata, thread_id and snippets. \
+                 Snippets are partial: use read_email or get_thread before relying on an email."
                     .into()
             }
             PromptDensity::Compact => {
-                "BM25 keyword search over emails (EN/FR stemming) with filters. Use 2-5 keywords; \
-                 returns 1 hit per thread with id, thread_id and snippet."
+                "BM25 keyword search over emails & attachments (EN/FR stemming) with filters. Use 2-5 \
+                 keywords; returns 1 hit per thread with id, thread_id and snippets."
                     .into()
             }
             PromptDensity::UltraCompact => {
-                "Search emails by keywords/filters. Returns id, thread_id, snippet.".into()
+                "Search emails & attachments by keywords/filters. Returns id, thread_id, snippets."
+                    .into()
             }
         }
     }
@@ -607,13 +686,23 @@ impl ReadEmailTool {
             return Ok(json!({"error": format!("No email with id {id}.")}));
         };
         let mut obj = hit_header(&hit, shared);
-        obj.insert(
-            "body".into(),
-            json!(text::truncate_chars(
-                &clean_email_body(&hit.body),
-                shared.read_email_max_chars
-            )),
+        let cleaned = clean_email_body(&hit.body);
+        let (body_out, att_items, any_truncated) = format_body_and_attachments(
+            &cleaned,
+            &hit.attachments,
+            shared.read_email_max_chars,
+            shared.prompt_density,
         );
+        obj.insert("body".into(), json!(body_out));
+        if let Some(items) = att_items {
+            obj.insert("attachments_content".into(), json!(items));
+            if any_truncated && shared.prompt_density != PromptDensity::UltraCompact {
+                obj.insert(
+                    "attachment_hint".into(),
+                    json!("An attachment was truncated; call read_attachment with email_id and filename (or query/offset) to inspect more."),
+                );
+            }
+        }
         shared.record(format!("read_email #{id} → \"{}\"", hit.subject));
         shared.remember([hit], true);
         Ok(Value::Object(obj))
@@ -629,12 +718,15 @@ impl PortableTool for ReadEmailTool {
     fn description(&self) -> String {
         match self.0.prompt_density {
             PromptDensity::Full => {
-                "Full content and metadata of one email, by id (as returned by search_emails or cited \
-                 as [#id] in earlier answers)."
+                "Full content, metadata, and extracted attachment text of one email by id (as \
+                 returned by search_emails or cited as [#id] in earlier answers). Small attachments \
+                 are included in full."
                     .into()
             }
-            PromptDensity::Compact => "Read email body and metadata by id.".into(),
-            PromptDensity::UltraCompact => "Read email by id.".into(),
+            PromptDensity::Compact => {
+                "Read email body, metadata and extracted attachments by id.".into()
+            }
+            PromptDensity::UltraCompact => "Read email & attachments by id.".into(),
         }
     }
 
@@ -648,6 +740,215 @@ impl PortableTool for ReadEmailTool {
             "properties": {"id": id_schema},
             "required": ["id"]
         })
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.run(args)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// read_attachment
+
+#[derive(Deserialize)]
+pub struct ReadAttachmentArgs {
+    email_id: Value,
+    #[serde(default)]
+    filename: Option<String>,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    offset: Option<Value>,
+}
+
+pub struct ReadAttachmentTool(Arc<Shared>);
+
+impl ReadAttachmentTool {
+    fn run(&self, args: ReadAttachmentArgs) -> Result<Value, ToolFailure> {
+        let shared = &self.0;
+        let Some(email_id) = parse_id(&args.email_id) else {
+            return Ok(json!({"error": "`email_id` must be a numeric email id."}));
+        };
+        let requested_name = args
+            .filename
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        (shared.progress)(
+            shared
+                .language
+                .agent_progress_attachment(email_id, requested_name),
+        );
+
+        let Some(hit) = shared.db().get_hit(email_id)? else {
+            shared.record(format!("read_attachment #{email_id} → not found"));
+            return Ok(json!({"error": format!("No email with id {email_id}.")}));
+        };
+
+        if hit.attachments.is_empty() {
+            shared.record(format!(
+                "read_attachment #{email_id} → no extracted attachments"
+            ));
+            return Ok(if hit.attachment_names.trim().is_empty() {
+                json!({"error": format!("Email #{email_id} has no attachments.")})
+            } else {
+                json!({
+                    "error": format!("Attachments on email #{email_id} are not in a supported text/document format or had no extractable text."),
+                    "attachments": hit.attachment_names,
+                })
+            });
+        }
+
+        let target = if let Some(name_query) = requested_name {
+            let lower = name_query.to_ascii_lowercase();
+            hit.attachments
+                .iter()
+                .find(|a| a.filename.eq_ignore_ascii_case(name_query))
+                .or_else(|| {
+                    hit.attachments
+                        .iter()
+                        .find(|a| a.filename.to_ascii_lowercase().contains(&lower))
+                })
+        } else if hit.attachments.len() == 1 {
+            hit.attachments.first()
+        } else {
+            None
+        };
+
+        let Some(att) = target else {
+            let available: Vec<Value> = hit
+                .attachments
+                .iter()
+                .map(|a| {
+                    json!({
+                        "filename": a.filename,
+                        "size_bytes": a.size_bytes,
+                        "total_chars": a.text.chars().count(),
+                    })
+                })
+                .collect();
+            shared.record(format!(
+                "read_attachment #{email_id} → listed {} attachment(s)",
+                available.len()
+            ));
+            shared.remember([hit], false);
+            return Ok(json!({
+                "email_id": email_id,
+                "error": if requested_name.is_some() {
+                    "Requested attachment filename was not found on this email."
+                } else {
+                    "Email has multiple attachments; specify `filename` from `available_attachments`."
+                },
+                "available_attachments": available,
+            }));
+        };
+
+        let total_chars = att.text.chars().count();
+        let mut obj = Map::new();
+        obj.insert("email_id".into(), json!(email_id));
+        obj.insert("filename".into(), json!(att.filename));
+        if !att.mime_type.is_empty() && shared.prompt_density == PromptDensity::Full {
+            obj.insert("mime_type".into(), json!(att.mime_type));
+        }
+        obj.insert("size_bytes".into(), json!(att.size_bytes));
+        obj.insert("total_chars".into(), json!(total_chars));
+
+        if let Some(q) = args
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let tokens = query::parse_query(q).tokens();
+            let (passages, matched) =
+                text::best_passages_matched(&att.text, &tokens, shared.read_email_max_chars);
+            obj.insert("query".into(), json!(q));
+            obj.insert("matched".into(), json!(matched));
+            obj.insert("content".into(), json!(passages));
+            shared.record(format!(
+                "read_attachment #{email_id} \"{}\" query:\"{q}\"",
+                att.filename
+            ));
+        } else {
+            let offset = args
+                .offset
+                .as_ref()
+                .and_then(parse_id)
+                .map(|n| n.max(0) as usize)
+                .unwrap_or(0)
+                .min(total_chars);
+            let slice: String = att
+                .text
+                .chars()
+                .skip(offset)
+                .take(shared.read_email_max_chars)
+                .collect();
+            let returned_chars = slice.chars().count();
+            let next_offset = offset + returned_chars;
+            obj.insert("offset".into(), json!(offset));
+            obj.insert("returned_chars".into(), json!(returned_chars));
+            obj.insert("content".into(), json!(slice));
+            if next_offset < total_chars {
+                obj.insert("truncated".into(), json!(true));
+                obj.insert("next_offset".into(), json!(next_offset));
+            } else {
+                obj.insert("truncated".into(), json!(false));
+            }
+            shared.record(format!(
+                "read_attachment #{email_id} \"{}\" ({returned_chars}/{total_chars} chars)",
+                att.filename
+            ));
+        }
+
+        shared.remember([hit], true);
+        Ok(Value::Object(obj))
+    }
+}
+
+impl PortableTool for ReadAttachmentTool {
+    const NAME: &'static str = "read_attachment";
+    type Args = ReadAttachmentArgs;
+    type Output = Value;
+    type Error = ToolFailure;
+
+    fn description(&self) -> String {
+        match self.0.prompt_density {
+            PromptDensity::Full => {
+                "Read or search extracted text from an email's attachment (Word, PowerPoint, \
+                 LibreOffice, text). Use when an attachment was truncated in read_email, or pass \
+                 `query` to jump directly to matching sections."
+                    .into()
+            }
+            PromptDensity::Compact => {
+                "Read or search extracted attachment text on an email by `email_id`.".into()
+            }
+            PromptDensity::UltraCompact => "Read email attachment by email_id.".into(),
+        }
+    }
+
+    fn parameters(&self) -> Value {
+        match self.0.prompt_density {
+            PromptDensity::Full => json!({
+                "type": "object",
+                "properties": {
+                    "email_id": {"type": "integer", "description": "Email id."},
+                    "filename": {"type": "string", "description": "Attachment filename (optional if email has only one extracted attachment)."},
+                    "query": {"type": "string", "description": "Optional keywords to extract matching passages inside a long attachment."},
+                    "offset": {"type": "integer", "description": "Character offset to continue reading (default 0)."}
+                },
+                "required": ["email_id"]
+            }),
+            PromptDensity::Compact | PromptDensity::UltraCompact => json!({
+                "type": "object",
+                "properties": {
+                    "email_id": {"type": "integer"},
+                    "filename": {"type": "string"},
+                    "query": {"type": "string"},
+                    "offset": {"type": "integer"}
+                },
+                "required": ["email_id"]
+            }),
+        }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -723,15 +1024,26 @@ impl GetThreadTool {
             .max(kept_messages.len().saturating_mul(MIN_BODY_PER_MSG));
         let per_message = (body_budget / kept_messages.len()).max(MIN_BODY_PER_MSG);
 
+        let mut any_att_truncated = false;
         let items: Vec<Value> = kept_messages
             .iter()
             .map(|hit| {
                 let mut obj = hit_header(hit, shared);
                 obj.remove("thread_id");
-                obj.insert(
-                    "body".into(),
-                    json!(text::truncate_chars(&indexed_text(hit), per_message)),
+                let body = indexed_text(hit);
+                let (body_out, att_items, truncated) = format_body_and_attachments(
+                    &body,
+                    &hit.attachments,
+                    per_message,
+                    shared.prompt_density,
                 );
+                if truncated {
+                    any_att_truncated = true;
+                }
+                obj.insert("body".into(), json!(body_out));
+                if let Some(att) = att_items {
+                    obj.insert("attachments_content".into(), json!(att));
+                }
                 Value::Object(obj)
             })
             .collect();
@@ -740,6 +1052,11 @@ impl GetThreadTool {
             "total_messages": total,
             "messages": items,
         });
+        if any_att_truncated && shared.prompt_density != PromptDensity::UltraCompact {
+            out["attachment_hint"] = json!(
+                "One or more attachments were truncated; call read_attachment with email_id and filename (or query/offset) to inspect more."
+            );
+        }
         if total > kept_messages.len() {
             out["note"] = json!(format!(
                 "Showing the first message and the {} most recent (of {total}) within token budget. Use read_email for a full message.",
@@ -1111,6 +1428,7 @@ pub fn run_agent(
 
     let search_tool = SearchEmailsTool(shared.clone());
     let read_tool = ReadEmailTool(shared.clone());
+    let attachment_tool = ReadAttachmentTool(shared.clone());
     let thread_tool = GetThreadTool(shared.clone());
     let stats_tool = EmailStatsTool(shared.clone());
 
@@ -1125,6 +1443,11 @@ pub fn run_agent(
             <ReadEmailTool as PortableTool>::NAME,
             &PortableTool::description(&read_tool),
             &PortableTool::parameters(&read_tool),
+        )
+        + estimate_tool_def_tokens(
+            <ReadAttachmentTool as PortableTool>::NAME,
+            &PortableTool::description(&attachment_tool),
+            &PortableTool::parameters(&attachment_tool),
         )
         + estimate_tool_def_tokens(
             <GetThreadTool as PortableTool>::NAME,
@@ -1142,6 +1465,7 @@ pub fn run_agent(
         .preamble(&preamble)
         .tool(search_tool)
         .tool(read_tool)
+        .tool(attachment_tool)
         .tool(thread_tool)
         .tool(stats_tool)
         .build();
@@ -1244,4 +1568,164 @@ pub fn run_agent(
         evidence: ordered,
         trace,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::model::{AttachmentText, Email};
+
+    fn test_shared(db: Index, read_max: usize, snippet_chars: usize) -> Arc<Shared> {
+        Arc::new(Shared {
+            db: Mutex::new(db),
+            language: Language::English,
+            prompt_density: PromptDensity::Full,
+            default_limit: 5,
+            max_search_results: 10,
+            snippet_chars,
+            read_email_max_chars: read_max,
+            thread_max_messages: 10,
+            thread_total_chars: 4000,
+            stats_max_groups: 20,
+            hit_recipients_max_chars: 200,
+            evidence: Mutex::new(Evidence::default()),
+            trace: Mutex::new(Vec::new()),
+            progress: Arc::new(|_| {}),
+        })
+    }
+
+    #[test]
+    fn agent_tools_expose_small_and_large_attachments() {
+        let mut db = Index::open(Path::new(":memory:")).unwrap();
+        let long_doc = format!(
+            "{} FINAL_CLAUSE: Penalty cap is 15000 EUR. {}",
+            "Standard boilerplate clause. ".repeat(40),
+            "Closing terms. ".repeat(20)
+        );
+        db.index_batch(&[Email {
+            source_key: "sample.pst".into(),
+            message_id: "m-att-1".into(),
+            conversation_id: "conv-att-1".into(),
+            folder: "Inbox".into(),
+            subject: "Vendor terms".into(),
+            sender: "alice@example.test".into(),
+            recipients: "bob@example.test".into(),
+            sent_at: Some("2026-04-10T10:00:00Z".into()),
+            body: "See attached.".into(),
+            attachment_names: "note.txt, agreement.docx".into(),
+            attachments: vec![
+                AttachmentText {
+                    filename: "note.txt".into(),
+                    mime_type: "text/plain".into(),
+                    size_bytes: 34,
+                    text: "Small note: approved by CFO today.".into(),
+                },
+                AttachmentText {
+                    filename: "agreement.docx".into(),
+                    mime_type:
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            .into(),
+                    size_bytes: 4096,
+                    text: long_doc,
+                },
+            ],
+        }])
+        .unwrap();
+
+        let shared = test_shared(db, 450, 200);
+
+        // 1. search_emails finds attachment-only term and returns attachment_snippet
+        let search_out = SearchEmailsTool(shared.clone())
+            .run(SearchArgs {
+                query: Some("FINAL_CLAUSE".into()),
+                filters: SearchFilters::default(),
+                limit: None,
+            })
+            .unwrap();
+        assert_eq!(search_out["result_count"], 1);
+        let first = &search_out["results"][0];
+        let email_id = first["id"].as_i64().unwrap();
+        assert!(
+            first["attachment_snippet"]
+                .as_str()
+                .unwrap()
+                .contains("FINAL_CLAUSE")
+        );
+
+        // 2. read_email keeps the small attachment in full while truncating the large one
+        let read_out = ReadEmailTool(shared.clone())
+            .run(ReadArgs {
+                id: json!(email_id),
+            })
+            .unwrap();
+        let atts = read_out["attachments_content"].as_array().unwrap();
+        assert_eq!(atts.len(), 2);
+        assert_eq!(atts[0]["filename"], "note.txt");
+        assert_eq!(atts[0]["content"], "Small note: approved by CFO today.");
+        assert!(atts[0].get("truncated").is_none());
+        assert_eq!(atts[1]["filename"], "agreement.docx");
+        assert_eq!(atts[1]["truncated"], json!(true));
+
+        // 3. read_attachment without filename lists available attachments when multiple exist
+        let list_out = ReadAttachmentTool(shared.clone())
+            .run(ReadAttachmentArgs {
+                email_id: json!(email_id),
+                filename: None,
+                query: None,
+                offset: None,
+            })
+            .unwrap();
+        assert_eq!(list_out["available_attachments"].as_array().unwrap().len(), 2);
+
+        // 4. read_attachment can query directly inside the large attachment and reports match status
+        let att_query_out = ReadAttachmentTool(shared.clone())
+            .run(ReadAttachmentArgs {
+                email_id: json!(email_id),
+                filename: Some("agreement.docx".into()),
+                query: Some("FINAL_CLAUSE".into()),
+                offset: None,
+            })
+            .unwrap();
+        assert_eq!(att_query_out["matched"], json!(true));
+        assert!(
+            att_query_out["content"]
+                .as_str()
+                .unwrap()
+                .contains("Penalty cap is 15000 EUR")
+        );
+
+        let att_miss_out = ReadAttachmentTool(shared.clone())
+            .run(ReadAttachmentArgs {
+                email_id: json!(email_id),
+                filename: Some("agreement.docx".into()),
+                query: Some("nonexistent_token_xyz".into()),
+                offset: None,
+            })
+            .unwrap();
+        assert_eq!(att_miss_out["matched"], json!(false));
+
+        // 5. read_attachment supports offset pagination through large attachments
+        let page1 = ReadAttachmentTool(shared.clone())
+            .run(ReadAttachmentArgs {
+                email_id: json!(email_id),
+                filename: Some("agreement.docx".into()),
+                query: None,
+                offset: Some(json!(0)),
+            })
+            .unwrap();
+        assert_eq!(page1["truncated"], json!(true));
+        let next_off = page1["next_offset"].as_u64().unwrap();
+        assert!(next_off > 0);
+        let page2 = ReadAttachmentTool(shared)
+            .run(ReadAttachmentArgs {
+                email_id: json!(email_id),
+                filename: Some("agreement.docx".into()),
+                query: None,
+                offset: Some(json!(next_off)),
+            })
+            .unwrap();
+        assert!(page2["returned_chars"].as_u64().unwrap() > 0);
+    }
 }

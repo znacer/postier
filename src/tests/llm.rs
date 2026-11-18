@@ -9,7 +9,7 @@ use crate::{
         validate_endpoint,
     },
     model::{
-        AssignedLabel, EmailRecord, LabelDefinition, LabelerBackend, SearchHit,
+        AssignedLabel, AttachmentText, EmailRecord, LabelDefinition, LabelerBackend, SearchHit,
         default_label_definitions,
     },
 };
@@ -498,6 +498,38 @@ fn build_context_includes_metadata_and_prevents_starvation() {
     assert!(context.contains("From: bob@example.test"));
     assert!(context.contains("Deployment is confirmed for Friday."));
     assert!(context.contains("Labels: Decision (88%)"));
+}
+
+#[test]
+fn build_context_preserves_small_attachments_when_body_is_long() {
+    let hit = SearchHit {
+        id: 7,
+        source_key: "sample.pst".into(),
+        subject: "Approval package".into(),
+        sender: "cfo@example.test".into(),
+        recipients: "eng@example.test".into(),
+        sent_at: Some("2026-04-04T10:00:00Z".into()),
+        folder: "Inbox".into(),
+        body: "Background meeting notes covering quarterly numbers and operational metrics. "
+            .repeat(60),
+        attachment_names: "note.txt".into(),
+        attachments: vec![AttachmentText {
+            filename: "note.txt".into(),
+            mime_type: "text/plain".into(),
+            size_bytes: 34,
+            text: "PIN: 4829 - Approve server order.".into(),
+        }],
+        conversation_id: "conv-7".into(),
+        message_id: "m7@example.test".into(),
+        score: 0.9,
+        ..Default::default()
+    };
+
+    let context = build_context(&[hit], 1400);
+    assert!(context.len() <= 1400);
+    assert!(context.contains("[Attachment: note.txt]"));
+    assert!(context.contains("PIN: 4829 - Approve server order."));
+    assert!(context.contains("truncated"));
 }
 
 #[test]
