@@ -24,7 +24,7 @@ env:
 
 jobs:
   bundle:
-    name: BuildBuild (${{ matrix.platform }})
+    name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -74,27 +74,10 @@ jobs:
         with:
           tool: dioxus-cli
 
-      - name: Bundle LinuxLinux application with dx
+      - name: Bundle Linux application with dx
         if: matrix.platform == 'linux'
         shell: bash
         run: |
-          mkdir -p dist/linux
-          dx bundle --platform desktop --release --package-types deb --package-types rpm --package-types appimage --out-dir dist/linux
-          ls -la dist/linux
-
-      - name: Build standalone Windows .exe with dx
-        if: matrix.platform == 'windows'
-        shell: bash
-        run: |
-          mkdir -p dist/windows
-          dx build --platform desktop --release --windows-subsystem WINDOWS
-          EXE_PATH=$(find target/dx/postier/release/windows -name "postier.exe" -type f | head -n 1)
-          if [ -z "$EXE_PATH" ]; then
-            echo "postier.exe not found in target/dx/postier/release/windows"
-            exit 1
-          fi
-          cp -v "$EXE_PATH" dist/windows/postier.exe
-          ls -la dist/windows
           mkdir -p dist/linux
           dx bundle --platform desktop --release --package-types deb --package-types rpm --package-types appimage --out-dir dist/linux
           ls -la dist/linux
