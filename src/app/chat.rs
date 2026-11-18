@@ -1,19 +1,16 @@
 use dioxus::prelude::*;
-use dioxus_primitives::checkbox::CheckboxState;
 
 use crate::{
     components::{
         avatar::{Avatar, AvatarFallback, AvatarImageSize},
         badge::{Badge, BadgeVariant},
         button::{Button, ButtonVariant},
-        checkbox::Checkbox,
         collapsible::{Collapsible, CollapsibleContent, CollapsibleTrigger},
         input::Input,
         item::{
             Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemHeader, ItemMedia,
             ItemSize, ItemTitle, ItemVariant,
         },
-        label::Label,
         scroll_area::ScrollArea,
         separator::Separator,
     },
@@ -33,7 +30,6 @@ pub(super) enum ChatPaneMessage {
     Ask,
     SearchLocally,
     UsePrompt(&'static str),
-    ToggleContext(usize, bool),
     ToggleSources,
     ToggleHit(usize),
     SelectEmail(i64),
@@ -317,23 +313,11 @@ impl PstRagApp {
         let badge_color = if is_user { on_primary() } else { accent_text() };
         let md_blocks = render_markdown_blocks(&message.blocks, is_user, parse_link_message);
 
-        let has_context = !message.context_preview.is_empty();
-        let show_ctx_lbl = tr.show_context_checkbox();
-        let show_ctx = message.show_context;
-        let show_ctx_state = if show_ctx {
-            CheckboxState::Checked
-        } else {
-            CheckboxState::Unchecked
-        };
-        let ctx_preview = message.context_preview.clone();
-        let muted_color = muted();
-        let cb_style = code_block_style();
         let bub_style = if is_user {
             user_bubble_style()
         } else {
             assistant_bubble_style()
         };
-        let ctx_checkbox_id = format!("chat-ctx-check-{index}");
 
         let bubble = rsx! {
             div { style: "flex: 1; min-width: 0; padding: 11px 14px; display: flex; flex-direction: column; gap: 6px; {bub_style}",
@@ -341,31 +325,6 @@ impl PstRagApp {
                     "{badge_text}"
                 }
                 {md_blocks}
-                if has_context {
-                    Separator {}
-                    div { style: "display: flex; flex-direction: row; align-items: center; gap: 8px; padding-top: 2px;",
-                        Checkbox {
-                            id: "{ctx_checkbox_id}",
-                            checked: show_ctx_state,
-                            on_checked_change: move |state: CheckboxState| {
-                                ChatPaneMessage::ToggleContext(index, matches!(state, CheckboxState::Checked))
-                                    .dispatch();
-                            },
-                        }
-                        Label {
-                            html_for: "{ctx_checkbox_id}",
-                            style: "font-size: 11px; cursor: pointer;",
-                            "{show_ctx_lbl}"
-                        }
-                    }
-                    if show_ctx {
-                        div {
-                            class: "selectable-text",
-                            style: "width: 100%; padding: 8px 10px; font-size: 10.5px; font-family: var(--font-mono); color: {muted_color}; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; {cb_style}",
-                            "{ctx_preview}"
-                        }
-                    }
-                }
             }
         };
 

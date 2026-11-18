@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod app;
+mod attachments;
 #[allow(dead_code, unused_imports)]
 mod components;
 mod db;

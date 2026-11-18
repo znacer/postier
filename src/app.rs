@@ -171,7 +171,6 @@ struct ChatMessage {
     content: String,
     blocks: Vec<MdBlock>,
     context_preview: String,
-    show_context: bool,
 }
 
 impl ChatMessage {
@@ -182,7 +181,6 @@ impl ChatMessage {
             content,
             blocks,
             context_preview: String::new(),
-            show_context: false,
         }
     }
     fn assistant(content: String, context_preview: String) -> Self {
@@ -192,7 +190,6 @@ impl ChatMessage {
             content,
             blocks,
             context_preview,
-            show_context: false,
         }
     }
 }
@@ -907,15 +904,6 @@ impl PstRagApp {
                 self.config.embedding_model = value;
                 AppTask::none()
             }
-            SidebarMessage::ContextEmailsChanged(value) => {
-                if let Ok(count) = value.trim().parse::<usize>() {
-                    self.config.max_context_emails = count.clamp(
-                        crate::llm::MIN_CONTEXT_EMAILS,
-                        self.config.max_search_results_limit(),
-                    );
-                }
-                AppTask::none()
-            }
             SidebarMessage::MaxContextTokensChanged(value) => {
                 if let Ok(tokens) = value.trim().parse::<usize>() {
                     self.config.max_context_tokens = tokens;
@@ -1077,12 +1065,6 @@ impl PstRagApp {
                 self.question = prompt.into();
                 self.chat_open = true;
                 AppTask::focus(chat_question_input_id())
-            }
-            ChatPaneMessage::ToggleContext(index, value) => {
-                if let Some(message) = self.messages.get_mut(index) {
-                    message.show_context = value;
-                }
-                AppTask::none()
             }
             ChatPaneMessage::ToggleSources => {
                 self.show_sources = !self.show_sources;

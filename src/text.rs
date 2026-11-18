@@ -408,11 +408,22 @@ pub fn index_body(subject: &str, raw_body: &str) -> String {
 }
 
 /// Stemmed, stopword-free copy of subject + body for the `stems` FTS column.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn index_stems(subject: &str, body_text: &str) -> String {
+    index_stems_with_attachments(subject, body_text, "")
+}
+
+/// Stemmed, stopword-free copy of subject + body + attachments for the `stems` FTS column.
+pub fn index_stems_with_attachments(
+    subject: &str,
+    body_text: &str,
+    attachment_text: &str,
+) -> String {
     let mut tokens = tokenize(subject);
     tokens.extend(tokenize(body_text));
+    tokens.extend(tokenize(attachment_text));
     let lang = detect_language(&tokens);
-    let mut out = String::with_capacity(body_text.len() / 2);
+    let mut out = String::with_capacity((body_text.len() + attachment_text.len()) / 2);
     for token in tokens {
         if token.chars().count() < 2 || is_stopword(&token) {
             continue;
@@ -582,9 +593,18 @@ pub fn truncate_chars(text: &str, max_chars: usize) -> String {
 /// The passages of `text` that best match `query_tokens`, within `max_chars`.
 /// Falls back to the beginning of the text when nothing matches.
 pub fn best_passages(text: &str, query_tokens: &[String], max_chars: usize) -> String {
+    best_passages_matched(text, query_tokens, max_chars).0
+}
+
+/// Like [`best_passages`], also returning whether at least one query token matched in `text`.
+pub fn best_passages_matched(
+    text: &str,
+    query_tokens: &[String],
+    max_chars: usize,
+) -> (String, bool) {
     let segs = segments(text, 280);
     if segs.is_empty() {
-        return String::new();
+        return (String::new(), false);
     }
     let joined_len: usize = segs.iter().map(|s| s.chars().count() + 1).sum();
     let keys: HashSet<String> = query_tokens
@@ -593,8 +613,8 @@ pub fn best_passages(text: &str, query_tokens: &[String], max_chars: usize) -> S
         .flat_map(|t| term_keys(t))
         .filter(|k| k.chars().count() >= 2)
         .collect();
-    if joined_len <= max_chars || keys.is_empty() {
-        return truncate_chars(&segs.join(" "), max_chars);
+    if keys.is_empty() {
+        return (truncate_chars(&segs.join(" "), max_chars), false);
     }
 
     let scores: Vec<usize> = segs
@@ -613,8 +633,9 @@ pub fn best_passages(text: &str, query_tokens: &[String], max_chars: usize) -> S
         .collect();
 
     let mut order: Vec<usize> = (0..segs.len()).filter(|&i| scores[i] > 0).collect();
-    if order.is_empty() {
-        return truncate_chars(&segs.join(" "), max_chars);
+    let has_match = !order.is_empty();
+    if joined_len <= max_chars || !has_match {
+        return (truncate_chars(&segs.join(" "), max_chars), has_match);
     }
     order.sort_by_key(|&i| (Reverse(scores[i]), i));
 
@@ -658,5 +679,5 @@ pub fn best_passages(text: &str, query_tokens: &[String], max_chars: usize) -> S
     if prev.is_some_and(|p| p + 1 < segs.len()) {
         out.push_str(" …");
     }
-    truncate_chars(&out, max_chars + 8)
+    (truncate_chars(&out, max_chars + 8), true)
 }

@@ -16,9 +16,9 @@ bearer_token = ""
 # Lower values (e.g. 1024, 2048, 4096) automatically scale prompts, conversation
 # history, tool outputs, fallback RAG context, and output reserves to fit.
 # Set to 0 to disable token-based scaling (uses raw character/result limits below).
-max_context_tokens = 16384
+max_context_tokens = 262144
 # HTTP connection timeout in seconds.
-connect_timeout_secs = 15
+connect_timeout_secs = 30
 # HTTP request timeout in seconds (per LLM turn / request).
 request_timeout_secs = 180
 # Whether remote embeddings / hybrid search UI and code paths are enabled.
@@ -31,7 +31,7 @@ embedding_model = ""
 [agent]
 # Maximum number of model calls (tool rounds + final answer) per user question.
 max_turns = 12
-# Default number of threads returned per `search_emails` tool call (adjustable in UI).
+# Default number of threads returned per `search_emails` tool call.
 max_context_emails = 8
 # Hard upper limit on results returned by a single `search_emails` call or local search.
 max_search_results = 50

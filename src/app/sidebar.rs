@@ -66,7 +66,6 @@ pub(super) enum SidebarMessage {
     TokenChanged(String),
     RemoteEmbeddingsChanged(bool),
     EmbeddingModelChanged(String),
-    ContextEmailsChanged(String),
     MaxContextTokensChanged(String),
     LanguageChanged(crate::i18n::Language),
     ThemeChanged(bool),
@@ -777,11 +776,6 @@ impl PstRagApp {
         let emb_model_lbl = tr.embedding_model_label();
         let emb_model_ph = tr.embedding_model_placeholder();
         let emb_model_val = self.config.embedding_model.clone();
-        let ctx_emails_lbl = tr.context_emails_label();
-        let ctx_emails_hint = tr.context_emails_hint();
-        let ctx_emails_val = self.config.context_email_limit();
-        let ctx_emails_min = crate::llm::MIN_CONTEXT_EMAILS;
-        let ctx_emails_max = self.config.max_search_results_limit();
         let budgets = self.config.effective_budgets();
         let max_tokens_lbl = tr.max_context_tokens_label();
         let max_tokens_val = self.config.max_context_tokens;
@@ -889,29 +883,6 @@ impl PstRagApp {
                     }
                 }
                 Separator {}
-                div { style: "display: flex; flex-direction: column; gap: 3px;",
-                    Label {
-                        html_for: "llm-context-emails-input",
-                        style: "font-size: 11px; font-weight: 500; color: var(--text-secondary);",
-                        "{ctx_emails_lbl}"
-                    }
-                    Input {
-                        id: "llm-context-emails-input",
-                        r#type: "number",
-                        min: "{ctx_emails_min}",
-                        max: "{ctx_emails_max}",
-                        step: "1",
-                        value: "{ctx_emails_val}",
-                        style: "width: 100%; font-size: 12px;",
-                        oninput: move |evt: FormEvent| SidebarMessage::ContextEmailsChanged(evt.value()).dispatch(),
-                        onkeydown: move |evt: KeyboardEvent| {
-                            if evt.key() != Key::Escape {
-                                evt.stop_propagation();
-                            }
-                        },
-                    }
-                    span { class: "form-hint", "{ctx_emails_hint}" }
-                }
                 div { style: "display: flex; flex-direction: column; gap: 3px;",
                     Label {
                         html_for: "llm-max-tokens-input",

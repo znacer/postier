@@ -9,6 +9,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, types
 use sha2::{Digest, Sha256};
 
 use crate::{
+    attachments::combine_attachment_text,
     model::{
         Email, EmailRecord, IndexedFolder, IndexedSource, LabelFilter, MailScope, MailSort,
         default_label_definitions,
@@ -16,26 +17,32 @@ use crate::{
     text,
 };
 
-/// Bump when the FTS schema or the derived `body_text`/`stems` columns change; the
-/// migration recomputes them from the stored raw bodies (no PST re-import needed).
-const SCHEMA_VERSION: i64 = 2;
+/// Bump when the FTS schema or derived search columns change; the migration recomputes
+/// them from the stored messages and attachment records.
+const SCHEMA_VERSION: i64 = 3;
 
-/// BM25 column weights: subject, sender, recipients, body_text, attachment_names, stems.
-pub(super) const BM25_RANK: &str = "bm25(messages_fts, 8.0, 3.0, 2.0, 1.0, 1.0, 1.0)";
+/// BM25 column weights: subject, sender, recipients, body_text, attachment_names, attachment_text, stems.
+pub(super) const BM25_RANK: &str = "bm25(messages_fts, 8.0, 3.0, 2.0, 1.0, 1.5, 0.8, 1.0)";
 
 const FTS_SCHEMA: &str = "
     CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-      subject, sender, recipients, body_text, attachment_names, stems,
+      subject, sender, recipients, body_text, attachment_names, attachment_text, stems,
       content='messages', content_rowid='id',
       tokenize='unicode61 remove_diacritics 2'
     );
     CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-      INSERT INTO messages_fts(rowid,subject,sender,recipients,body_text,attachment_names,stems)
-      VALUES(new.id,new.subject,new.sender,new.recipients,new.body_text,new.attachment_names,new.stems);
+      INSERT INTO messages_fts(rowid,subject,sender,recipients,body_text,attachment_names,attachment_text,stems)
+      VALUES(new.id,new.subject,new.sender,new.recipients,new.body_text,new.attachment_names,new.attachment_text,new.stems);
     END;
     CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-      INSERT INTO messages_fts(messages_fts,rowid,subject,sender,recipients,body_text,attachment_names,stems)
-      VALUES('delete',old.id,old.subject,old.sender,old.recipients,old.body_text,old.attachment_names,old.stems);
+      INSERT INTO messages_fts(messages_fts,rowid,subject,sender,recipients,body_text,attachment_names,attachment_text,stems)
+      VALUES('delete',old.id,old.subject,old.sender,old.recipients,old.body_text,old.attachment_names,old.attachment_text,old.stems);
+    END;
+    CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE OF subject, sender, recipients, body_text, attachment_names, attachment_text, stems ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts,rowid,subject,sender,recipients,body_text,attachment_names,attachment_text,stems)
+      VALUES('delete',old.id,old.subject,old.sender,old.recipients,old.body_text,old.attachment_names,old.attachment_text,old.stems);
+      INSERT INTO messages_fts(rowid,subject,sender,recipients,body_text,attachment_names,attachment_text,stems)
+      VALUES(new.id,new.subject,new.sender,new.recipients,new.body_text,new.attachment_names,new.attachment_text,new.stems);
     END;";
 
 pub struct Index {
@@ -68,11 +75,21 @@ impl Index {
                attachment_names TEXT NOT NULL DEFAULT '',
                content_hash TEXT NOT NULL UNIQUE,
                body_text TEXT NOT NULL DEFAULT '',
+               attachment_text TEXT NOT NULL DEFAULT '',
                stems TEXT NOT NULL DEFAULT ''
              );
              CREATE INDEX IF NOT EXISTS messages_source ON messages(source_key);
              CREATE INDEX IF NOT EXISTS messages_source_folder ON messages(source_key, folder);
              CREATE INDEX IF NOT EXISTS messages_sent_at ON messages(sent_at DESC, id DESC);
+             CREATE TABLE IF NOT EXISTS message_attachments (
+               id INTEGER PRIMARY KEY,
+               message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+               filename TEXT NOT NULL,
+               mime_type TEXT NOT NULL DEFAULT '',
+               size_bytes INTEGER NOT NULL DEFAULT 0,
+               extracted_text TEXT NOT NULL DEFAULT ''
+             );
+             CREATE INDEX IF NOT EXISTS message_attachments_msg ON message_attachments(message_id);
              CREATE TABLE IF NOT EXISTS indexed_sources (
                source_key TEXT PRIMARY KEY,
                display_name TEXT NOT NULL,
@@ -180,9 +197,21 @@ impl Index {
             )?;
             let mut stmt = tx.prepare(
                 "INSERT OR IGNORE INTO messages
-                 (source_key,message_id,conversation_id,folder,subject,sender,recipients,sent_at,body,attachment_names,content_hash,body_text,stems)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 (source_key,message_id,conversation_id,folder,subject,sender,recipients,sent_at,body,attachment_names,content_hash,body_text,attachment_text,stems)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             )?;
+            let mut att_stmt = tx.prepare(
+                "INSERT INTO message_attachments(message_id, filename, mime_type, size_bytes, extracted_text)
+                 VALUES(?1, ?2, ?3, ?4, ?5)",
+            )?;
+            let mut existing_stmt = tx.prepare(
+                "SELECT m.id, m.body_text, m.attachment_text,
+                        (SELECT count(*) FROM message_attachments ma WHERE ma.message_id = m.id)
+                 FROM messages m WHERE m.content_hash = ?1",
+            )?;
+            let mut backfill_stmt =
+                tx.prepare("UPDATE messages SET attachment_text = ?2, stems = ?3 WHERE id = ?1")?;
+
             let mut last_source_key: Option<&str> = None;
             for email in emails {
                 if last_source_key != Some(email.source_key.as_str()) {
@@ -207,8 +236,13 @@ impl Index {
                 }
                 let digest = format!("{:x}", hash.finalize());
                 let body_text = text::index_body(&email.subject, &email.body);
-                let stems = text::index_stems(&email.subject, &body_text);
-                added += stmt.execute(params![
+                let attachment_text = combine_attachment_text(&email.attachments);
+                let stems = text::index_stems_with_attachments(
+                    &email.subject,
+                    &body_text,
+                    &attachment_text,
+                );
+                let changed = stmt.execute(params![
                     email.source_key,
                     email.message_id,
                     email.conversation_id,
@@ -221,8 +255,54 @@ impl Index {
                     email.attachment_names,
                     digest,
                     body_text,
+                    attachment_text,
                     stems
                 ])?;
+                if changed > 0 {
+                    added += changed;
+                    if !email.attachments.is_empty() {
+                        let msg_id = tx.last_insert_rowid();
+                        for att in &email.attachments {
+                            att_stmt.execute(params![
+                                msg_id,
+                                att.filename,
+                                att.mime_type,
+                                i64::try_from(att.size_bytes).unwrap_or(i64::MAX),
+                                att.text
+                            ])?;
+                        }
+                    }
+                } else if !email.attachments.is_empty()
+                    && let Some((existing_id, existing_body_text, existing_att_text, att_count)) =
+                        existing_stmt
+                            .query_row([&digest], |r| {
+                                Ok((
+                                    r.get::<_, i64>(0)?,
+                                    r.get::<_, String>(1)?,
+                                    r.get::<_, String>(2)?,
+                                    r.get::<_, i64>(3)?,
+                                ))
+                            })
+                            .optional()?
+                    && existing_att_text.is_empty()
+                    && att_count == 0
+                {
+                    for att in &email.attachments {
+                        att_stmt.execute(params![
+                            existing_id,
+                            att.filename,
+                            att.mime_type,
+                            i64::try_from(att.size_bytes).unwrap_or(i64::MAX),
+                            att.text
+                        ])?;
+                    }
+                    let updated_stems = text::index_stems_with_attachments(
+                        &email.subject,
+                        &existing_body_text,
+                        &attachment_text,
+                    );
+                    backfill_stmt.execute(params![existing_id, attachment_text, updated_stems])?;
+                }
             }
         }
         tx.commit()?;
@@ -525,12 +605,18 @@ fn migrate(conn: &mut Connection) -> Result<()> {
     if version >= SCHEMA_VERSION {
         return Ok(());
     }
+    tx.execute_batch(
+        "DROP TRIGGER IF EXISTS messages_ai;
+         DROP TRIGGER IF EXISTS messages_ad;
+         DROP TRIGGER IF EXISTS messages_au;
+         DROP TABLE IF EXISTS messages_fts;",
+    )?;
     let columns: Vec<String> = {
         let mut stmt = tx.prepare("PRAGMA table_info(messages)")?;
         stmt.query_map([], |r| r.get::<_, String>(1))?
             .collect::<rusqlite::Result<_>>()?
     };
-    for column in ["body_text", "stems"] {
+    for column in ["body_text", "attachment_text", "stems"] {
         if !columns.iter().any(|c| c == column) {
             tx.execute(
                 &format!("ALTER TABLE messages ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"),
@@ -540,30 +626,28 @@ fn migrate(conn: &mut Connection) -> Result<()> {
     }
     {
         let mut select = tx.prepare(
-            "SELECT id, subject, body FROM messages WHERE id > ?1 ORDER BY id LIMIT 500",
+            "SELECT id, subject, body, attachment_text FROM messages WHERE id > ?1 ORDER BY id LIMIT 500",
         )?;
         let mut update = tx.prepare("UPDATE messages SET body_text=?2, stems=?3 WHERE id=?1")?;
         let mut last_id = i64::MIN;
         loop {
-            let rows: Vec<(i64, String, String)> = select
-                .query_map([last_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            let rows: Vec<(i64, String, String, String)> = select
+                .query_map([last_id], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
                 .collect::<rusqlite::Result<_>>()?;
             let Some(last) = rows.last() else {
                 break;
             };
             last_id = last.0;
-            for (id, subject, body) in rows {
+            for (id, subject, body, attachment_text) in rows {
                 let body_text = text::index_body(&subject, &body);
-                let stems = text::index_stems(&subject, &body_text);
+                let stems =
+                    text::index_stems_with_attachments(&subject, &body_text, &attachment_text);
                 update.execute(params![id, body_text, stems])?;
             }
         }
     }
-    tx.execute_batch(
-        "DROP TRIGGER IF EXISTS messages_ai;
-         DROP TRIGGER IF EXISTS messages_ad;
-         DROP TABLE IF EXISTS messages_fts;",
-    )?;
     tx.execute_batch(FTS_SCHEMA)?;
     tx.execute(
         "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",

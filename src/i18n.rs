@@ -390,24 +390,6 @@ impl Language {
         }
     }
 
-    pub fn context_emails_label(self) -> &'static str {
-        match self {
-            Self::English => "Emails retrieved per question",
-            Self::French => "Courriels récupérés par question",
-        }
-    }
-
-    pub fn context_emails_hint(self) -> &'static str {
-        match self {
-            Self::English => {
-                "Top search results sent to the LLM (1–100), plus related thread messages"
-            }
-            Self::French => {
-                "Meilleurs résultats envoyés au LLM (1–100), plus les messages du même fil"
-            }
-        }
-    }
-
     pub fn max_context_tokens_label(self) -> &'static str {
         match self {
             Self::English => "Max LLM tokens (context window)",
@@ -1523,6 +1505,17 @@ impl Language {
         match self {
             Self::English => format!("Reading email #{id}..."),
             Self::French => format!("Lecture du courriel #{id}..."),
+        }
+    }
+
+    pub fn agent_progress_attachment(self, id: i64, filename: Option<&str>) -> String {
+        match (self, filename) {
+            (Self::English, Some(name)) => format!("Reading attachment '{name}' on #{id}..."),
+            (Self::English, None) => format!("Reading attachment on #{id}..."),
+            (Self::French, Some(name)) => {
+                format!("Lecture de la pièce jointe « {name} » (#{id})...")
+            }
+            (Self::French, None) => format!("Lecture de la pièce jointe (#{id})..."),
         }
     }
 

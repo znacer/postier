@@ -1,5 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentText {
+    pub filename: String,
+    #[serde(default)]
+    pub mime_type: String,
+    #[serde(default)]
+    pub size_bytes: u64,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Email {
     pub source_key: String,
@@ -12,6 +22,8 @@ pub struct Email {
     pub sent_at: Option<String>,
     pub body: String,
     pub attachment_names: String,
+    #[serde(default)]
+    pub attachments: Vec<AttachmentText>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -163,6 +175,8 @@ pub struct SearchHit {
     pub body_text: String,
     /// Number of matching messages in this hit's thread (search results are one per thread).
     pub thread_matches: usize,
+    /// Extracted plain text for supported common attachments.
+    pub attachments: Vec<AttachmentText>,
 }
 
 #[derive(Clone, Debug)]
